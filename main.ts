@@ -108,11 +108,12 @@ type CaptureRuntime = {
   settled: Promise<ExitDiagnosis>;
   stopping: boolean;
   /**
-   * Set once, at capture start, and used to compute the elapsed-time display. It has to be
-   * captured once rather than read live: the status bar needs a fixed anchor for "when did
-   * this capture begin" to subtract from `Date.now()` at render time, and that anchor point
-   * does not change for the life of the capture — recomputing it on each render would not
-   * make sense, since there is nothing later in the capture's life that should move it.
+   * Set once, at capture start, and used to compute the elapsed-time display. Deliberately
+   * not sourced from `enhancer?.state.elapsedMs`: `createEnhancer()` can throw, in which case
+   * capture continues with `enhancer` left `undefined` (see `enhancementUnavailable` below) —
+   * exactly the case where the user most needs reassurance that capture is still running. A
+   * clock borrowed from the enhancer would vanish along with it. The plugin keeps its own
+   * independent anchor so the status bar's timer survives an enhancer that never got built.
    */
   startedAt: number;
 };
@@ -687,7 +688,7 @@ export default class ShorthandPlugin extends Plugin {
     const elapsed = this.#capture === undefined
       ? ""
       : ` · ${formatElapsed(Date.now() - this.#capture.startedAt)}`;
-    this.#statusBar.setText(`Shorthand: ${this.#state.mode}${progress}${elapsed}`);
+    this.#statusBar.setText(`Shorthand: ${this.#state.mode}${elapsed}${progress}`);
     this.#statusBar.setAttribute(
       "title",
       this.#state.message ?? (pending === undefined

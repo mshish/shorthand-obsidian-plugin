@@ -20,6 +20,18 @@ describe("formatElapsed", () => {
     expect(formatElapsed(60 * 60_000 - 1_000)).toBe("59:59");
   });
 
+  test("minute rollover", () => {
+    expect(formatElapsed(60_000)).toBe("1:00");
+  });
+
+  test("sub-second input truncates, not rounds", () => {
+    expect(formatElapsed(999)).toBe("0:00");
+  });
+
+  test("two-digit minutes under an hour are not zero-padded", () => {
+    expect(formatElapsed(10 * 60_000)).toBe("10:00");
+  });
+
   test("several hours", () => {
     expect(formatElapsed(1 * 60 * 60_000 + 2 * 60_000 + 3_000)).toBe("1:02:03");
     expect(formatElapsed(3 * 60 * 60_000 + 45 * 60_000 + 9_000)).toBe("3:45:09");
