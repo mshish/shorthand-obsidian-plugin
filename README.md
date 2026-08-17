@@ -182,11 +182,12 @@ file writer, never through Obsidian's vault API.
   the note has unsaved keystrokes in Obsidian's editor buffer, that buffer can win on its next save
   and an AI update may be lost. This is the intentionally safe direction: Shorthand does not
   discard user text.
-- Enhancement has no pass or USD budget setting — both were removed. Under Claude subscription
-  authentication `total_cost_usd` is commonly `0`, so a USD cap never trips, and a raw pass count
-  can't tell a long meeting from a runaway loop. Instead, core runs enhancement inside a fixed
-  4-hour wall-clock window as a loop-breaker backstop; it is not configurable from this plugin's
-  settings. The interval setting (`minIntervalMs`) is what actually bounds pass rate.
+- Enhancement runs inside a fixed 4-hour wall-clock window as a loop-breaker backstop, and that
+  window is not configurable from this plugin's settings. There is no pass-count or USD budget
+  setting: under Claude subscription authentication `total_cost_usd` is commonly `0`, so a USD
+  cap would never trip, and a raw pass count can't tell a long meeting from a runaway loop — a
+  wall-clock window is the one backstop that works regardless of auth mode. The interval setting
+  (`minIntervalMs`) is what actually bounds pass rate.
 - A stream disconnect cannot replay missed Shorthand events. Reconnects add a visible transcript-gap
   warning to the sidecar.
 
@@ -237,6 +238,17 @@ Core is pinned by tag in `package.json`:
 
 Change the tag, run `npm install`, then run the verification gate above — a core change can move
 the bundle size and break the bundle-load test long before it breaks a type.
+
+**This branch is already pinned to an unpublished tag.** `package.json` points at
+`shorthand-core#0.6.0`, cut for the wall-clock-window change, which does not exist as a tag yet —
+a human publishes it separately. Once it does, `npm install` alone is not enough:
+`package-lock.json` still disagrees with `package.json` until `npm install` is re-run and the
+refreshed lockfile is committed, and `npm ci` (what a CI workflow would likely run) fails on that
+disagreement with a confusing "lockfile out of sync" error rather than an obviously-missing-tag
+one. After that, force a rebuild — `npm run build`, since `test/plugin-bundle.test.ts` only builds
+when `main.js` is absent and would otherwise pass silently against a stale bundle — and re-run
+`npm test` to confirm its recorded bundle-size baseline still holds against the real `0.6.0`
+tarball; it was last verified against a temporary local link to the new core, not that tarball.
 
 ## License
 
