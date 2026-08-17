@@ -1,4 +1,4 @@
-export type PluginMode = "idle" | "capturing" | "stopping" | "enhancing" | "budget-exhausted" | "error";
+export type PluginMode = "idle" | "capturing" | "stopping" | "enhancing" | "enhancement-stopped" | "error";
 
 export type PluginUiState = Readonly<{
   mode: PluginMode;
@@ -12,7 +12,6 @@ export type PluginUiState = Readonly<{
    * back to "capturing".
    */
   stopping: boolean;
-  passCount: number;
   message?: string;
 }>;
 
@@ -20,54 +19,50 @@ export type PluginUiEvent =
   | Readonly<{ type: "capture-started" }>
   | Readonly<{ type: "capture-stopping" }>
   | Readonly<{ type: "capture-stopped" }>
-  | Readonly<{ type: "enhancement-started"; passCount: number }>
-  | Readonly<{ type: "enhancement-finished"; passCount: number }>
-  | Readonly<{ type: "budget-exhausted"; passCount: number; message: string }>
+  | Readonly<{ type: "enhancement-started" }>
+  | Readonly<{ type: "enhancement-finished" }>
+  | Readonly<{ type: "enhancement-stopped"; message: string }>
   // There is deliberately no "clear-error": an error stays visible until the work that
   // could have fixed it succeeds (a completed enhancement pass) or a new capture starts.
   // A dismiss event existed and was never dispatched, so it only made the status bar's
   // stickiness look accidental.
-  | Readonly<{ type: "error"; passCount?: number; message: string }>;
+  | Readonly<{ type: "error"; message: string }>;
 
 export const INITIAL_PLUGIN_STATE: PluginUiState = Object.freeze({
   mode: "idle",
   captureActive: false,
   stopping: false,
-  passCount: 0,
 });
 
 export function reducePluginState(state: PluginUiState, event: PluginUiEvent): PluginUiState {
   switch (event.type) {
     case "capture-started":
-      return { mode: "capturing", captureActive: true, stopping: false, passCount: 0 };
+      return { mode: "capturing", captureActive: true, stopping: false };
     case "capture-stopping":
-      return state.mode === "error" || state.mode === "budget-exhausted"
+      return state.mode === "error" || state.mode === "enhancement-stopped"
         ? { ...state, stopping: true }
-        : { mode: "stopping", captureActive: state.captureActive, stopping: true, passCount: state.passCount };
+        : { mode: "stopping", captureActive: state.captureActive, stopping: true };
     case "capture-stopped":
-      return state.mode === "error" || state.mode === "budget-exhausted"
+      return state.mode === "error" || state.mode === "enhancement-stopped"
         ? { ...state, captureActive: false, stopping: false }
-        : { mode: "idle", captureActive: false, stopping: false, passCount: state.passCount };
+        : { mode: "idle", captureActive: false, stopping: false };
     case "enhancement-started":
       return {
         mode: "enhancing",
         captureActive: state.captureActive,
         stopping: state.stopping,
-        passCount: event.passCount,
       };
     case "enhancement-finished":
       return {
         mode: restingMode(state),
         captureActive: state.captureActive,
         stopping: state.stopping,
-        passCount: event.passCount,
       };
-    case "budget-exhausted":
+    case "enhancement-stopped":
       return {
-        mode: "budget-exhausted",
+        mode: "enhancement-stopped",
         captureActive: state.captureActive,
         stopping: state.stopping,
-        passCount: event.passCount,
         message: event.message,
       };
     case "error":
@@ -75,7 +70,6 @@ export function reducePluginState(state: PluginUiState, event: PluginUiEvent): P
         mode: "error",
         captureActive: state.captureActive,
         stopping: state.stopping,
-        passCount: event.passCount ?? state.passCount,
         message: event.message,
       };
   }

@@ -6,8 +6,6 @@ export type ShorthandPluginSettings = Readonly<{
   sidecarDirectory: string;
   minNewChars: number;
   minIntervalMs: number;
-  maxPasses: number;
-  maxUsd: number;
   enableLiveEnhancement: boolean;
   controlShorthandRecording: boolean;
   useShorthandPostProcessing: boolean;
@@ -19,8 +17,6 @@ export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
   sidecarDirectory: DEFAULT_CONFIG.sidecarDirectory.replaceAll("\\", "/"),
   minNewChars: DEFAULT_CONFIG.thresholds.enhancementNewCharacters,
   minIntervalMs: DEFAULT_CONFIG.thresholds.enhancementIntervalMs,
-  maxPasses: DEFAULT_CONFIG.enhancement.maxPasses,
-  maxUsd: DEFAULT_CONFIG.enhancement.maxUsd,
   enableLiveEnhancement: true,
   controlShorthandRecording: true,
   useShorthandPostProcessing: false,
@@ -34,8 +30,6 @@ export function normalizePluginSettings(input: unknown): ShorthandPluginSettings
     sidecarDirectory: vaultRelativeDirectory(value.sidecarDirectory, DEFAULT_PLUGIN_SETTINGS.sidecarDirectory),
     minNewChars: finiteInteger(value.minNewChars, DEFAULT_PLUGIN_SETTINGS.minNewChars, 1),
     minIntervalMs: finiteInteger(value.minIntervalMs, DEFAULT_PLUGIN_SETTINGS.minIntervalMs, 0),
-    maxPasses: finiteInteger(value.maxPasses, DEFAULT_PLUGIN_SETTINGS.maxPasses, 1),
-    maxUsd: finiteNumber(value.maxUsd, DEFAULT_PLUGIN_SETTINGS.maxUsd, 0),
     enableLiveEnhancement: typeof value.enableLiveEnhancement === "boolean"
       ? value.enableLiveEnhancement
       : DEFAULT_PLUGIN_SETTINGS.enableLiveEnhancement,
@@ -61,10 +55,6 @@ function finiteInteger(value: unknown, fallback: number, minimum: number): numbe
   return typeof value === "number" && Number.isFinite(value) && value >= minimum
     ? Math.floor(value)
     : fallback;
-}
-
-function finiteNumber(value: unknown, fallback: number, minimum: number): number {
-  return typeof value === "number" && Number.isFinite(value) && value >= minimum ? value : fallback;
 }
 
 function nonEmptyString(value: unknown, fallback: string): string {

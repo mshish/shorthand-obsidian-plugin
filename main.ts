@@ -50,6 +50,7 @@ import {
   type PluginUiState,
 } from "./src/state.js";
 import { ShorthandRecorder, shorthandProvenDown, type RecorderPhase } from "./src/recorder.js";
+import { formatElapsed } from "./src/elapsed.js";
 
 /**
  * Shorthand's follower needs a moment after spawn before Shorthand's events reach it, and the
@@ -106,6 +107,14 @@ type CaptureRuntime = {
   enhancer: EnhanceRunner | undefined;
   settled: Promise<ExitDiagnosis>;
   stopping: boolean;
+  /**
+   * Set once, at capture start, and used to compute the elapsed-time display. It has to be
+   * captured once rather than read live: the status bar needs a fixed anchor for "when did
+   * this capture begin" to subtract from `Date.now()` at render time, and that anchor point
+   * does not change for the life of the capture — recomputing it on each render would not
+   * make sense, since there is nothing later in the capture's life that should move it.
+   */
+  startedAt: number;
 };
 
 /**
@@ -133,6 +142,10 @@ export default class ShorthandPlugin extends Plugin {
     this.settings = normalizePluginSettings(await this.loadData());
     this.#statusBar = this.addStatusBarItem();
     this.#renderStatus();
+    // The elapsed-time display is otherwise only refreshed from a transcript-delta handler
+    // and from dispatch(), so between utterances it would visibly freeze. A ticking interval
+    // keeps it advancing during silence; registerInterval auto-clears it on unload.
+    this.registerInterval(window.setInterval(() => this.#renderStatus(), 1_000));
     this.addSettingTab(new ShorthandSettingTab(this.app, this));
 
     // Command names carry no plugin prefix and are sentence case, per Obsidian's plugin
@@ -272,6 +285,7 @@ export default class ShorthandPlugin extends Plugin {
         enhancer,
         settled,
         stopping: false,
+        startedAt: Date.now(),
       };
       this.#capture = runtime;
       this.dispatch({ type: "capture-started" });
@@ -522,9 +536,7 @@ export default class ShorthandPlugin extends Plugin {
       agent: new ClaudeAgentClient(),
       minNewChars: this.settings.minNewChars,
       minIntervalMs: this.settings.minIntervalMs,
-      maxPasses: this.settings.maxPasses,
-      maxUsd: this.settings.maxUsd,
-      maxPassUsd: DEFAULT_CONFIG.enhancement.maxPassUsd,
+      maxDurationMs: DEFAULT_CONFIG.enhancement.maxDurationMs,
       timeoutMs: DEFAULT_CONFIG.enhancement.timeoutMs,
       maxTurns: DEFAULT_CONFIG.enhancement.maxTurns,
       ...(claudeExecutable === undefined ? {} : { pathToClaudeCodeExecutable: claudeExecutable }),
@@ -604,29 +616,29 @@ export default class ShorthandPlugin extends Plugin {
 
   private onEnhanceStatus(status: EnhanceStatus): void {
     if (status.kind === "started") {
-      this.dispatch({ type: "enhancement-started", passCount: status.passCount });
+      this.dispatch({ type: "enhancement-started" });
     } else if (status.kind === "finished") {
-      this.dispatch({ type: "enhancement-finished", passCount: status.passCount });
-    } else if (status.kind === "budget-exhausted") {
-      this.dispatch({ type: "budget-exhausted", passCount: status.passCount, message: status.message });
+      this.dispatch({ type: "enhancement-finished" });
+    } else if (status.kind === "expired") {
+      this.dispatch({ type: "enhancement-stopped", message: status.message });
       new Notice(status.message, 8_000);
     } else if (status.kind === "error") {
-      this.fail(status.message, status.passCount);
+      this.fail(status.message);
     } else if (status.kind === "requeued" && status.retryAfterMs !== undefined) {
       // Only a target that asked for a backoff is actionable. A plain re-queue means
       // the note kept changing under the writer — i.e. the user is typing during the
       // meeting — which self-heals on the next pass and must stay silent.
-      this.fail(`${status.message} Close competing file handles; Shorthand will retry on the next pass.`, status.passCount);
+      this.fail(`${status.message} Close competing file handles; Shorthand will retry on the next pass.`);
     }
   }
 
   private reportOutcome(outcome: PassOutcome): void {
     if (outcome.status === "completed") {
-      this.dispatch({ type: "enhancement-finished", passCount: this.#state.passCount });
+      this.dispatch({ type: "enhancement-finished" });
       new Notice(outcome.written ? "Shorthand updated the AI block." : "The AI block was already up to date.");
-    } else if (outcome.status === "budget-exhausted") {
-      const message = `Enhancement ${outcome.reason} budget is exhausted; capture continues.`;
-      this.dispatch({ type: "budget-exhausted", passCount: this.#state.passCount, message });
+    } else if (outcome.status === "expired") {
+      const message = "Enhancement stopped after the maximum capture window; capture continues.";
+      this.dispatch({ type: "enhancement-stopped", message });
       new Notice(message, 8_000);
     } else if (outcome.status === "requeued") {
       this.fail(outcome.retryAfterMs === undefined
@@ -653,8 +665,8 @@ export default class ShorthandPlugin extends Plugin {
     return undefined;
   }
 
-  private fail(message: string, passCount?: number): void {
-    this.dispatch({ type: "error", message, ...(passCount === undefined ? {} : { passCount }) });
+  private fail(message: string): void {
+    this.dispatch({ type: "error", message });
     new Notice(`Shorthand: ${message}`, 10_000);
     console.error(`[shorthand] ${message}`);
   }
@@ -666,14 +678,16 @@ export default class ShorthandPlugin extends Plugin {
 
   #renderStatus(): void {
     if (this.#statusBar === undefined) return;
-    const passes = `${this.#state.passCount} ${this.#state.passCount === 1 ? "pass" : "passes"}`;
     // Show progress toward the next tick. Without this the plugin looks broken while it is
     // simply below the character gate — the exact confusion this feature was added to fix.
     const pending = this.#capture?.enhancer?.state.pendingCharacters;
     const progress = pending === undefined
       ? ""
       : ` · ${pending}/${this.settings.minNewChars} chars`;
-    this.#statusBar.setText(`Shorthand: ${this.#state.mode}${progress} · ${passes}`);
+    const elapsed = this.#capture === undefined
+      ? ""
+      : ` · ${formatElapsed(Date.now() - this.#capture.startedAt)}`;
+    this.#statusBar.setText(`Shorthand: ${this.#state.mode}${progress}${elapsed}`);
     this.#statusBar.setAttribute(
       "title",
       this.#state.message ?? (pending === undefined
@@ -698,8 +712,6 @@ class ShorthandSettingTab extends PluginSettingTab {
     textSetting(containerEl, this.plugin, "Transcript sidecar directory", "Vault-relative directory used for new transcript notes.", "sidecarDirectory");
     numberSetting(containerEl, this.plugin, "Minimum new characters", "Live-pass transcript threshold.", "minNewChars");
     numberSetting(containerEl, this.plugin, "Minimum interval (ms)", "Minimum time between completed live passes.", "minIntervalMs");
-    numberSetting(containerEl, this.plugin, "Maximum passes", "Hard model-attempt cap per capture.", "maxPasses");
-    numberSetting(containerEl, this.plugin, "Maximum USD", "Reported-cost cap per capture; see the limitation below.", "maxUsd");
     new Setting(containerEl)
       .setName("Enable live enhancement")
       .setDesc("Run tick passes while capture is active. Stop and Enhance now still use a link-tier pass.")
@@ -747,7 +759,7 @@ function numberSetting(
   plugin: ShorthandPlugin,
   name: string,
   description: string,
-  key: "minNewChars" | "minIntervalMs" | "maxPasses" | "maxUsd",
+  key: "minNewChars" | "minIntervalMs",
 ): void {
   new Setting(container).setName(name).setDesc(description).addText((text) => {
     text.inputEl.type = "number";

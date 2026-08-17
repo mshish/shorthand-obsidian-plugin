@@ -55,8 +55,8 @@ npm run build   # a fresh clone has no main.js — it is gitignored
 npm run dev     # esbuild watch; rebuilds main.js in place on every save
 ```
 
-Enable **Shorthand** under Community plugins and configure the executable paths and budgets in
-its settings tab. Install the community [Hot Reload](https://github.com/pjeby/hot-reload) plugin
+Enable **Shorthand** under Community plugins and configure the executable paths and enhancement
+thresholds in its settings tab. Install the community [Hot Reload](https://github.com/pjeby/hot-reload) plugin
 in that vault and reloads become automatic — it keys off the `.git` directory a clone leaves
 behind. Without it, Obsidian caches the bundle, so **toggle the plugin off and on** after each
 rebuild; otherwise you are still running the previous build, which looks exactly like your change
@@ -182,8 +182,11 @@ file writer, never through Obsidian's vault API.
   the note has unsaved keystrokes in Obsidian's editor buffer, that buffer can win on its next save
   and an AI update may be lost. This is the intentionally safe direction: Shorthand does not
   discard user text.
-- Under Claude subscription authentication, `total_cost_usd` is commonly `0`. In that case the
-  configured USD budget is inert, so the pass-count budget is the real hard cap.
+- Enhancement has no pass or USD budget setting — both were removed. Under Claude subscription
+  authentication `total_cost_usd` is commonly `0`, so a USD cap never trips, and a raw pass count
+  can't tell a long meeting from a runaway loop. Instead, core runs enhancement inside a fixed
+  4-hour wall-clock window as a loop-breaker backstop; it is not configurable from this plugin's
+  settings. The interval setting (`minIntervalMs`) is what actually bounds pass rate.
 - A stream disconnect cannot replay missed Shorthand events. Reconnects add a visible transcript-gap
   warning to the sidecar.
 

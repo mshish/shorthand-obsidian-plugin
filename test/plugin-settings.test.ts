@@ -9,8 +9,6 @@ describe("plugin settings normalization", () => {
       sidecarDirectory: "./Calls\\Transcripts/",
       minNewChars: 42.9,
       minIntervalMs: 0,
-      maxPasses: 7.8,
-      maxUsd: 2.5,
       enableLiveEnhancement: false,
       controlShorthandRecording: false,
       useShorthandPostProcessing: true,
@@ -20,8 +18,6 @@ describe("plugin settings normalization", () => {
       sidecarDirectory: "Calls/Transcripts",
       minNewChars: 42,
       minIntervalMs: 0,
-      maxPasses: 7,
-      maxUsd: 2.5,
       enableLiveEnhancement: false,
       controlShorthandRecording: false,
       useShorthandPostProcessing: true,
@@ -71,12 +67,10 @@ describe("plugin settings normalization", () => {
   });
 
   test("falls back for malformed numeric values", () => {
-    expect(normalizePluginSettings({ minNewChars: 0, minIntervalMs: -1, maxPasses: 0, maxUsd: -1 }))
+    expect(normalizePluginSettings({ minNewChars: 0, minIntervalMs: -1 }))
       .toMatchObject({
         minNewChars: DEFAULT_PLUGIN_SETTINGS.minNewChars,
         minIntervalMs: DEFAULT_PLUGIN_SETTINGS.minIntervalMs,
-        maxPasses: DEFAULT_PLUGIN_SETTINGS.maxPasses,
-        maxUsd: DEFAULT_PLUGIN_SETTINGS.maxUsd,
       });
   });
 });
