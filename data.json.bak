@@ -1,0 +1,10 @@
+{
+  "handyExecutable": "D:\\tools\\Handy\\src-tauri\\target\\release\\handy",
+  "claudeExecutable": "",
+  "sidecarDirectory": "Meetings/Transcripts",
+  "minNewChars": 600,
+  "minIntervalMs": 60000,
+  "maxPasses": 30,
+  "maxUsd": 5,
+  "enableLiveEnhancement": true
+}

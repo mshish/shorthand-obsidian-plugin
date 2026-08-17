@@ -1,4 +1,4 @@
-# Obsidian Handy Notes
+# Obsidian Shorthand
 
 Granola-style meeting notes for Obsidian, driven by [Handy](https://github.com/cjpais/Handy)'s
 `--follow-stream` CLI: Handy transcribes your microphone and system audio as separate
@@ -11,7 +11,7 @@ be added, rewritten, reordered, or removed as the meeting develops.
 
 This repository is the **Obsidian plugin only** — a thin desktop lifecycle and UI wrapper. All
 capture, transcript reconciliation, enhancement and file writing live in the headless core,
-[`mshish/handy-notes-core`](https://github.com/mshish/handy-notes-core), which this repo depends
+[`mshish/shorthand-core`](https://github.com/mshish/shorthand-core), which this repo depends
 on by package name and a pinned tag. The core repo also holds the design notes
 (`docs/DESIGN.md`) and the core/consumer contract (`docs/CONTRACT.md`).
 
@@ -19,7 +19,7 @@ on by package name and a pinned tag. The core repo also holds the design notes
 
 - Handy must be running with **Follow Live Transcript Output** enabled under **Advanced
   settings**. If Handy is stopped or that setting is disabled, `--follow-stream` exits with code 2
-  and Handy Notes reports both remedies.
+  and Shorthand reports both remedies.
 - The `claude` CLI must be installed and logged in. On Windows the standard
   `C:\Users\<you>\.local\bin\claude.exe` location is detected; another location can be configured
   in the plugin's settings tab.
@@ -33,29 +33,29 @@ on by package name and a pinned tag. The core repo also holds the design notes
 Download `main.js` and `manifest.json` from the [latest release](../../releases/latest) into:
 
 ```text
-<vault>/.obsidian/plugins/handy-notes/
+<vault>/.obsidian/plugins/shorthand/
 ```
 
 ### With BRAT
 
 BRAT installs from a **release**, not from the repo tree. This repository is private, so BRAT
 needs a fine-grained personal access token with read-only **Contents** permission on it, added in
-BRAT's settings; then add `mshish/obsidian-handy-notes` as a beta plugin.
+BRAT's settings; then add `mshish/obsidian-shorthand` as a beta plugin.
 
 ### From source — the standard Obsidian dev loop
 
 The repository root **is** the plugin, so Obsidian's documented loop applies directly:
 
 ```sh
-git clone https://github.com/mshish/obsidian-handy-notes.git \
-  "<vault>/.obsidian/plugins/handy-notes"
-cd "<vault>/.obsidian/plugins/handy-notes"
+git clone https://github.com/mshish/obsidian-shorthand.git \
+  "<vault>/.obsidian/plugins/shorthand"
+cd "<vault>/.obsidian/plugins/shorthand"
 npm install
 npm run build   # a fresh clone has no main.js — it is gitignored
 npm run dev     # esbuild watch; rebuilds main.js in place on every save
 ```
 
-Enable **Handy Notes** under Community plugins and configure the executable paths and budgets in
+Enable **Shorthand** under Community plugins and configure the executable paths and budgets in
 its settings tab. Install the community [Hot Reload](https://github.com/pjeby/hot-reload) plugin
 in that vault and reloads become automatic — it keys off the `.git` directory a clone leaves
 behind. Without it, Obsidian caches the bundle, so **toggle the plugin off and on** after each
@@ -69,7 +69,7 @@ tarball endpoint and 404s on a private repo regardless of the token supplied.
 ## Commands
 
 Obsidian prefixes these with the plugin name in the palette, so they appear as
-"Handy Notes: Start capture on this note":
+"Shorthand: Start capture on this note":
 
 - **Start capture on this note**
 - **Stop capture**
@@ -159,7 +159,7 @@ starting up; the plugin says so, and what it asks for depends on which signal fa
 
 ## Ownership-marker contract
 
-Handy Notes owns only the bytes strictly between one well-ordered marker pair:
+Shorthand owns only the bytes strictly between one well-ordered marker pair:
 
 ```markdown
 <!-- handy:notes -->
@@ -180,7 +180,7 @@ file writer, never through Obsidian's vault API.
 
 - Because the core writes directly to disk, Obsidian notices updates through its file watcher. If
   the note has unsaved keystrokes in Obsidian's editor buffer, that buffer can win on its next save
-  and an AI update may be lost. This is the intentionally safe direction: Handy Notes does not
+  and an AI update may be lost. This is the intentionally safe direction: Shorthand does not
   discard user text.
 - Under Claude subscription authentication, `total_cost_usd` is commonly `0`. In that case the
   configured USD budget is inert, so the pass-count budget is the real hard cap.
@@ -229,7 +229,7 @@ Release assets are attached manually for the same reason there is no CI.
 Core is pinned by tag in `package.json`:
 
 ```json
-"handy-notes-core": "github:mshish/handy-notes-core#0.2.0"
+"shorthand-core": "github:mshish/shorthand-core#0.2.0"
 ```
 
 Change the tag, run `npm install`, then run the verification gate above — a core change can move

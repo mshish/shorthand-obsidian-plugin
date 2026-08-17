@@ -1,6 +1,6 @@
-import { DEFAULT_CONFIG } from "handy-notes-core";
+import { DEFAULT_CONFIG } from "shorthand-core";
 
-export type HandyNotesPluginSettings = Readonly<{
+export type ShorthandPluginSettings = Readonly<{
   handyExecutable: string;
   claudeExecutable: string;
   sidecarDirectory: string;
@@ -13,7 +13,7 @@ export type HandyNotesPluginSettings = Readonly<{
   useHandyPostProcessing: boolean;
 }>;
 
-export const DEFAULT_PLUGIN_SETTINGS: HandyNotesPluginSettings = Object.freeze({
+export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
   handyExecutable: DEFAULT_CONFIG.handyBinaryPath,
   claudeExecutable: "",
   sidecarDirectory: DEFAULT_CONFIG.sidecarDirectory.replaceAll("\\", "/"),
@@ -26,7 +26,7 @@ export const DEFAULT_PLUGIN_SETTINGS: HandyNotesPluginSettings = Object.freeze({
   useHandyPostProcessing: false,
 });
 
-export function normalizePluginSettings(input: unknown): HandyNotesPluginSettings {
+export function normalizePluginSettings(input: unknown): ShorthandPluginSettings {
   const value = isRecord(input) ? input : {};
   return {
     handyExecutable: nonEmptyString(value.handyExecutable, DEFAULT_PLUGIN_SETTINGS.handyExecutable),

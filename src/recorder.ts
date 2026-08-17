@@ -1,4 +1,4 @@
-import type { ControlResult, ControlSignal } from "handy-notes-core";
+import type { ControlResult, ControlSignal } from "shorthand-core";
 
 /**
  * The recorder-driving policy, extracted from the plugin so it can be tested without

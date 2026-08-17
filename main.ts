@@ -13,7 +13,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 // Core is consumed by package name through its `exports` map — never a deep path.
-// It is a separate repository (mshish/handy-notes-core), pinned by tag in package.json.
+// It is a separate repository (mshish/shorthand-core), pinned by tag in package.json.
 import {
   ClaudeAgentClient,
   DEFAULT_CONFIG,
@@ -30,18 +30,18 @@ import {
   type EnhanceStatus,
   type ExitDiagnosis,
   type PassOutcome,
-} from "handy-notes-core";
+} from "shorthand-core";
 import {
   MarkdownNoteSink,
   ensureNoteScaffold,
   linkTranscriptFrontmatter,
   locateAiBlock,
   transcriptWikilink,
-} from "handy-notes-core/markdown";
+} from "shorthand-core/markdown";
 import {
   DEFAULT_PLUGIN_SETTINGS,
   normalizePluginSettings,
-  type HandyNotesPluginSettings,
+  type ShorthandPluginSettings,
 } from "./src/settings.js";
 import {
   INITIAL_PLUGIN_STATE,
@@ -121,8 +121,8 @@ const NOT_RUNNING_NOTICES: Record<RecorderPhase | "manual", string> = {
   manual: "Handy was not running; it is starting now. Run the command again once it is up.",
 };
 
-export default class HandyNotesPlugin extends Plugin {
-  settings: HandyNotesPluginSettings = DEFAULT_PLUGIN_SETTINGS;
+export default class ShorthandPlugin extends Plugin {
+  settings: ShorthandPluginSettings = DEFAULT_PLUGIN_SETTINGS;
   #state: PluginUiState = INITIAL_PLUGIN_STATE;
   // Declared `| undefined` rather than optional: `exactOptionalPropertyTypes` forbids
   // assigning `undefined` to an optional property, and both are cleared on teardown.
@@ -133,11 +133,11 @@ export default class HandyNotesPlugin extends Plugin {
     this.settings = normalizePluginSettings(await this.loadData());
     this.#statusBar = this.addStatusBarItem();
     this.#renderStatus();
-    this.addSettingTab(new HandyNotesSettingTab(this.app, this));
+    this.addSettingTab(new ShorthandSettingTab(this.app, this));
 
     // Command names carry no plugin prefix and are sentence case, per Obsidian's plugin
-    // guidelines: the command palette already renders these as "Handy Notes: Start capture
-    // on this note". Spelling it out here produced "Handy Notes: Handy: start capture…".
+    // guidelines: the command palette already renders these as "Shorthand: Start capture
+    // on this note". Spelling it out here produced "Shorthand: Handy: start capture…".
     this.addCommand({
       id: "start-capture-this-note",
       name: "Start capture on this note",
@@ -183,7 +183,7 @@ export default class HandyNotesPlugin extends Plugin {
 
   async startCaptureOnActiveNote(): Promise<void> {
     if (this.#capture !== undefined) {
-      new Notice("Handy Notes is already capturing. Stop it before starting another note.");
+      new Notice("Shorthand is already capturing. Stop it before starting another note.");
       return;
     }
     const file = this.activeMarkdownFile();
@@ -298,7 +298,7 @@ export default class HandyNotesPlugin extends Plugin {
         if (enhancer !== undefined && this.settings.enableLiveEnhancement) {
           enhancer.requestTick();
           console.log(
-            `[handy-notes] transcript +${delta.length} chars; pending ${enhancer.state.pendingCharacters}/${this.settings.minNewChars} toward next pass`,
+            `[shorthand] transcript +${delta.length} chars; pending ${enhancer.state.pendingCharacters}/${this.settings.minNewChars} toward next pass`,
           );
         }
         this.#renderStatus();
@@ -315,7 +315,7 @@ export default class HandyNotesPlugin extends Plugin {
         // ENOENT is the follower telling us there is no Handy binary at all, which is also
         // the answer for every control spawn this capture might still make.
         if (fatal) runtime.handyDown = true;
-        this.fail(`Could not start "${attempted}". Check the handy.exe path in Handy Notes settings. ${error.message}`);
+        this.fail(`Could not start "${attempted}". Check the handy.exe path in Shorthand settings. ${error.message}`);
       });
       client.on("giveUp", ({ attempts }) => this.fail(`Handy stream disconnected repeatedly; gave up after ${attempts} reconnect attempts.`));
       client.on("drainTimeout", () => this.fail("Handy did not finish the active transcript before the drain timeout; the child was stopped."));
@@ -348,7 +348,7 @@ export default class HandyNotesPlugin extends Plugin {
       // Not awaited here — the capture is live either way — but the promise is retained by
       // the recorder itself, which is what lets a stop sequence wait for it.
       void recorder?.start(attached);
-      new Notice(`Handy Notes capture started: ${file.path}`);
+      new Notice(`Shorthand capture started: ${file.path}`);
     } catch (error) {
       this.fail(errorMessage(error));
       this.forceStopCapture();
@@ -358,14 +358,14 @@ export default class HandyNotesPlugin extends Plugin {
   async stopCapture(): Promise<void> {
     const runtime = this.#capture;
     if (runtime === undefined) {
-      new Notice("Handy Notes is not capturing.");
+      new Notice("Shorthand is not capturing.");
       return;
     }
     // `#capture` is not cleared until finishRuntime(), which is up to a full drain timeout
     // away. Guarding on it alone let a second Stop press during that window send a second
     // control signal to Handy.
     if (runtime.stopping) {
-      new Notice("Handy Notes is already stopping.");
+      new Notice("Shorthand is already stopping.");
       return;
     }
     runtime.stopping = true;
@@ -511,11 +511,11 @@ export default class HandyNotesPlugin extends Plugin {
   private createEnhancer(notePath: string, vaultRoot: string): EnhanceRunner {
     const configuredClaude = this.settings.claudeExecutable;
     if (configuredClaude.length > 0 && !existsSync(configuredClaude)) {
-      throw new Error(`claude.exe was not found at "${configuredClaude}". Update the path in Handy Notes settings.`);
+      throw new Error(`claude.exe was not found at "${configuredClaude}". Update the path in Shorthand settings.`);
     }
     const claudeExecutable = detectClaudeExecutable(configuredClaude.length === 0 ? undefined : configuredClaude);
     if (claudeExecutable === undefined && process.platform === "win32") {
-      throw new Error("claude.exe was not found. Install and log in to Claude CLI, or configure its full path in Handy Notes settings.");
+      throw new Error("claude.exe was not found. Install and log in to Claude CLI, or configure its full path in Shorthand settings.");
     }
     return new EnhanceRunner({
       sink: new MarkdownNoteSink({ notePath, vaultRoot }),
@@ -577,7 +577,7 @@ export default class HandyNotesPlugin extends Plugin {
       if (reason === "stopped" && runtime.enhancer !== undefined) {
         this.reportOutcome(await runtime.enhancer.enhanceNow("link"));
       }
-      new Notice("Handy Notes capture stopped.");
+      new Notice("Shorthand capture stopped.");
     } catch (error) {
       this.fail(`Capture shutdown failed: ${errorMessage(error)}`);
     } finally {
@@ -616,14 +616,14 @@ export default class HandyNotesPlugin extends Plugin {
       // Only a target that asked for a backoff is actionable. A plain re-queue means
       // the note kept changing under the writer — i.e. the user is typing during the
       // meeting — which self-heals on the next pass and must stay silent.
-      this.fail(`${status.message} Close competing file handles; Handy Notes will retry on the next pass.`, status.passCount);
+      this.fail(`${status.message} Close competing file handles; Shorthand will retry on the next pass.`, status.passCount);
     }
   }
 
   private reportOutcome(outcome: PassOutcome): void {
     if (outcome.status === "completed") {
       this.dispatch({ type: "enhancement-finished", passCount: this.#state.passCount });
-      new Notice(outcome.written ? "Handy Notes updated the AI block." : "The AI block was already up to date.");
+      new Notice(outcome.written ? "Shorthand updated the AI block." : "The AI block was already up to date.");
     } else if (outcome.status === "budget-exhausted") {
       const message = `Enhancement ${outcome.reason} budget is exhausted; capture continues.`;
       this.dispatch({ type: "budget-exhausted", passCount: this.#state.passCount, message });
@@ -642,21 +642,21 @@ export default class HandyNotesPlugin extends Plugin {
   private activeMarkdownFile(): TFile | undefined {
     const file = this.app.workspace.getActiveViewOfType(MarkdownView)?.file;
     if (file !== null && file !== undefined) return file;
-    new Notice("Open a Markdown note before running Handy Notes.");
+    new Notice("Open a Markdown note before running Shorthand.");
     return undefined;
   }
 
   private vaultRoot(): string | undefined {
     const adapter = this.app.vault.adapter;
     if (adapter instanceof FileSystemAdapter) return adapter.getBasePath();
-    this.fail("Handy Notes requires a desktop filesystem-backed Obsidian vault.");
+    this.fail("Shorthand requires a desktop filesystem-backed Obsidian vault.");
     return undefined;
   }
 
   private fail(message: string, passCount?: number): void {
     this.dispatch({ type: "error", message, ...(passCount === undefined ? {} : { passCount }) });
-    new Notice(`Handy Notes: ${message}`, 10_000);
-    console.error(`[handy-notes] ${message}`);
+    new Notice(`Shorthand: ${message}`, 10_000);
+    console.error(`[shorthand] ${message}`);
   }
 
   private dispatch(event: PluginUiEvent): void {
@@ -677,21 +677,21 @@ export default class HandyNotesPlugin extends Plugin {
     this.#statusBar.setAttribute(
       "title",
       this.#state.message ?? (pending === undefined
-        ? "Handy Notes status"
-        : `${pending} of ${this.settings.minNewChars} characters toward the next enhancement pass. "Handy Notes: Enhance now" runs one immediately.`),
+        ? "Shorthand status"
+        : `${pending} of ${this.settings.minNewChars} characters toward the next enhancement pass. "Shorthand: Enhance now" runs one immediately.`),
     );
   }
 }
 
-class HandyNotesSettingTab extends PluginSettingTab {
-  constructor(app: App, private readonly plugin: HandyNotesPlugin) {
+class ShorthandSettingTab extends PluginSettingTab {
+  constructor(app: App, private readonly plugin: ShorthandPlugin) {
     super(app, plugin);
   }
 
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    // No plugin-name heading at the top: Obsidian already titles this pane "Handy Notes", and
+    // No plugin-name heading at the top: Obsidian already titles this pane "Shorthand", and
     // the guidelines reserve headings for separating multiple sections.
     textSetting(containerEl, this.plugin, "Handy executable", "Path to handy.exe, or a command available on PATH.", "handyExecutable");
     textSetting(containerEl, this.plugin, "Claude executable", "Optional path to claude.exe. Leave blank for automatic detection.", "claudeExecutable");
@@ -725,14 +725,14 @@ class HandyNotesSettingTab extends PluginSettingTab {
       .setName("Direct-file write limitation")
       .setHeading()
       .setDesc(
-        "Handy Notes writes through its core atomic file writer, not Obsidian's vault API. Obsidian detects those writes with its file watcher. If a note has unsaved keystrokes in an editor buffer, that buffer can win on its next save and an AI update may be lost. This is the safe direction: user text is never discarded by Handy Notes.",
+        "Shorthand writes through its core atomic file writer, not Obsidian's vault API. Obsidian detects those writes with its file watcher. If a note has unsaved keystrokes in an editor buffer, that buffer can win on its next save and an AI update may be lost. This is the safe direction: user text is never discarded by Shorthand.",
       );
   }
 }
 
 function textSetting(
   container: HTMLElement,
-  plugin: HandyNotesPlugin,
+  plugin: ShorthandPlugin,
   name: string,
   description: string,
   key: "handyExecutable" | "claudeExecutable" | "sidecarDirectory",
@@ -744,7 +744,7 @@ function textSetting(
 
 function numberSetting(
   container: HTMLElement,
-  plugin: HandyNotesPlugin,
+  plugin: ShorthandPlugin,
   name: string,
   description: string,
   key: "minNewChars" | "minIntervalMs" | "maxPasses" | "maxUsd",
@@ -766,7 +766,7 @@ class ScaffoldModal extends Modal {
   }
 
   onOpen(): void {
-    this.titleEl.setText("Add Handy Notes markers?");
+    this.titleEl.setText("Add Shorthand markers?");
     this.contentEl.createEl("p", {
       text: "This note has no Handy AI ownership block. Add the user-notes marker and seeded AI section scaffold without changing existing note text?",
     });

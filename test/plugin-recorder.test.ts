@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ControlResult, ControlSignal } from "handy-notes-core";
+import type { ControlResult, ControlSignal } from "shorthand-core";
 import {
   HandyRecorder,
   handyProvenDown,
