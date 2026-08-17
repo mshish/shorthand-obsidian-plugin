@@ -20,10 +20,13 @@ import {
   detectClaudeExecutable,
   detectHandyExecutable,
   EnhanceRunner,
+  HandyControl,
   SidecarWriter,
   StreamClient,
   TranscriptStore,
   enhancementDelta,
+  type ControlResult,
+  type ControlSignal,
   type EnhanceStatus,
   type ExitDiagnosis,
   type PassOutcome,
@@ -46,15 +49,76 @@ import {
   type PluginUiEvent,
   type PluginUiState,
 } from "./src/state.js";
+import { HandyRecorder, handyProvenDown, type RecorderPhase } from "./src/recorder.js";
+
+/**
+ * Handy's follower needs a moment after spawn before Handy's events reach it, and the
+ * start toggle must not be fired until then — see `HandyRecorder.start()`. Long enough to
+ * cover a warm attach (measured control forwards land in 48-71ms; the follower's own
+ * `hello` is the same order), short enough that a follower which never says `hello`
+ * does not visibly delay the recording.
+ */
+const ATTACH_GRACE_MS = 2_000;
+
+/**
+ * How long a stop waits for the `begin` of a recording this capture just started but has
+ * not seen announced yet. Sized off the same measurement as the attach grace: the gap is
+ * one Handy round trip, not a user-visible wait.
+ */
+const BEGIN_GRACE_MS = 1_500;
+
+/**
+ * Handy's post-processing runs an LLM pass between the recording ending and the `final`
+ * event, and that pass now happens entirely inside the drain window — before this plugin
+ * drove the recorder, the toggle was pressed by hand and most of that time had already
+ * elapsed by the time Stop capture ran. A post-processed `final` that misses the window
+ * is force-killed and lost, so the budget is raised rather than documented as a limit:
+ * the timeout only ever costs time on a capture that already failed to finalize.
+ */
+const POST_PROCESS_DRAIN_TIMEOUT_MS = 45_000;
 
 type CaptureRuntime = {
   notePath: string;
   sidecarPath: string;
   client: StreamClient;
+  control: HandyControl;
+  /**
+   * Present exactly when this capture drives Handy's recorder. Built once, at start, from
+   * the settings as they were then: reading them live at each call site let a setting
+   * flipped mid-capture send a stop signal that had no matching start (or the stop toggle
+   * for a different signal than the one that started the recording).
+   */
+  recorder: HandyRecorder | undefined;
+  /**
+   * Set only when Handy is *known* not to be running: the follower's binary is missing, or
+   * its exit said "not running" and nothing this capture saw contradicts that. Control
+   * signals are then suppressed, because a control spawn with no Handy to forward to
+   * *becomes* the Handy app starting up and a failed capture must not launch Handy unbidden.
+   * Deliberately biased toward staying false — see `handyProvenDown()`.
+   */
+  handyDown: boolean;
+  /**
+   * True once the follower's `hello` arrived, i.e. it really did connect to a running
+   * Handy. The follower's exit code cannot say this on its own.
+   */
+  helloEver: boolean;
   sidecar: SidecarWriter;
   enhancer: EnhanceRunner | undefined;
   settled: Promise<ExitDiagnosis>;
   stopping: boolean;
+};
+
+/**
+ * A `not-running` result means something different on every path that can produce it, and
+ * one shared sentence was wrong on three of them — it told the user to re-run a command
+ * they had already finished, up to five seconds after being told the capture had stopped.
+ */
+const NOT_RUNNING_NOTICES: Record<RecorderPhase | "manual", string> = {
+  start: "Handy was not running, so this capture did not start a recording; Handy is starting now. Once it is up, start the recording with Handy's hotkey or \"Toggle Handy recording\" — the capture is already running and will pick it up.",
+  recall: "Handy did not confirm the cancel for the recording this capture had just started. Check that Handy is not still recording.",
+  finalize: "Handy was not running, so there was no recording to finalize. The transcript keeps whatever Handy had already sent.",
+  backstop: "Handy did not confirm the final cancel. Check that Handy is not still recording.",
+  manual: "Handy was not running; it is starting now. Run the command again once it is up.",
 };
 
 export default class HandyNotesPlugin extends Plugin {
@@ -82,12 +146,24 @@ export default class HandyNotesPlugin extends Plugin {
     this.addCommand({
       id: "stop-capture",
       name: "Stop capture",
-      callback: () => { void this.stopCapture(false); },
+      callback: () => { void this.stopCapture().catch((error: unknown) => this.fail(errorMessage(error))); },
     });
     this.addCommand({
       id: "enhance-now",
       name: "Enhance now",
       callback: () => { void this.enhanceActiveNote(); },
+    });
+    // The user's manual override of Handy's recorder, independent of capture: a plain
+    // toggle and an unconditional cancel, neither of which touches the capture itself.
+    this.addCommand({
+      id: "toggle-handy-recording",
+      name: "Toggle Handy recording",
+      callback: () => { this.fireControl(this.recordingSignal()); },
+    });
+    this.addCommand({
+      id: "cancel-handy-recording",
+      name: "Cancel Handy recording",
+      callback: () => { this.fireControl("cancel"); },
     });
 
     // StreamClient owns the child process. These hooks synchronously signal it
@@ -154,21 +230,65 @@ export default class HandyNotesPlugin extends Plugin {
       } catch (error) {
         enhancementUnavailable = `${errorMessage(error)} Capture will continue with transcript only.`;
       }
+      const command = this.handyCommand();
+      const postProcessing = this.settings.useHandyPostProcessing;
+      const drainTimeoutMs = postProcessing ? POST_PROCESS_DRAIN_TIMEOUT_MS : DEFAULT_CONFIG.drainTimeoutMs;
       const client = new StreamClient({
-        // Blank setting means "find it for me"; an explicit path always wins.
-        command: detectHandyExecutable(this.settings.handyExecutable || undefined),
+        command,
         args: DEFAULT_CONFIG.followStreamArgs,
         maxReconnectAttempts: DEFAULT_CONFIG.reconnect.maxAttempts,
         backoffMs: DEFAULT_CONFIG.reconnect.backoffMs,
-        drainTimeoutMs: DEFAULT_CONFIG.drainTimeoutMs,
+        drainTimeoutMs,
       });
       const settled = new Promise<ExitDiagnosis>((resolveSettled) => client.once("settled", resolveSettled));
-      const runtime: CaptureRuntime = { notePath, sidecarPath, client, sidecar, enhancer, settled, stopping: false };
+      const control = new HandyControl({ command });
+      // Resolved by the follower's own `hello` record; `HandyRecorder.start()` explains why
+      // the start toggle waits on it.
+      let markAttached = (): void => {};
+      const attached = new Promise<void>((resolveAttached) => { markAttached = resolveAttached; });
+      const recorder = this.settings.controlHandyRecording
+        ? new HandyRecorder({
+          control,
+          // Captured from `postProcessing`, not read live: the recorder must stop the
+          // recording with the same toggle it started it with, even if the setting flips.
+          recordingSignal: recordingSignalFor(postProcessing),
+          report: (phase, result) => this.reportControl(phase, result),
+          // The recorder's wait for the terminal record replaces the follower's own drain
+          // rather than preceding it, so it gets the same budget.
+          finalizeTimeoutMs: drainTimeoutMs,
+          attachGraceMs: ATTACH_GRACE_MS,
+          beginGraceMs: BEGIN_GRACE_MS,
+        })
+        : undefined;
+      const runtime: CaptureRuntime = {
+        notePath,
+        sidecarPath,
+        client,
+        control,
+        recorder,
+        handyDown: false,
+        helloEver: false,
+        sidecar,
+        enhancer,
+        settled,
+        stopping: false,
+      };
       this.#capture = runtime;
       this.dispatch({ type: "capture-started" });
       if (enhancementUnavailable !== undefined) this.fail(enhancementUnavailable);
 
       client.on("event", ({ generation, record }) => {
+        // The recorder's whole view of Handy's session state comes from here — this
+        // handler already sees every record Handy sends, and unlike StreamClient's own
+        // session set it is never reset behind the plugin's back by a reconnect.
+        // `observe()` takes session-scoped records only; `hello` is the sole session-less
+        // record that reaches this event at all (a connection-level `error` is emitted as
+        // `connectionError`, never here), and it has its own entry point.
+        if (record.t === "hello") {
+          runtime.helloEver = true;
+          recorder?.noteAttached();
+          markAttached();
+        } else recorder?.observe(record);
         const update = transcript.ingest(generation, record);
         if (update === null) return;
         sidecar.apply(update);
@@ -191,14 +311,43 @@ export default class HandyNotesPlugin extends Plugin {
       });
       client.on("connectionError", ({ record }) => this.fail(`Handy connection error (${record.code}): ${record.message}`));
       client.on("protocolError", ({ error }) => this.fail(error.message));
-      client.on("processError", ({ error, command }) => this.fail(
-        `Could not start "${command}". Check the handy.exe path in Handy Notes settings. ${error.message}`,
-      ));
+      client.on("processError", ({ error, command: attempted, fatal }) => {
+        // ENOENT is the follower telling us there is no Handy binary at all, which is also
+        // the answer for every control spawn this capture might still make.
+        if (fatal) runtime.handyDown = true;
+        this.fail(`Could not start "${attempted}". Check the handy.exe path in Handy Notes settings. ${error.message}`);
+      });
       client.on("giveUp", ({ attempts }) => this.fail(`Handy stream disconnected repeatedly; gave up after ${attempts} reconnect attempts.`));
       client.on("drainTimeout", () => this.fail("Handy did not finish the active transcript before the drain timeout; the child was stopped."));
       sidecar.on("writeError", ({ error }) => this.fail(`Transcript sidecar write failed: ${error.message}`));
-      void settled.then((diagnosis) => this.captureSettled(runtime, diagnosis));
+      // Registered before anything else awaits `settled`, so `handyDown` is already set by
+      // the time `stopCapture()` resumes and decides whether a control spawn is safe.
+      void settled.then(
+        (diagnosis) => {
+          // Not `diagnosis.code === 2`: that code is ambiguous, and reading it as proof is
+          // what left Handy recording with no follower. `handyProvenDown` says why.
+          if (handyProvenDown({
+            exitCode: diagnosis.code,
+            helloEver: runtime.helloEver,
+            observedSession: recorder?.observedSession ?? false,
+            // The one piece of evidence that is not follower-derived, and the strongest:
+            // a control signal Handy confirmed cannot have been forwarded to a Handy that
+            // was not running. Without it, a capture whose follower was refused (streaming
+            // off, slot taken) concluded "Handy is down" while its own start sequence had
+            // just put that same Handy into recording.
+            controlConfirmed: recorder?.controlConfirmed ?? false,
+          })) runtime.handyDown = true;
+          return this.captureSettled(runtime, diagnosis);
+        },
+      ).catch((error: unknown) => {
+        // Nothing else is watching this chain; an unhandled rejection here would take the
+        // failure out of the user's sight entirely.
+        this.fail(`Capture shutdown failed: ${errorMessage(error)}`);
+      });
       client.start();
+      // Not awaited here — the capture is live either way — but the promise is retained by
+      // the recorder itself, which is what lets a stop sequence wait for it.
+      void recorder?.start(attached);
       new Notice(`Handy Notes capture started: ${file.path}`);
     } catch (error) {
       this.fail(errorMessage(error));
@@ -206,18 +355,57 @@ export default class HandyNotesPlugin extends Plugin {
     }
   }
 
-  async stopCapture(force: boolean): Promise<void> {
+  async stopCapture(): Promise<void> {
     const runtime = this.#capture;
     if (runtime === undefined) {
       new Notice("Handy Notes is not capturing.");
       return;
     }
+    // `#capture` is not cleared until finishRuntime(), which is up to a full drain timeout
+    // away. Guarding on it alone let a second Stop press during that window send a second
+    // control signal to Handy.
+    if (runtime.stopping) {
+      new Notice("Handy Notes is already stopping.");
+      return;
+    }
     runtime.stopping = true;
+    // Synchronous, before the first await: a start sequence still in flight has to see the
+    // stop at its next checkpoint, and it is the only thing that can recall its own spawn.
+    runtime.recorder?.requestStop();
     runtime.enhancer?.stopLiveTicks();
-    if (force) runtime.client.forceStop();
-    else runtime.client.stopAfterDrain();
+    // Stopping can spend a control timeout plus a whole post-processing drain. Without
+    // this the status bar read "capturing" for all of it.
+    this.dispatch({ type: "capture-stopping" });
+    // The recorder owns the finalize signal *and* the wait for the record that proves it
+    // landed. Tearing the follower down before that record arrives is what silently loses
+    // the corrected transcript, and StreamClient cannot decide it for us: a reconnect
+    // clears its session set, after which stopAfterDrain() kills the child instantly.
+    // `settled` is handed in as the abandon signal: once the follower is gone, no terminal
+    // record can arrive from anywhere, and waiting out the rest of the budget would only
+    // make the stop look hung.
+    // `handyDown` is threaded in rather than checked here: the recorder still has to await
+    // its own start sequence before this returns, it just must not send the finalize toggle.
+    // Handy quitting mid-capture can beat `captureSettled` to the user's Stop press, and a
+    // toggle spawned with no Handy to forward to would *become* Handy starting up.
+    const outcome = await (runtime.recorder?.stop({
+      abandoned: runtime.settled,
+      handyDown: runtime.handyDown,
+    }) ?? Promise.resolve("no-session" as const));
+    if (outcome === "timed-out") {
+      this.fail("Handy did not deliver the final transcript in time; the transcript keeps whatever Handy had already sent.");
+      runtime.client.forceStop();
+    } else if (outcome === "restarted") {
+      // Handy answered the finalize toggle by starting a recording, so it was idle: it had
+      // restarted while the follower was away and the recording this capture followed died
+      // with the old process. Draining would wait on that brand-new session; the backstop
+      // below is what ends it.
+      this.fail("Handy was restarted during this capture, so the recording it was following was already gone and the stop request started a new one. That new recording is being cancelled; the transcript keeps whatever Handy had already sent.");
+      runtime.client.forceStop();
+    } else {
+      runtime.client.stopAfterDrain();
+    }
     await runtime.settled;
-    await this.finishRuntime(runtime, !force);
+    await this.finishRuntime(runtime, "stopped");
   }
 
   forceStopCapture(): void {
@@ -226,8 +414,14 @@ export default class HandyNotesPlugin extends Plugin {
     runtime.stopping = true;
     runtime.enhancer?.stopLiveTicks();
     runtime.client.forceStop();
-    // Obsidian does not await onunload/beforeunload. Signal first so the child
-    // cannot be orphaned, then best-effort flush pending sidecar bytes.
+    // `--cancel`, never a toggle: this runs during Obsidian's shutdown, where a toggle
+    // would *start* a recording if Handy happened to be idle. `--cancel` can only ever
+    // drive Handy toward idle. It is sent even though nothing here can await it: a start
+    // sequence still in flight re-checks the stop flag after its own toggle and sequences
+    // a second cancel behind it, which is what makes the outcome deterministic.
+    runtime.recorder?.teardown();
+    // Signal first so the child cannot be orphaned, then best-effort flush pending sidecar
+    // bytes: Obsidian does not await onunload/beforeunload.
     void runtime.sidecar.close().catch(() => {});
     this.#capture = undefined;
     this.dispatch({ type: "capture-stopped" });
@@ -264,6 +458,54 @@ export default class HandyNotesPlugin extends Plugin {
     } catch (error) {
       this.fail(`Enhancement failed: ${errorMessage(error)}`);
     }
+  }
+
+  /**
+   * One resolution for both the follower and every control child. Resolving twice would
+   * let them land on different binaries once a setting changes mid-capture, and a control
+   * signal delivered to a different Handy install than the one being followed is silent.
+   */
+  private handyCommand(): string {
+    // Blank setting means "find it for me"; an explicit path always wins.
+    return detectHandyExecutable(this.settings.handyExecutable || undefined);
+  }
+
+  /**
+   * The live setting, deliberately: this is the manual override, which belongs to the user
+   * and not to any capture, so it must obey the switch as it is set right now.
+   *
+   * A capture snapshots its own copy at start instead of calling this, because it has to
+   * finalize with the same toggle it started the recording with. The split is intentional
+   * and has one visible consequence: flipping **Use Handy post-processing** mid-capture makes
+   * "Toggle Handy recording" drive the *other* flag than the one the capture will finalize
+   * with. Reconciling them would mean either a capture that stops with a toggle that has no
+   * matching start, or a manual command that silently ignores the setting — both worse.
+   */
+  private recordingSignal(): ControlSignal {
+    return recordingSignalFor(this.settings.useHandyPostProcessing);
+  }
+
+  /**
+   * The standalone commands: a one-off signal that belongs to no capture sequence, so the
+   * outcome is only reported, never awaited. Capture works perfectly well with Handy's own
+   * hotkey, so a missed toggle must never abort or unwind a capture that is otherwise
+   * healthy.
+   */
+  private fireControl(signal: ControlSignal): void {
+    const control = this.#capture?.control ?? new HandyControl({ command: this.handyCommand() });
+    void control.send(signal).then(
+      (result) => this.reportControl("manual", result),
+      (error: unknown) => this.fail(`Handy control failed: ${errorMessage(error)}`),
+    );
+  }
+
+  private reportControl(phase: RecorderPhase | "manual", result: ControlResult): void {
+    if (result.status === "sent") return;
+    if (result.status === "not-running") {
+      new Notice(NOT_RUNNING_NOTICES[phase], 10_000);
+      return;
+    }
+    this.fail(`Handy control failed: ${result.message}`);
   }
 
   private createEnhancer(notePath: string, vaultRoot: string): EnhanceRunner {
@@ -310,12 +552,29 @@ export default class HandyNotesPlugin extends Plugin {
     return false;
   }
 
-  private async finishRuntime(runtime: CaptureRuntime, finalEnhancement: boolean): Promise<void> {
+  private async finishRuntime(runtime: CaptureRuntime, reason: "stopped" | "died"): Promise<void> {
     if (this.#capture !== runtime) return;
+    // Backstop, once nothing is left to finalize: `--cancel` is a no-op against an idle
+    // Handy, so firing it costs nothing and is the only thing that guarantees a capture
+    // cannot leave Handy recording when the belief about its state was wrong. Only for a
+    // capture that drove the recorder in the first place — otherwise this would cancel a
+    // recording the user started by hand.
+    if (runtime.recorder !== undefined && !runtime.handyDown) {
+      const cancelling = reason === "died" && runtime.recorder.mayBeRecording;
+      runtime.recorder.backstop();
+      if (cancelling) {
+        // Deliberate: leaving the microphone hot is the failure this whole sequence exists
+        // to prevent, and it outranks the corrections a `--cancel` throws away. Say so.
+        new Notice(
+          "The Handy recording in progress was cancelled: the transcript stream ended, so nothing was left to finalize it. Already-transcribed text is kept; Handy's corrected version is not.",
+          10_000,
+        );
+      }
+    }
     try {
       await runtime.sidecar.close();
       await runtime.enhancer?.waitForIdle();
-      if (finalEnhancement && runtime.enhancer !== undefined) {
+      if (reason === "stopped" && runtime.enhancer !== undefined) {
         this.reportOutcome(await runtime.enhancer.enhanceNow("link"));
       }
       new Notice("Handy Notes capture stopped.");
@@ -330,8 +589,17 @@ export default class HandyNotesPlugin extends Plugin {
   private async captureSettled(runtime: CaptureRuntime, diagnosis: ExitDiagnosis): Promise<void> {
     if (runtime.stopping || this.#capture !== runtime) return;
     runtime.stopping = true;
+    // The follower is gone, so nothing can observe a recording any more. Recall an in-
+    // flight start sequence for the same reason a Stop press does.
+    runtime.recorder?.requestStop();
+    // And wait for that recall to actually land before the runtime is dropped. Unlike
+    // `stopCapture`, nothing on this path awaits `stop()`, so without this the cancel of a
+    // dead capture's start sequence could still be in flight when the user starts the next
+    // capture — and land on the recording that capture had just started.
+    await runtime.recorder?.whenStartSettled();
     if (!diagnosis.clean) this.fail(streamExitMessage(diagnosis));
-    await this.finishRuntime(runtime, false);
+    this.dispatch({ type: "capture-stopping" });
+    await this.finishRuntime(runtime, "died");
   }
 
   private onEnhanceStatus(status: EnhanceStatus): void {
@@ -438,6 +706,18 @@ class HandyNotesSettingTab extends PluginSettingTab {
       .addToggle((toggle) => toggle
         .setValue(this.plugin.settings.enableLiveEnhancement)
         .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, enableLiveEnhancement: value })));
+    new Setting(containerEl)
+      .setName("Control Handy recording")
+      .setDesc("Start capture and Stop capture also drive Handy's recorder, so a capture needs no separate press of Handy's hotkey. Starting a capture cancels any recording already in progress — that recording's corrected transcript is discarded — and then starts a fresh one. Stopping a capture sends the recording toggle only when a recording is believed to be running, and never once Handy is known to be gone. Closing Obsidian cancels the recording in progress, and so does losing the transcript stream — the only case where no cancel is sent is when nothing this capture saw shows Handy was ever reached, since signalling a Handy that is not running would launch it. The consequence of that bias: quitting Handy in the middle of a capture normally does relaunch it, because the cancel is sent whenever there is any chance a recording is still running.")
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.controlHandyRecording)
+        .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, controlHandyRecording: value })));
+    new Setting(containerEl)
+      .setName("Use Handy post-processing")
+      .setDesc("Drive Handy's post-processed transcription instead of plain transcription. Post-processing runs an LLM pass after the recording ends, so stopping a capture waits longer for the final transcript (45s instead of 10s). A capture keeps the value this setting had when it started, so that it stops the recording with the same toggle it started; changing it mid-capture affects only the \"Toggle Handy recording\" command and the next capture.")
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.useHandyPostProcessing)
+        .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, useHandyPostProcessing: value })));
 
     // setHeading() rather than a raw <h3>: the guidelines call for it, and it inherits
     // Obsidian's own settings typography instead of hardcoding a heading level.
@@ -530,6 +810,11 @@ function isInside(root: string, candidate: string): boolean {
 
 function samePath(left: string, right: string): boolean {
   return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+/** Which of Handy's two recording toggles a capture drives. */
+function recordingSignalFor(postProcessing: boolean): ControlSignal {
+  return postProcessing ? "toggle-post-process" : "toggle-transcription";
 }
 
 function streamExitMessage(diagnosis: ExitDiagnosis): string {

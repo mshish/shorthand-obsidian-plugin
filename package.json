@@ -15,7 +15,7 @@
     "version": "node version-bump.mjs && git add manifest.json versions.json"
   },
   "dependencies": {
-    "handy-notes-core": "git+https://github.com/mshish/handy-notes-core.git#0.1.0"
+    "handy-notes-core": "github:mshish/handy-notes-core#0.2.0"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",

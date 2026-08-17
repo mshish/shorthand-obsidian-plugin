@@ -74,10 +74,88 @@ Obsidian prefixes these with the plugin name in the palette, so they appear as
 - **Start capture on this note**
 - **Stop capture**
 - **Enhance now**
+- **Toggle Handy recording**
+- **Cancel Handy recording**
 
 Capture starts only on the active Markdown note. If it has no ownership markers, the plugin offers
 to append a seeded marker scaffold. Malformed, duplicate, nested, or inverted markers are never
 repaired automatically.
+
+The last two commands work with or without an active capture and drive Handy's own recorder
+directly. They do not start or stop a capture — but they are not inert either: **Cancel Handy
+recording** during a capture ends the recording Handy is running, so the capture keeps only the
+text Handy had already committed and the corrected `final` is discarded.
+
+## Driving Handy's recorder
+
+By default, **Start capture** and **Stop capture** also drive Handy's recorder, so a capture no
+longer needs a separate press of Handy's global hotkey. Two settings control this:
+
+- **Control Handy recording** (default on) — drive the recorder from start and stop.
+- **Use Handy post-processing** (default off) — use `--toggle-post-process` instead of
+  `--toggle-transcription` as the recording toggle.
+
+Handy's CLI offers no `--start`/`--stop` — the transcription flags are toggles — so the plugin
+makes each end deterministic instead of guessing:
+
+- **Start capture sends `--cancel` first, then the recording toggle.** `--cancel` always drives
+  Handy to idle (and is a no-op when it already is), so the toggle that follows can only start a
+  recording. **Starting a capture therefore cancels any recording already in progress**, and a
+  cancelled recording keeps only the partials Handy had already committed — its corrected final
+  transcript is discarded. The toggle waits for the follower to attach first, so that the
+  recording's own `begin` is seen; if the follower has not attached within 2s the sequence goes
+  ahead anyway, since a recording nobody is following is still better than no recording.
+- **Stop capture sends the recording toggle only when a recording is believed to be running**,
+  which is what makes Handy finalize and emit the `final` transcript. It then holds the follower
+  open until Handy's terminal record arrives (or the drain budget runs out) and sends `--cancel`
+  last, as a backstop against ever leaving Handy recording. Two things suppress the toggle: no
+  session believed live (a toggle would *start* a recording), and Handy already known to be gone
+  — in that case the stop sends nothing at all, since the spawn would launch the app.
+- **If Handy is restarted mid-capture**, the recording the capture was following died with the
+  old process, and Handy's session numbering restarts at 1 — so no session id can be trusted
+  across that. If the stop's toggle then lands on an idle Handy and *starts* a recording, the
+  plugin sees the new session begin, says so, and cancels it instead of waiting out the whole
+  drain budget with a live microphone.
+- **A stop that arrives while the start sequence is still in flight** cannot un-spawn the toggle
+  already on its way to Handy, so a `--cancel` is sequenced behind it instead. The capture ends
+  with Handy idle either way.
+- **Closing Obsidian mid-capture sends `--cancel`.** That is the only signal the shutdown path
+  itself sends — but it cannot un-spawn a start sequence still in flight, so if a capture was
+  started moments earlier the recording toggle may still land, and the start sequence sequences
+  its own second `--cancel` behind it. Handy ends idle either way.
+- **If the transcript stream dies on its own** — Handy quit, the stream was disabled — the same
+  `--cancel` backstop runs, which cancels the recording that was in progress. Leaving the
+  microphone hot is the worse failure. The plugin says so in a notice. It is skipped only when
+  nothing the capture saw shows Handy was ever reached: no `hello`, no session record, no
+  control signal Handy ever confirmed, and an exit saying "not running". A control signal
+  confirmed as delivered is the strongest of those, because Handy's CLI only reports success
+  after handing the flag to an already-running instance — without it, a capture whose follower
+  was refused could conclude "Handy is down" seconds after its own start sequence had put that
+  same Handy into recording. The exit code alone proves nothing either: the follower reports the
+  same code when Handy is running and recording but live transcript streaming is switched off or
+  its follower slot is taken, so anything short of the full evidence still gets the cancel.
+- **The cost of that bias: quitting Handy mid-capture normally relaunches it.** The backstop
+  `--cancel` is sent because a recording might still be running, and with no Handy to forward to
+  the spawn *becomes* Handy starting up. That is deliberate — an unwanted app launch is the
+  cheaper mistake — but it is a real, visible consequence of leaving **Control Handy recording**
+  on.
+
+**Toggle Handy recording** and **Cancel Handy recording** stay available as the manual override,
+with or without an active capture.
+
+With **Use Handy post-processing** on, Handy runs an LLM pass after the recording ends, so Stop
+capture allows it a longer window (45s instead of 10s) to deliver the final transcript before the
+follower is stopped. A capture keeps whichever value the setting had when it started, so it always
+finalizes with the same toggle it started the recording with; changing the setting mid-capture
+therefore affects only **Toggle Handy recording** and the next capture, and during that window the
+manual command drives the other flag than the capture will.
+
+Stopping is not instant: it can spend a control timeout plus the whole drain budget waiting for
+Handy's `final`, so the status bar reads `Handy: stopping` for that time.
+
+A control signal that fails is reported but never unwinds the capture — capture still works with
+Handy's own hotkey. If Handy was not running at all, the signalling spawn *becomes* the Handy app
+starting up; the plugin says so, and what it asks for depends on which signal failed.
 
 ## Ownership-marker contract
 
@@ -151,7 +229,7 @@ Release assets are attached manually for the same reason there is no CI.
 Core is pinned by tag in `package.json`:
 
 ```json
-"handy-notes-core": "git+https://github.com/mshish/handy-notes-core.git#0.1.0"
+"handy-notes-core": "github:mshish/handy-notes-core#0.2.0"
 ```
 
 Change the tag, run `npm install`, then run the verification gate above — a core change can move

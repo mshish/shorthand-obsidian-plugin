@@ -9,6 +9,8 @@ export type HandyNotesPluginSettings = Readonly<{
   maxPasses: number;
   maxUsd: number;
   enableLiveEnhancement: boolean;
+  controlHandyRecording: boolean;
+  useHandyPostProcessing: boolean;
 }>;
 
 export const DEFAULT_PLUGIN_SETTINGS: HandyNotesPluginSettings = Object.freeze({
@@ -20,6 +22,8 @@ export const DEFAULT_PLUGIN_SETTINGS: HandyNotesPluginSettings = Object.freeze({
   maxPasses: DEFAULT_CONFIG.enhancement.maxPasses,
   maxUsd: DEFAULT_CONFIG.enhancement.maxUsd,
   enableLiveEnhancement: true,
+  controlHandyRecording: true,
+  useHandyPostProcessing: false,
 });
 
 export function normalizePluginSettings(input: unknown): HandyNotesPluginSettings {
@@ -35,6 +39,12 @@ export function normalizePluginSettings(input: unknown): HandyNotesPluginSetting
     enableLiveEnhancement: typeof value.enableLiveEnhancement === "boolean"
       ? value.enableLiveEnhancement
       : DEFAULT_PLUGIN_SETTINGS.enableLiveEnhancement,
+    controlHandyRecording: typeof value.controlHandyRecording === "boolean"
+      ? value.controlHandyRecording
+      : DEFAULT_PLUGIN_SETTINGS.controlHandyRecording,
+    useHandyPostProcessing: typeof value.useHandyPostProcessing === "boolean"
+      ? value.useHandyPostProcessing
+      : DEFAULT_PLUGIN_SETTINGS.useHandyPostProcessing,
   };
 }
 
