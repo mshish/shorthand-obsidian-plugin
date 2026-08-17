@@ -8,7 +8,8 @@ main.js
 # Exclude sourcemaps
 *.map
 
-# Obsidian writes plugin settings here when this repo is cloned into a vault.
+# Obsidian writes plugin settings here when this repo is cloned into a vault. With the clone
+# outside the vault, settings live in the vault's plugin folder instead and never appear here.
 data.json
 data.json.bak
 
@@ -18,3 +19,6 @@ data.json.bak
 *.iml
 
 .DS_Store
+
+# Local git worktrees (SDD scratch)
+.worktrees/
