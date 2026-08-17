@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { ControlResult, ControlSignal } from "shorthand-core";
 import {
-  HandyRecorder,
-  handyProvenDown,
+  ShorthandRecorder,
+  shorthandProvenDown,
   type ControlLike,
   type RecorderOptions,
   type RecorderPhase,
@@ -11,11 +11,11 @@ import {
 /**
  * These tests exist because two shipped defects were both orderings, not values: a start
  * sequence whose spawned toggle could not be recalled once a stop overtook it, and a stop
- * that tore the follower down while Handy was still computing the `final`. Nothing that
+ * that tore the follower down while Shorthand was still computing the `final`. Nothing that
  * asserts on settings booleans can see either one, so every test here asserts on the
  * *sequence* of control signals and on when `stop()` is allowed to resolve.
  *
- * `HandyControl` is replaced by a fake that can hold a send in flight, which is the only
+ * `ShorthandControl` is replaced by a fake that can hold a send in flight, which is the only
  * way to reproduce an interleaving deterministically.
  */
 
@@ -65,7 +65,7 @@ class FakeControl implements ControlLike {
     return next.signal;
   }
 
-  /** Signals in the order Handy received them, detached ones included. */
+  /** Signals in the order Shorthand received them, detached ones included. */
   signals(): string[] {
     return this.log
       .filter((entry) => entry.startsWith("send:") || entry.startsWith("detached:"))
@@ -103,7 +103,7 @@ function build(overrides: Partial<RecorderOptions> = {}) {
   const control = new FakeControl();
   const clock = new FakeClock();
   const reports: Array<{ phase: RecorderPhase; result: ControlResult }> = [];
-  const recorder = new HandyRecorder({
+  const recorder = new ShorthandRecorder({
     control,
     recordingSignal: TOGGLE,
     report: (phase, result) => { reports.push({ phase, result }); },
@@ -138,65 +138,65 @@ async function expectSettled(pending: Promise<unknown>): Promise<void> {
 }
 
 /**
- * The follower's exit code 2 was read as "Handy is not running", and that reading skipped
+ * The follower's exit code 2 was read as "Shorthand is not running", and that reading skipped
  * the `--cancel` backstop. But the follower reports the same code for a live, *recording*
- * Handy whose live transcript streaming was switched off or whose follower slot was taken —
+ * Shorthand whose live transcript streaming was switched off or whose follower slot was taken —
  * its own message says both — so minutes into a meeting the stream could die with code 2
- * against a Handy that was still recording, the backstop be skipped, and the microphone be
- * left hot while the user was told Handy was not running.
+ * against a Shorthand that was still recording, the backstop be skipped, and the microphone be
+ * left hot while the user was told Shorthand was not running.
  */
-describe("what the follower's exit proves about Handy", () => {
+describe("what the follower's exit proves about Shorthand", () => {
   const nothing = { helloEver: false, observedSession: false, controlConfirmed: false };
 
-  test("exit 2 with nothing ever heard from Handy is proof it is down", () => {
-    expect(handyProvenDown({ exitCode: 2, ...nothing })).toBe(true);
+  test("exit 2 with nothing ever heard from Shorthand is proof it is down", () => {
+    expect(shorthandProvenDown({ exitCode: 2, ...nothing })).toBe(true);
   });
 
   test("exit 2 after the follower connected proves nothing — cancel anyway", () => {
-    // `hello` arrived, so the follower really did reach a running Handy. Whatever killed the
-    // stream later, Handy may well still be recording.
-    expect(handyProvenDown({ exitCode: 2, ...nothing, helloEver: true })).toBe(false);
+    // `hello` arrived, so the follower really did reach a running Shorthand. Whatever killed the
+    // stream later, Shorthand may well still be recording.
+    expect(shorthandProvenDown({ exitCode: 2, ...nothing, helloEver: true })).toBe(false);
   });
 
-  test("exit 2 after Handy narrated a session proves nothing — cancel anyway", () => {
-    expect(handyProvenDown({ exitCode: 2, ...nothing, observedSession: true })).toBe(false);
+  test("exit 2 after Shorthand narrated a session proves nothing — cancel anyway", () => {
+    expect(shorthandProvenDown({ exitCode: 2, ...nothing, observedSession: true })).toBe(false);
   });
 
   // The reproduced hot mic. With live transcript streaming switched off (or the follower slot
   // already taken) the follower never says `hello`, never sees a session, and exits 2 — while
-  // the start sequence has meanwhile driven a very much running Handy into recording. Every
-  // follower-derived signal says "down"; the only witness that Handy was up is that Handy
+  // the start sequence has meanwhile driven a very much running Shorthand into recording. Every
+  // follower-derived signal says "down"; the only witness that Shorthand was up is that Shorthand
   // itself acknowledged the control signals.
-  test("exit 2 proves nothing once Handy confirmed a control signal — cancel anyway", () => {
-    expect(handyProvenDown({ exitCode: 2, ...nothing, controlConfirmed: true })).toBe(false);
+  test("exit 2 proves nothing once Shorthand confirmed a control signal — cancel anyway", () => {
+    expect(shorthandProvenDown({ exitCode: 2, ...nothing, controlConfirmed: true })).toBe(false);
   });
 
   test("no other exit is proof of anything, clean or not", () => {
     for (const exitCode of [0, 1, 3, null]) {
-      expect(handyProvenDown({ exitCode, ...nothing })).toBe(false);
+      expect(shorthandProvenDown({ exitCode, ...nothing })).toBe(false);
     }
   });
 });
 
 /**
- * HIGH-1. `handyProvenDown`'s answer is only as good as the evidence handed to it, and the
- * recorder is where the control-side evidence lives. A start sequence that Handy acknowledged
- * *is* proof Handy was running, so the plugin must be able to see it at the moment the
+ * HIGH-1. `shorthandProvenDown`'s answer is only as good as the evidence handed to it, and the
+ * recorder is where the control-side evidence lives. A start sequence that Shorthand acknowledged
+ * *is* proof Shorthand was running, so the plugin must be able to see it at the moment the
  * follower's exit tempts it to conclude the opposite.
  */
-describe("what the recorder knows about Handy having been reached", () => {
+describe("what the recorder knows about Shorthand having been reached", () => {
   test("nothing is claimed before any signal is confirmed", () => {
     const { recorder } = build();
     expect(recorder.controlConfirmed).toBe(false);
   });
 
-  test("a confirmed start sequence records that Handy was up", async () => {
+  test("a confirmed start sequence records that Shorthand was up", async () => {
     const { recorder } = build();
     await expectSettled(recorder.start(Promise.resolve()));
     expect(recorder.controlConfirmed).toBe(true);
   });
 
-  test("a signal that never reached Handy claims nothing", async () => {
+  test("a signal that never reached Shorthand claims nothing", async () => {
     const { control, recorder } = build();
     control.nextResult = { status: "not-running" };
     await expectSettled(recorder.start(Promise.resolve()));
@@ -211,9 +211,9 @@ describe("what the recorder knows about Handy having been reached", () => {
   });
 
   // The whole reproduced failure, end to end: the follower never attaches and exits 2, but the
-  // start sequence has put Handy into recording. Reading that exit as proof skipped the
+  // start sequence has put Shorthand into recording. Reading that exit as proof skipped the
   // backstop and left the microphone hot; the recorder's own evidence is what defeats it.
-  test("a recording started against a follower that never attached is not a down Handy", async () => {
+  test("a recording started against a follower that never attached is not a down Shorthand", async () => {
     const { control, clock, recorder } = build();
     const started = recorder.start(new Promise<void>(() => {}));
     await flush();
@@ -223,7 +223,7 @@ describe("what the recorder knows about Handy having been reached", () => {
     expect(recorder.mayBeRecording).toBe(true);
     expect(recorder.observedSession).toBe(false);
 
-    expect(handyProvenDown({
+    expect(shorthandProvenDown({
       exitCode: 2,
       helloEver: false,
       observedSession: recorder.observedSession,
@@ -268,11 +268,11 @@ describe("the start sequence", () => {
     expect(control.signals()).toEqual(["cancel", TOGGLE]);
   });
 
-  test("does not toggle when the cancel never reached Handy", async () => {
+  test("does not toggle when the cancel never reached Shorthand", async () => {
     const { control, reports, recorder } = build();
     control.nextResult = { status: "not-running" };
     await expectSettled(recorder.start(Promise.resolve()));
-    // Handy's state is unknown again, and a blind toggle is exactly what leaves it
+    // Shorthand's state is unknown again, and a blind toggle is exactly what leaves it
     // recording with nobody following.
     expect(control.signals()).toEqual(["cancel"]);
     expect(reports).toEqual([{ phase: "start", result: { status: "not-running" } }]);
@@ -288,7 +288,7 @@ describe("the stop sequence", () => {
     const stopping = recorder.stop().then((outcome) => { settled = true; return outcome; });
     await flush();
     expect(control.signals()).toEqual(["cancel", TOGGLE, TOGGLE]);
-    // The whole point: the follower may not be torn down while Handy is computing `final`.
+    // The whole point: the follower may not be torn down while Shorthand is computing `final`.
     expect(settled).toBe(false);
     recorder.observe({ t: "final", session: 1 });
     expect(await outcomeOf(stopping)).toBe("finalized");
@@ -348,16 +348,16 @@ describe("the stop sequence", () => {
 
 /**
  * C2. `StreamClient` clears its `#activeSessions` on every disconnect and repopulates it
- * only from a fresh `begin`, which Handy does not resend when it resumes a session after a
- * reattach. A stop that trusted that set asked Handy to finalize and then killed the child
+ * only from a fresh `begin`, which Shorthand does not resend when it resumes a session after a
+ * reattach. A stop that trusted that set asked Shorthand to finalize and then killed the child
  * in the same tick, because the set looked empty.
  */
 describe("a mid-recording reconnect", () => {
-  test("does not make the plugin forget the live session it just asked Handy to finalize", async () => {
+  test("does not make the plugin forget the live session it just asked Shorthand to finalize", async () => {
     const { control, recorder } = build();
     await expectSettled(recorder.start(Promise.resolve()));
     recorder.observe({ t: "begin", session: 1 });
-    // The reconnect itself: the client's own bookkeeping is cleared here, and Handy resumes
+    // The reconnect itself: the client's own bookkeeping is cleared here, and Shorthand resumes
     // partials for the same session without a new `begin`. The recorder is told nothing —
     // that is exactly the point, its state may not depend on the client's.
     recorder.observe({ t: "partial", session: 1 });
@@ -385,7 +385,7 @@ describe("a stop that overtakes the start sequence", () => {
     await flush();
     expect(control.release()).toBe("cancel");
     await flush();
-    // The toggle is now a spawned process on its way to Handy. Nothing can take it back.
+    // The toggle is now a spawned process on its way to Shorthand. Nothing can take it back.
     expect(control.signals()).toEqual(["cancel", TOGGLE]);
 
     recorder.requestStop();
@@ -400,7 +400,7 @@ describe("a stop that overtakes the start sequence", () => {
     await expectSettled(started);
     expect(await outcomeOf(stopping)).toBe("idle");
     expect(control.signals()).toEqual(["cancel", TOGGLE, "cancel"]);
-    // Whichever way the timing fell, the last thing Handy heard drives it to idle.
+    // Whichever way the timing fell, the last thing Shorthand heard drives it to idle.
     expect(control.signals().at(-1)).toBe("cancel");
   });
 
@@ -438,7 +438,7 @@ describe("a stop that overtakes the start sequence", () => {
 });
 
 /**
- * The mirror of the reconnect case: Handy is recording but has not said `begin` yet, the
+ * The mirror of the reconnect case: Shorthand is recording but has not said `begin` yet, the
  * ~100ms between the start toggle landing and the session being announced.
  */
 describe("a stop inside the begin gap", () => {
@@ -475,7 +475,7 @@ describe("a stop inside the begin gap", () => {
 
 /**
  * The start sequence deliberately proceeds when the follower has not attached within the
- * grace ("a recording nobody is following is still better than no recording"), and Handy
+ * grace ("a recording nobody is following is still better than no recording"), and Shorthand
  * does not resend `begin` to a follower that attached late or reattached. Trusting only
  * `begin` therefore lost whole meetings: partials streamed in and filled the sidecar while
  * the recorder believed nothing was recording, so the stop sent no finalize and the backstop
@@ -487,7 +487,7 @@ describe("a `begin` nobody was there to see", () => {
     const started = recorder.start(new Promise<void>(() => {}));
     await flush();
     // The follower never attaches; the sequence goes ahead once the grace expires, and the
-    // `begin` Handy emits moments later reaches nobody.
+    // `begin` Shorthand emits moments later reaches nobody.
     clock.fire(ATTACH_GRACE_MS);
     await expectSettled(started);
     recorder.observe({ t: "partial", session: 4 });
@@ -502,7 +502,7 @@ describe("a `begin` nobody was there to see", () => {
 });
 
 /**
- * The start sequence's own `--cancel` makes Handy emit a terminal record for the recording
+ * The start sequence's own `--cancel` makes Shorthand emit a terminal record for the recording
  * it just ended, and that record can land after the start toggle was already sent. Without
  * the session id it is indistinguishable from this capture's recording ending — and reading
  * it that way discarded the recording that had only just begun.
@@ -553,31 +553,31 @@ describe("records from the previous recording", () => {
     expect(recorder.sessionLive).toBe(true);
   });
 
-  test("are still proof that Handy was up and narrating", async () => {
+  test("are still proof that Shorthand was up and narrating", async () => {
     const { recorder } = build();
     expect(recorder.observedSession).toBe(false);
     await expectSettled(recorder.start(Promise.resolve()));
     expect(recorder.observedSession).toBe(false);
     // Ignored as the previous recording's, but the caller needs it for a different question:
-    // the follower's exit code 2 means "Handy is not running" *or* "streaming is off / the
-    // follower slot was taken", and having heard Handy narrate a session rules out the first.
+    // the follower's exit code 2 means "Shorthand is not running" *or* "streaming is off / the
+    // follower slot was taken", and having heard Shorthand narrate a session rules out the first.
     recorder.observe({ t: "cancel", session: 7 });
     expect(recorder.observedSession).toBe(true);
   });
 });
 
 /**
- * Handy quitting mid-capture can beat the stream's own settled handler to the user's Stop
- * press. A finalize toggle spawned then has no Handy to forward to, so it *becomes* Handy
- * starting up — a dead-Handy stop that launches the app.
+ * Shorthand quitting mid-capture can beat the stream's own settled handler to the user's Stop
+ * press. A finalize toggle spawned then has no Shorthand to forward to, so it *becomes* Shorthand
+ * starting up — a dead-Shorthand stop that launches the app.
  */
-describe("a stop with Handy known to be gone", () => {
+describe("a stop with Shorthand known to be gone", () => {
   test("sends no finalize toggle even though a session looks live", async () => {
     const { control, recorder } = build();
     await expectSettled(recorder.start(Promise.resolve()));
     recorder.observe({ t: "begin", session: 1 });
     const before = control.signals().length;
-    expect(await outcomeOf(recorder.stop({ handyDown: true }))).toBe("handy-down");
+    expect(await outcomeOf(recorder.stop({ shorthandDown: true }))).toBe("shorthand-down");
     expect(control.signals().length).toBe(before);
   });
 
@@ -588,15 +588,15 @@ describe("a stop with Handy known to be gone", () => {
     await flush();
     expect(control.release()).toBe("cancel");
     await flush();
-    const stopping = recorder.stop({ handyDown: true });
+    const stopping = recorder.stop({ shorthandDown: true });
     // Suppressing the toggle must not also drop the guarantee that the two sequences never
-    // overlap: the toggle already spawned is still on its way to Handy.
+    // overlap: the toggle already spawned is still on its way to Shorthand.
     expect(await outcomeOf(stopping)).toBe("still-waiting");
     expect(control.release()).toBe(TOGGLE);
     await flush();
     expect(control.release()).toBe("cancel");
     await expectSettled(started);
-    expect(await outcomeOf(stopping)).toBe("handy-down");
+    expect(await outcomeOf(stopping)).toBe("shorthand-down");
   });
 });
 
@@ -644,18 +644,18 @@ describe("requestStop on its own", () => {
     expect(control.signals()).toEqual(["cancel", TOGGLE, "cancel"]);
   });
 
-  test("sends no second cancel when the toggle it recalls never reached Handy", async () => {
+  test("sends no second cancel when the toggle it recalls never reached Shorthand", async () => {
     const { control, recorder } = build();
     control.auto = false;
     const started = recorder.start(Promise.resolve());
     await flush();
-    control.release();                          // the cancel lands: Handy is idle
+    control.release();                          // the cancel lands: Shorthand is idle
     await flush();
     recorder.requestStop();
     control.release({ status: "not-running" }); // ...and the toggle never got there
     await expectSettled(started);
-    // Nothing has changed Handy's state since the cancel that already proved it idle, so a
-    // recall would only be another spawn — and against a Handy that is not running, that
+    // Nothing has changed Shorthand's state since the cancel that already proved it idle, so a
+    // recall would only be another spawn — and against a Shorthand that is not running, that
     // spawn *is* the app starting up.
     expect(control.signals()).toEqual(["cancel", TOGGLE]);
   });
@@ -686,7 +686,7 @@ describe("requestStop on its own", () => {
 
     await expectSettled(started);
     // Nothing was ever sent. Before the first spawn there is nothing to recall, so a stop seen
-    // at the first checkpoint means the capture ends with Handy untouched.
+    // at the first checkpoint means the capture ends with Shorthand untouched.
     expect(control.signals()).toEqual([]);
   });
 
@@ -757,7 +757,7 @@ describe("what the recorder believes after its own recall", () => {
     await flush();
     expect(control.release()).toBe("cancel");
     await flush();
-    expect(control.release()).toBe(TOGGLE);   // the toggle lands: Handy is recording
+    expect(control.release()).toBe(TOGGLE);   // the toggle lands: Shorthand is recording
     recorder.requestStop();
     await flush();
     expect(recorder.mayBeRecording).toBe(true);
@@ -769,25 +769,25 @@ describe("what the recorder believes after its own recall", () => {
 });
 
 /**
- * MEDIUM-3. Handy's session counter is process-local and restarts at 1, so a session id is
- * only a name within one Handy process. A capture that followed session 5 and then lost Handy
+ * MEDIUM-3. Shorthand's session counter is process-local and restarts at 1, so a session id is
+ * only a name within one Shorthand process. A capture that followed session 5 and then lost Shorthand
  * to a restart kept believing session 5 was live — and a stop then sent the recording toggle
- * to an idle Handy, which *starts* a recording rather than ending one.
+ * to an idle Shorthand, which *starts* a recording rather than ending one.
  */
-describe("a Handy restart in the middle of a capture", () => {
+describe("a Shorthand restart in the middle of a capture", () => {
   test("a toggle answered by a recording starting is not a finalize", async () => {
     const { control, recorder } = build();
     recorder.noteAttached();                    // the follower's first `hello`
     await expectSettled(recorder.start(Promise.resolve()));
     recorder.observe({ t: "begin", session: 5 });
-    // Handy is killed. The recording dies with it and no terminal record reaches anyone; the
-    // follower reconnects on its own and says `hello` to the *new* Handy, which is idle.
+    // Shorthand is killed. The recording dies with it and no terminal record reaches anyone; the
+    // follower reconnects on its own and says `hello` to the *new* Shorthand, which is idle.
     recorder.noteAttached();
 
     const stopping = recorder.stop();
     await flush();
     // Nothing contradicted the belief, so the finalize toggle is sent — and lands on an idle
-    // Handy, which answers it by starting a recording numbered from 1 again.
+    // Shorthand, which answers it by starting a recording numbered from 1 again.
     expect(control.signals()).toEqual(["cancel", TOGGLE, TOGGLE]);
     expect(await outcomeOf(stopping)).toBe("still-waiting");
     recorder.observe({ t: "begin", session: 1 });
@@ -801,8 +801,8 @@ describe("a Handy restart in the middle of a capture", () => {
     recorder.noteAttached();                    // the follower's first `hello`
     await expectSettled(recorder.start(Promise.resolve()));
     recorder.observe({ t: "begin", session: 5 });
-    recorder.noteAttached();                    // ...and the reconnect's, to a restarted Handy
-    // The restarted Handy's own first recording, started and ended by the user's hotkey. Id 1
+    recorder.noteAttached();                    // ...and the reconnect's, to a restarted Shorthand
+    // The restarted Shorthand's own first recording, started and ended by the user's hotkey. Id 1
     // cannot belong to the process that numbered ours 5.
     recorder.observe({ t: "cancel", session: 1 });
     expect(recorder.sessionLive).toBe(false);
@@ -813,12 +813,12 @@ describe("a Handy restart in the middle of a capture", () => {
     expect(control.signals().length).toBe(before);
   });
 
-  test("without a reconnect a lower id is just another session of the same Handy", async () => {
+  test("without a reconnect a lower id is just another session of the same Shorthand", async () => {
     const { recorder } = build();
     recorder.noteAttached();
     await expectSettled(recorder.start(Promise.resolve()));
     recorder.observe({ t: "begin", session: 5 });
-    // The previous recording's terminal record, reported late. Same Handy, so ids are
+    // The previous recording's terminal record, reported late. Same Shorthand, so ids are
     // comparable and this one simply is not ours.
     recorder.observe({ t: "cancel", session: 4 });
     expect(recorder.sessionLive).toBe(true);
@@ -829,7 +829,7 @@ describe("a Handy restart in the middle of a capture", () => {
     recorder.noteAttached();
     await expectSettled(recorder.start(Promise.resolve()));
     recorder.observe({ t: "begin", session: 5 });
-    // The same Handy, still recording: a fresh follower, a fresh `hello`, and Handy resumes
+    // The same Shorthand, still recording: a fresh follower, a fresh `hello`, and Shorthand resumes
     // partials for session 5 without a new `begin`. Dropping the belief here is what used to
     // cancel a live meeting away unfinalized.
     recorder.noteAttached();
@@ -847,7 +847,7 @@ describe("a Handy restart in the middle of a capture", () => {
  * MEDIUM-4. `observe()` takes session-scoped records only — `main.ts` routes `hello` to
  * `noteAttached()`, and a connection-level `error` never reaches the `event` stream at all.
  * The guard is a fail-safe for that routing, not a filter: a session-less record accepted here
- * would claim Handy had been heard narrating and could clear a live session, which is a
+ * would claim Shorthand had been heard narrating and could clear a live session, which is a
  * silently skipped finalize.
  */
 describe("records that are not session-scoped", () => {
@@ -867,11 +867,11 @@ describe("records that are not session-scoped", () => {
     expect(await outcomeOf(stopping)).toBe("finalized");
   });
 
-  test("a session-less record is not evidence that Handy was up", () => {
+  test("a session-less record is not evidence that Shorthand was up", () => {
     const { recorder } = build();
     recorder.observe({ t: "error" });
-    // `observedSession` decides whether the follower's exit 2 gets read as proof Handy is
-    // down. A record that names no session says nothing about Handy's recorder.
+    // `observedSession` decides whether the follower's exit 2 gets read as proof Shorthand is
+    // down. A record that names no session says nothing about Shorthand's recorder.
     expect(recorder.observedSession).toBe(false);
   });
 });
@@ -909,19 +909,19 @@ describe("teardown and backstop", () => {
 });
 
 describe("a recording that started outside the start sequence", () => {
-  test("is finalized even though the last thing Handy confirmed was a cancel", async () => {
+  test("is finalized even though the last thing Shorthand confirmed was a cancel", async () => {
     const { control, recorder } = build();
     control.auto = false;
     const started = recorder.start(Promise.resolve());
     await flush();
-    control.release();                          // the cancel lands: Handy is idle
+    control.release();                          // the cancel lands: Shorthand is idle
     await flush();
     control.release({ status: "not-running" }); // ...and the toggle never reaches it
     await expectSettled(started);
     expect(control.signals()).toEqual(["cancel", TOGGLE]);
 
-    // Handy comes up and the user presses its own hotkey. The cancel this sequence confirmed
-    // no longer describes Handy, and a stop that still believed it would return "idle" and
+    // Shorthand comes up and the user presses its own hotkey. The cancel this sequence confirmed
+    // no longer describes Shorthand, and a stop that still believed it would return "idle" and
     // finalize nothing — losing a live recording the capture is ingesting.
     control.auto = true;
     recorder.observe({ t: "begin", session: 1 });

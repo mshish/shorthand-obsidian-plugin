@@ -34,9 +34,9 @@ const context = await esbuild.context({
   // The Claude Agent SDK is ESM. Bundled into CJS, esbuild shims `import.meta` as an
   // empty object, so the SDK's `createRequire(import.meta.url)` receives undefined and
   // the plugin throws on load. Point it at a real file URL derived from __filename.
-  define: { "import.meta.url": "__handyImportMetaUrl" },
+  define: { "import.meta.url": "__shorthandImportMetaUrl" },
   banner: {
-    js: `${banner}const __handyImportMetaUrl = require('node:url').pathToFileURL(__filename).href;`,
+    js: `${banner}const __shorthandImportMetaUrl = require('node:url').pathToFileURL(__filename).href;`,
   },
   external: ["obsidian", "electron", ...nodeBuiltins],
   logLevel: "info",

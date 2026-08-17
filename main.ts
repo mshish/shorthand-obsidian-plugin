@@ -18,9 +18,9 @@ import {
   ClaudeAgentClient,
   DEFAULT_CONFIG,
   detectClaudeExecutable,
-  detectHandyExecutable,
+  detectShorthandExecutable,
   EnhanceRunner,
-  HandyControl,
+  ShorthandControl,
   SidecarWriter,
   StreamClient,
   TranscriptStore,
@@ -49,11 +49,11 @@ import {
   type PluginUiEvent,
   type PluginUiState,
 } from "./src/state.js";
-import { HandyRecorder, handyProvenDown, type RecorderPhase } from "./src/recorder.js";
+import { ShorthandRecorder, shorthandProvenDown, type RecorderPhase } from "./src/recorder.js";
 
 /**
- * Handy's follower needs a moment after spawn before Handy's events reach it, and the
- * start toggle must not be fired until then — see `HandyRecorder.start()`. Long enough to
+ * Shorthand's follower needs a moment after spawn before Shorthand's events reach it, and the
+ * start toggle must not be fired until then — see `ShorthandRecorder.start()`. Long enough to
  * cover a warm attach (measured control forwards land in 48-71ms; the follower's own
  * `hello` is the same order), short enough that a follower which never says `hello`
  * does not visibly delay the recording.
@@ -63,12 +63,12 @@ const ATTACH_GRACE_MS = 2_000;
 /**
  * How long a stop waits for the `begin` of a recording this capture just started but has
  * not seen announced yet. Sized off the same measurement as the attach grace: the gap is
- * one Handy round trip, not a user-visible wait.
+ * one Shorthand round trip, not a user-visible wait.
  */
 const BEGIN_GRACE_MS = 1_500;
 
 /**
- * Handy's post-processing runs an LLM pass between the recording ending and the `final`
+ * Shorthand's post-processing runs an LLM pass between the recording ending and the `final`
  * event, and that pass now happens entirely inside the drain window — before this plugin
  * drove the recorder, the toggle was pressed by hand and most of that time had already
  * elapsed by the time Stop capture ran. A post-processed `final` that misses the window
@@ -81,25 +81,25 @@ type CaptureRuntime = {
   notePath: string;
   sidecarPath: string;
   client: StreamClient;
-  control: HandyControl;
+  control: ShorthandControl;
   /**
-   * Present exactly when this capture drives Handy's recorder. Built once, at start, from
+   * Present exactly when this capture drives Shorthand's recorder. Built once, at start, from
    * the settings as they were then: reading them live at each call site let a setting
    * flipped mid-capture send a stop signal that had no matching start (or the stop toggle
    * for a different signal than the one that started the recording).
    */
-  recorder: HandyRecorder | undefined;
+  recorder: ShorthandRecorder | undefined;
   /**
-   * Set only when Handy is *known* not to be running: the follower's binary is missing, or
+   * Set only when Shorthand is *known* not to be running: the follower's binary is missing, or
    * its exit said "not running" and nothing this capture saw contradicts that. Control
-   * signals are then suppressed, because a control spawn with no Handy to forward to
-   * *becomes* the Handy app starting up and a failed capture must not launch Handy unbidden.
-   * Deliberately biased toward staying false — see `handyProvenDown()`.
+   * signals are then suppressed, because a control spawn with no Shorthand to forward to
+   * *becomes* the Shorthand app starting up and a failed capture must not launch Shorthand unbidden.
+   * Deliberately biased toward staying false — see `shorthandProvenDown()`.
    */
-  handyDown: boolean;
+  shorthandDown: boolean;
   /**
    * True once the follower's `hello` arrived, i.e. it really did connect to a running
-   * Handy. The follower's exit code cannot say this on its own.
+   * Shorthand. The follower's exit code cannot say this on its own.
    */
   helloEver: boolean;
   sidecar: SidecarWriter;
@@ -114,11 +114,11 @@ type CaptureRuntime = {
  * they had already finished, up to five seconds after being told the capture had stopped.
  */
 const NOT_RUNNING_NOTICES: Record<RecorderPhase | "manual", string> = {
-  start: "Handy was not running, so this capture did not start a recording; Handy is starting now. Once it is up, start the recording with Handy's hotkey or \"Toggle Handy recording\" — the capture is already running and will pick it up.",
-  recall: "Handy did not confirm the cancel for the recording this capture had just started. Check that Handy is not still recording.",
-  finalize: "Handy was not running, so there was no recording to finalize. The transcript keeps whatever Handy had already sent.",
-  backstop: "Handy did not confirm the final cancel. Check that Handy is not still recording.",
-  manual: "Handy was not running; it is starting now. Run the command again once it is up.",
+  start: "Shorthand was not running, so this capture did not start a recording; Shorthand is starting now. Once it is up, start the recording with Shorthand's hotkey or \"Toggle Shorthand recording\" — the capture is already running and will pick it up.",
+  recall: "Shorthand did not confirm the cancel for the recording this capture had just started. Check that Shorthand is not still recording.",
+  finalize: "Shorthand was not running, so there was no recording to finalize. The transcript keeps whatever Shorthand had already sent.",
+  backstop: "Shorthand did not confirm the final cancel. Check that Shorthand is not still recording.",
+  manual: "Shorthand was not running; it is starting now. Run the command again once it is up.",
 };
 
 export default class ShorthandPlugin extends Plugin {
@@ -137,7 +137,7 @@ export default class ShorthandPlugin extends Plugin {
 
     // Command names carry no plugin prefix and are sentence case, per Obsidian's plugin
     // guidelines: the command palette already renders these as "Shorthand: Start capture
-    // on this note". Spelling it out here produced "Shorthand: Handy: start capture…".
+    // on this note". Spelling it out here produced "Shorthand: Shorthand: start capture…".
     this.addCommand({
       id: "start-capture-this-note",
       name: "Start capture on this note",
@@ -153,16 +153,16 @@ export default class ShorthandPlugin extends Plugin {
       name: "Enhance now",
       callback: () => { void this.enhanceActiveNote(); },
     });
-    // The user's manual override of Handy's recorder, independent of capture: a plain
+    // The user's manual override of Shorthand's recorder, independent of capture: a plain
     // toggle and an unconditional cancel, neither of which touches the capture itself.
     this.addCommand({
-      id: "toggle-handy-recording",
-      name: "Toggle Handy recording",
+      id: "toggle-shorthand-recording",
+      name: "Toggle Shorthand recording",
       callback: () => { this.fireControl(this.recordingSignal()); },
     });
     this.addCommand({
-      id: "cancel-handy-recording",
-      name: "Cancel Handy recording",
+      id: "cancel-shorthand-recording",
+      name: "Cancel Shorthand recording",
       callback: () => { this.fireControl("cancel"); },
     });
 
@@ -230,8 +230,8 @@ export default class ShorthandPlugin extends Plugin {
       } catch (error) {
         enhancementUnavailable = `${errorMessage(error)} Capture will continue with transcript only.`;
       }
-      const command = this.handyCommand();
-      const postProcessing = this.settings.useHandyPostProcessing;
+      const command = this.shorthandCommand();
+      const postProcessing = this.settings.useShorthandPostProcessing;
       const drainTimeoutMs = postProcessing ? POST_PROCESS_DRAIN_TIMEOUT_MS : DEFAULT_CONFIG.drainTimeoutMs;
       const client = new StreamClient({
         command,
@@ -241,13 +241,13 @@ export default class ShorthandPlugin extends Plugin {
         drainTimeoutMs,
       });
       const settled = new Promise<ExitDiagnosis>((resolveSettled) => client.once("settled", resolveSettled));
-      const control = new HandyControl({ command });
-      // Resolved by the follower's own `hello` record; `HandyRecorder.start()` explains why
+      const control = new ShorthandControl({ command });
+      // Resolved by the follower's own `hello` record; `ShorthandRecorder.start()` explains why
       // the start toggle waits on it.
       let markAttached = (): void => {};
       const attached = new Promise<void>((resolveAttached) => { markAttached = resolveAttached; });
-      const recorder = this.settings.controlHandyRecording
-        ? new HandyRecorder({
+      const recorder = this.settings.controlShorthandRecording
+        ? new ShorthandRecorder({
           control,
           // Captured from `postProcessing`, not read live: the recorder must stop the
           // recording with the same toggle it started it with, even if the setting flips.
@@ -266,7 +266,7 @@ export default class ShorthandPlugin extends Plugin {
         client,
         control,
         recorder,
-        handyDown: false,
+        shorthandDown: false,
         helloEver: false,
         sidecar,
         enhancer,
@@ -278,8 +278,8 @@ export default class ShorthandPlugin extends Plugin {
       if (enhancementUnavailable !== undefined) this.fail(enhancementUnavailable);
 
       client.on("event", ({ generation, record }) => {
-        // The recorder's whole view of Handy's session state comes from here — this
-        // handler already sees every record Handy sends, and unlike StreamClient's own
+        // The recorder's whole view of Shorthand's session state comes from here — this
+        // handler already sees every record Shorthand sends, and unlike StreamClient's own
         // session set it is never reset behind the plugin's back by a reconnect.
         // `observe()` takes session-scoped records only; `hello` is the sole session-less
         // record that reaches this event at all (a connection-level `error` is emitted as
@@ -309,34 +309,34 @@ export default class ShorthandPlugin extends Plugin {
       client.on("reconnect", ({ generation, gap }) => {
         if (gap) sidecar.addReconnectWarning(generation);
       });
-      client.on("connectionError", ({ record }) => this.fail(`Handy connection error (${record.code}): ${record.message}`));
+      client.on("connectionError", ({ record }) => this.fail(`Shorthand connection error (${record.code}): ${record.message}`));
       client.on("protocolError", ({ error }) => this.fail(error.message));
       client.on("processError", ({ error, command: attempted, fatal }) => {
-        // ENOENT is the follower telling us there is no Handy binary at all, which is also
+        // ENOENT is the follower telling us there is no Shorthand binary at all, which is also
         // the answer for every control spawn this capture might still make.
-        if (fatal) runtime.handyDown = true;
-        this.fail(`Could not start "${attempted}". Check the handy.exe path in Shorthand settings. ${error.message}`);
+        if (fatal) runtime.shorthandDown = true;
+        this.fail(`Could not start "${attempted}". Check the shorthand.exe path in Shorthand settings. ${error.message}`);
       });
-      client.on("giveUp", ({ attempts }) => this.fail(`Handy stream disconnected repeatedly; gave up after ${attempts} reconnect attempts.`));
-      client.on("drainTimeout", () => this.fail("Handy did not finish the active transcript before the drain timeout; the child was stopped."));
+      client.on("giveUp", ({ attempts }) => this.fail(`Shorthand stream disconnected repeatedly; gave up after ${attempts} reconnect attempts.`));
+      client.on("drainTimeout", () => this.fail("Shorthand did not finish the active transcript before the drain timeout; the child was stopped."));
       sidecar.on("writeError", ({ error }) => this.fail(`Transcript sidecar write failed: ${error.message}`));
-      // Registered before anything else awaits `settled`, so `handyDown` is already set by
+      // Registered before anything else awaits `settled`, so `shorthandDown` is already set by
       // the time `stopCapture()` resumes and decides whether a control spawn is safe.
       void settled.then(
         (diagnosis) => {
           // Not `diagnosis.code === 2`: that code is ambiguous, and reading it as proof is
-          // what left Handy recording with no follower. `handyProvenDown` says why.
-          if (handyProvenDown({
+          // what left Shorthand recording with no follower. `shorthandProvenDown` says why.
+          if (shorthandProvenDown({
             exitCode: diagnosis.code,
             helloEver: runtime.helloEver,
             observedSession: recorder?.observedSession ?? false,
             // The one piece of evidence that is not follower-derived, and the strongest:
-            // a control signal Handy confirmed cannot have been forwarded to a Handy that
+            // a control signal Shorthand confirmed cannot have been forwarded to a Shorthand that
             // was not running. Without it, a capture whose follower was refused (streaming
-            // off, slot taken) concluded "Handy is down" while its own start sequence had
-            // just put that same Handy into recording.
+            // off, slot taken) concluded "Shorthand is down" while its own start sequence had
+            // just put that same Shorthand into recording.
             controlConfirmed: recorder?.controlConfirmed ?? false,
-          })) runtime.handyDown = true;
+          })) runtime.shorthandDown = true;
           return this.captureSettled(runtime, diagnosis);
         },
       ).catch((error: unknown) => {
@@ -363,7 +363,7 @@ export default class ShorthandPlugin extends Plugin {
     }
     // `#capture` is not cleared until finishRuntime(), which is up to a full drain timeout
     // away. Guarding on it alone let a second Stop press during that window send a second
-    // control signal to Handy.
+    // control signal to Shorthand.
     if (runtime.stopping) {
       new Notice("Shorthand is already stopping.");
       return;
@@ -383,23 +383,23 @@ export default class ShorthandPlugin extends Plugin {
     // `settled` is handed in as the abandon signal: once the follower is gone, no terminal
     // record can arrive from anywhere, and waiting out the rest of the budget would only
     // make the stop look hung.
-    // `handyDown` is threaded in rather than checked here: the recorder still has to await
+    // `shorthandDown` is threaded in rather than checked here: the recorder still has to await
     // its own start sequence before this returns, it just must not send the finalize toggle.
-    // Handy quitting mid-capture can beat `captureSettled` to the user's Stop press, and a
-    // toggle spawned with no Handy to forward to would *become* Handy starting up.
+    // Shorthand quitting mid-capture can beat `captureSettled` to the user's Stop press, and a
+    // toggle spawned with no Shorthand to forward to would *become* Shorthand starting up.
     const outcome = await (runtime.recorder?.stop({
       abandoned: runtime.settled,
-      handyDown: runtime.handyDown,
+      shorthandDown: runtime.shorthandDown,
     }) ?? Promise.resolve("no-session" as const));
     if (outcome === "timed-out") {
-      this.fail("Handy did not deliver the final transcript in time; the transcript keeps whatever Handy had already sent.");
+      this.fail("Shorthand did not deliver the final transcript in time; the transcript keeps whatever Shorthand had already sent.");
       runtime.client.forceStop();
     } else if (outcome === "restarted") {
-      // Handy answered the finalize toggle by starting a recording, so it was idle: it had
+      // Shorthand answered the finalize toggle by starting a recording, so it was idle: it had
       // restarted while the follower was away and the recording this capture followed died
       // with the old process. Draining would wait on that brand-new session; the backstop
       // below is what ends it.
-      this.fail("Handy was restarted during this capture, so the recording it was following was already gone and the stop request started a new one. That new recording is being cancelled; the transcript keeps whatever Handy had already sent.");
+      this.fail("Shorthand was restarted during this capture, so the recording it was following was already gone and the stop request started a new one. That new recording is being cancelled; the transcript keeps whatever Shorthand had already sent.");
       runtime.client.forceStop();
     } else {
       runtime.client.stopAfterDrain();
@@ -415,8 +415,8 @@ export default class ShorthandPlugin extends Plugin {
     runtime.enhancer?.stopLiveTicks();
     runtime.client.forceStop();
     // `--cancel`, never a toggle: this runs during Obsidian's shutdown, where a toggle
-    // would *start* a recording if Handy happened to be idle. `--cancel` can only ever
-    // drive Handy toward idle. It is sent even though nothing here can await it: a start
+    // would *start* a recording if Shorthand happened to be idle. `--cancel` can only ever
+    // drive Shorthand toward idle. It is sent even though nothing here can await it: a start
     // sequence still in flight re-checks the stop flag after its own toggle and sequences
     // a second cancel behind it, which is what makes the outcome deterministic.
     runtime.recorder?.teardown();
@@ -443,12 +443,12 @@ export default class ShorthandPlugin extends Plugin {
       const content = await readFile(notePath, "utf8");
       const linked = transcriptWikilink(content);
       if (linked === undefined) {
-        this.fail("This note has no handy-transcript wikilink. Start capture once to create and link a sidecar.");
+        this.fail("This note has no shorthand-transcript wikilink. Start capture once to create and link a sidecar.");
         return;
       }
       const sidecarPath = resolve(vaultRoot, addMarkdownExtension(linked));
       if (!isInside(vaultRoot, sidecarPath)) {
-        this.fail("The note's handy-transcript link resolves outside the vault.");
+        this.fail("The note's shorthand-transcript link resolves outside the vault.");
         return;
       }
       const enhancer = this.createEnhancer(notePath, vaultRoot);
@@ -463,11 +463,11 @@ export default class ShorthandPlugin extends Plugin {
   /**
    * One resolution for both the follower and every control child. Resolving twice would
    * let them land on different binaries once a setting changes mid-capture, and a control
-   * signal delivered to a different Handy install than the one being followed is silent.
+   * signal delivered to a different Shorthand install than the one being followed is silent.
    */
-  private handyCommand(): string {
+  private shorthandCommand(): string {
     // Blank setting means "find it for me"; an explicit path always wins.
-    return detectHandyExecutable(this.settings.handyExecutable || undefined);
+    return detectShorthandExecutable(this.settings.shorthandExecutable || undefined);
   }
 
   /**
@@ -476,26 +476,26 @@ export default class ShorthandPlugin extends Plugin {
    *
    * A capture snapshots its own copy at start instead of calling this, because it has to
    * finalize with the same toggle it started the recording with. The split is intentional
-   * and has one visible consequence: flipping **Use Handy post-processing** mid-capture makes
-   * "Toggle Handy recording" drive the *other* flag than the one the capture will finalize
+   * and has one visible consequence: flipping **Use Shorthand post-processing** mid-capture makes
+   * "Toggle Shorthand recording" drive the *other* flag than the one the capture will finalize
    * with. Reconciling them would mean either a capture that stops with a toggle that has no
    * matching start, or a manual command that silently ignores the setting — both worse.
    */
   private recordingSignal(): ControlSignal {
-    return recordingSignalFor(this.settings.useHandyPostProcessing);
+    return recordingSignalFor(this.settings.useShorthandPostProcessing);
   }
 
   /**
    * The standalone commands: a one-off signal that belongs to no capture sequence, so the
-   * outcome is only reported, never awaited. Capture works perfectly well with Handy's own
+   * outcome is only reported, never awaited. Capture works perfectly well with Shorthand's own
    * hotkey, so a missed toggle must never abort or unwind a capture that is otherwise
    * healthy.
    */
   private fireControl(signal: ControlSignal): void {
-    const control = this.#capture?.control ?? new HandyControl({ command: this.handyCommand() });
+    const control = this.#capture?.control ?? new ShorthandControl({ command: this.shorthandCommand() });
     void control.send(signal).then(
       (result) => this.reportControl("manual", result),
-      (error: unknown) => this.fail(`Handy control failed: ${errorMessage(error)}`),
+      (error: unknown) => this.fail(`Shorthand control failed: ${errorMessage(error)}`),
     );
   }
 
@@ -505,7 +505,7 @@ export default class ShorthandPlugin extends Plugin {
       new Notice(NOT_RUNNING_NOTICES[phase], 10_000);
       return;
     }
-    this.fail(`Handy control failed: ${result.message}`);
+    this.fail(`Shorthand control failed: ${result.message}`);
   }
 
   private createEnhancer(notePath: string, vaultRoot: string): EnhanceRunner {
@@ -543,9 +543,9 @@ export default class ShorthandPlugin extends Plugin {
     const result = await ensureNoteScaffold(notePath, DEFAULT_CONFIG.templateSections);
     if (result.status === "written" || result.status === "unchanged") return true;
     if (result.status === "note-locked") {
-      this.fail("The meeting note remained locked while adding Handy markers. Let Obsidian finish saving and retry.");
+      this.fail("The meeting note remained locked while adding Shorthand markers. Let Obsidian finish saving and retry.");
     } else if (result.status === "retry") {
-      this.fail("The meeting note changed repeatedly while adding Handy markers. Retry after it settles.");
+      this.fail("The meeting note changed repeatedly while adding Shorthand markers. Retry after it settles.");
     } else {
       this.fail(result.error.message);
     }
@@ -555,18 +555,18 @@ export default class ShorthandPlugin extends Plugin {
   private async finishRuntime(runtime: CaptureRuntime, reason: "stopped" | "died"): Promise<void> {
     if (this.#capture !== runtime) return;
     // Backstop, once nothing is left to finalize: `--cancel` is a no-op against an idle
-    // Handy, so firing it costs nothing and is the only thing that guarantees a capture
-    // cannot leave Handy recording when the belief about its state was wrong. Only for a
+    // Shorthand, so firing it costs nothing and is the only thing that guarantees a capture
+    // cannot leave Shorthand recording when the belief about its state was wrong. Only for a
     // capture that drove the recorder in the first place — otherwise this would cancel a
     // recording the user started by hand.
-    if (runtime.recorder !== undefined && !runtime.handyDown) {
+    if (runtime.recorder !== undefined && !runtime.shorthandDown) {
       const cancelling = reason === "died" && runtime.recorder.mayBeRecording;
       runtime.recorder.backstop();
       if (cancelling) {
         // Deliberate: leaving the microphone hot is the failure this whole sequence exists
         // to prevent, and it outranks the corrections a `--cancel` throws away. Say so.
         new Notice(
-          "The Handy recording in progress was cancelled: the transcript stream ended, so nothing was left to finalize it. Already-transcribed text is kept; Handy's corrected version is not.",
+          "The Shorthand recording in progress was cancelled: the transcript stream ended, so nothing was left to finalize it. Already-transcribed text is kept; Shorthand's corrected version is not.",
           10_000,
         );
       }
@@ -673,7 +673,7 @@ export default class ShorthandPlugin extends Plugin {
     const progress = pending === undefined
       ? ""
       : ` · ${pending}/${this.settings.minNewChars} chars`;
-    this.#statusBar.setText(`Handy: ${this.#state.mode}${progress} · ${passes}`);
+    this.#statusBar.setText(`Shorthand: ${this.#state.mode}${progress} · ${passes}`);
     this.#statusBar.setAttribute(
       "title",
       this.#state.message ?? (pending === undefined
@@ -693,7 +693,7 @@ class ShorthandSettingTab extends PluginSettingTab {
     containerEl.empty();
     // No plugin-name heading at the top: Obsidian already titles this pane "Shorthand", and
     // the guidelines reserve headings for separating multiple sections.
-    textSetting(containerEl, this.plugin, "Handy executable", "Path to handy.exe, or a command available on PATH.", "handyExecutable");
+    textSetting(containerEl, this.plugin, "Shorthand executable", "Path to shorthand.exe, or a command available on PATH.", "shorthandExecutable");
     textSetting(containerEl, this.plugin, "Claude executable", "Optional path to claude.exe. Leave blank for automatic detection.", "claudeExecutable");
     textSetting(containerEl, this.plugin, "Transcript sidecar directory", "Vault-relative directory used for new transcript notes.", "sidecarDirectory");
     numberSetting(containerEl, this.plugin, "Minimum new characters", "Live-pass transcript threshold.", "minNewChars");
@@ -707,17 +707,17 @@ class ShorthandSettingTab extends PluginSettingTab {
         .setValue(this.plugin.settings.enableLiveEnhancement)
         .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, enableLiveEnhancement: value })));
     new Setting(containerEl)
-      .setName("Control Handy recording")
-      .setDesc("Start capture and Stop capture also drive Handy's recorder, so a capture needs no separate press of Handy's hotkey. Starting a capture cancels any recording already in progress — that recording's corrected transcript is discarded — and then starts a fresh one. Stopping a capture sends the recording toggle only when a recording is believed to be running, and never once Handy is known to be gone. Closing Obsidian cancels the recording in progress, and so does losing the transcript stream — the only case where no cancel is sent is when nothing this capture saw shows Handy was ever reached, since signalling a Handy that is not running would launch it. The consequence of that bias: quitting Handy in the middle of a capture normally does relaunch it, because the cancel is sent whenever there is any chance a recording is still running.")
+      .setName("Control Shorthand recording")
+      .setDesc("Start capture and Stop capture also drive Shorthand's recorder, so a capture needs no separate press of Shorthand's hotkey. Starting a capture cancels any recording already in progress — that recording's corrected transcript is discarded — and then starts a fresh one. Stopping a capture sends the recording toggle only when a recording is believed to be running, and never once Shorthand is known to be gone. Closing Obsidian cancels the recording in progress, and so does losing the transcript stream — the only case where no cancel is sent is when nothing this capture saw shows Shorthand was ever reached, since signalling a Shorthand that is not running would launch it. The consequence of that bias: quitting Shorthand in the middle of a capture normally does relaunch it, because the cancel is sent whenever there is any chance a recording is still running.")
       .addToggle((toggle) => toggle
-        .setValue(this.plugin.settings.controlHandyRecording)
-        .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, controlHandyRecording: value })));
+        .setValue(this.plugin.settings.controlShorthandRecording)
+        .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, controlShorthandRecording: value })));
     new Setting(containerEl)
-      .setName("Use Handy post-processing")
-      .setDesc("Drive Handy's post-processed transcription instead of plain transcription. Post-processing runs an LLM pass after the recording ends, so stopping a capture waits longer for the final transcript (45s instead of 10s). A capture keeps the value this setting had when it started, so that it stops the recording with the same toggle it started; changing it mid-capture affects only the \"Toggle Handy recording\" command and the next capture.")
+      .setName("Use Shorthand post-processing")
+      .setDesc("Drive Shorthand's post-processed transcription instead of plain transcription. Post-processing runs an LLM pass after the recording ends, so stopping a capture waits longer for the final transcript (45s instead of 10s). A capture keeps the value this setting had when it started, so that it stops the recording with the same toggle it started; changing it mid-capture affects only the \"Toggle Shorthand recording\" command and the next capture.")
       .addToggle((toggle) => toggle
-        .setValue(this.plugin.settings.useHandyPostProcessing)
-        .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, useHandyPostProcessing: value })));
+        .setValue(this.plugin.settings.useShorthandPostProcessing)
+        .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, useShorthandPostProcessing: value })));
 
     // setHeading() rather than a raw <h3>: the guidelines call for it, and it inherits
     // Obsidian's own settings typography instead of hardcoding a heading level.
@@ -735,7 +735,7 @@ function textSetting(
   plugin: ShorthandPlugin,
   name: string,
   description: string,
-  key: "handyExecutable" | "claudeExecutable" | "sidecarDirectory",
+  key: "shorthandExecutable" | "claudeExecutable" | "sidecarDirectory",
 ): void {
   new Setting(container).setName(name).setDesc(description).addText((text) => text
     .setValue(plugin.settings[key])
@@ -768,7 +768,7 @@ class ScaffoldModal extends Modal {
   onOpen(): void {
     this.titleEl.setText("Add Shorthand markers?");
     this.contentEl.createEl("p", {
-      text: "This note has no Handy AI ownership block. Add the user-notes marker and seeded AI section scaffold without changing existing note text?",
+      text: "This note has no Shorthand AI ownership block. Add the user-notes marker and seeded AI section scaffold without changing existing note text?",
     });
     const buttons = this.contentEl.createDiv();
     const add = buttons.createEl("button", { text: "Add scaffold" });
@@ -812,16 +812,16 @@ function samePath(left: string, right: string): boolean {
   return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
 }
 
-/** Which of Handy's two recording toggles a capture drives. */
+/** Which of Shorthand's two recording toggles a capture drives. */
 function recordingSignalFor(postProcessing: boolean): ControlSignal {
   return postProcessing ? "toggle-post-process" : "toggle-transcription";
 }
 
 function streamExitMessage(diagnosis: ExitDiagnosis): string {
   if (diagnosis.code === 2) {
-    return "Handy is not running, or Follow Live Transcript Output is disabled in Handy's Advanced settings.";
+    return "Shorthand is not running, or Follow Live Transcript Output is disabled in Shorthand's Advanced settings.";
   }
-  return diagnosis.message || `Handy follow-stream exited with code ${String(diagnosis.code)}.`;
+  return diagnosis.message || `Shorthand follow-stream exited with code ${String(diagnosis.code)}.`;
 }
 
 function errorMessage(error: unknown): string {

@@ -4,7 +4,7 @@ import { DEFAULT_PLUGIN_SETTINGS, normalizePluginSettings } from "../src/setting
 describe("plugin settings normalization", () => {
   test("normalizes valid persisted values", () => {
     expect(normalizePluginSettings({
-      handyExecutable: "  C:\\Apps\\handy.exe ",
+      shorthandExecutable: "  C:\\Apps\\shorthand.exe ",
       claudeExecutable: " C:\\Apps\\claude.exe ",
       sidecarDirectory: "./Calls\\Transcripts/",
       minNewChars: 42.9,
@@ -12,10 +12,10 @@ describe("plugin settings normalization", () => {
       maxPasses: 7.8,
       maxUsd: 2.5,
       enableLiveEnhancement: false,
-      controlHandyRecording: false,
-      useHandyPostProcessing: true,
+      controlShorthandRecording: false,
+      useShorthandPostProcessing: true,
     })).toEqual({
-      handyExecutable: "C:\\Apps\\handy.exe",
+      shorthandExecutable: "C:\\Apps\\shorthand.exe",
       claudeExecutable: "C:\\Apps\\claude.exe",
       sidecarDirectory: "Calls/Transcripts",
       minNewChars: 42,
@@ -23,26 +23,26 @@ describe("plugin settings normalization", () => {
       maxPasses: 7,
       maxUsd: 2.5,
       enableLiveEnhancement: false,
-      controlHandyRecording: false,
-      useHandyPostProcessing: true,
+      controlShorthandRecording: false,
+      useShorthandPostProcessing: true,
     });
   });
 
-  test("defaults the Handy control toggles", () => {
+  test("defaults the Shorthand control toggles", () => {
     expect(normalizePluginSettings({})).toMatchObject({
-      controlHandyRecording: true,
-      useHandyPostProcessing: false,
+      controlShorthandRecording: true,
+      useShorthandPostProcessing: false,
     });
-    expect(DEFAULT_PLUGIN_SETTINGS.controlHandyRecording).toBe(true);
-    expect(DEFAULT_PLUGIN_SETTINGS.useHandyPostProcessing).toBe(false);
+    expect(DEFAULT_PLUGIN_SETTINGS.controlShorthandRecording).toBe(true);
+    expect(DEFAULT_PLUGIN_SETTINGS.useShorthandPostProcessing).toBe(false);
   });
 
-  test("falls back for non-boolean Handy control toggles", () => {
+  test("falls back for non-boolean Shorthand control toggles", () => {
     for (const garbage of ["true", 1, null, {}, []]) {
-      expect(normalizePluginSettings({ controlHandyRecording: garbage, useHandyPostProcessing: garbage }))
+      expect(normalizePluginSettings({ controlShorthandRecording: garbage, useShorthandPostProcessing: garbage }))
         .toMatchObject({
-          controlHandyRecording: DEFAULT_PLUGIN_SETTINGS.controlHandyRecording,
-          useHandyPostProcessing: DEFAULT_PLUGIN_SETTINGS.useHandyPostProcessing,
+          controlShorthandRecording: DEFAULT_PLUGIN_SETTINGS.controlShorthandRecording,
+          useShorthandPostProcessing: DEFAULT_PLUGIN_SETTINGS.useShorthandPostProcessing,
         });
     }
   });
@@ -51,16 +51,16 @@ describe("plugin settings normalization", () => {
   // makes a cross-wired guard die in both directions. Asserting a key's *default* proves
   // nothing: reading the wrong key and falling through to the default are indistinguishable
   // in that case, which is exactly how the earlier version of this test survived having
-  // `controlHandyRecording` read `value.useHandyPostProcessing`.
-  test("keeps each Handy control toggle on its own key", () => {
-    expect(normalizePluginSettings({ controlHandyRecording: false, useHandyPostProcessing: true }))
-      .toMatchObject({ controlHandyRecording: false, useHandyPostProcessing: true });
+  // `controlShorthandRecording` read `value.useShorthandPostProcessing`.
+  test("keeps each Shorthand control toggle on its own key", () => {
+    expect(normalizePluginSettings({ controlShorthandRecording: false, useShorthandPostProcessing: true }))
+      .toMatchObject({ controlShorthandRecording: false, useShorthandPostProcessing: true });
     // And with garbage on one side, so a guard that reads the *other* key's type test is
     // caught too: here the surviving value is non-default on both sides in turn.
-    expect(normalizePluginSettings({ controlHandyRecording: false, useHandyPostProcessing: "yes" }))
-      .toMatchObject({ controlHandyRecording: false, useHandyPostProcessing: false });
-    expect(normalizePluginSettings({ controlHandyRecording: 0, useHandyPostProcessing: true }))
-      .toMatchObject({ controlHandyRecording: true, useHandyPostProcessing: true });
+    expect(normalizePluginSettings({ controlShorthandRecording: false, useShorthandPostProcessing: "yes" }))
+      .toMatchObject({ controlShorthandRecording: false, useShorthandPostProcessing: false });
+    expect(normalizePluginSettings({ controlShorthandRecording: 0, useShorthandPostProcessing: true }))
+      .toMatchObject({ controlShorthandRecording: true, useShorthandPostProcessing: true });
   });
 
   test("rejects absolute and traversing sidecar directories", () => {

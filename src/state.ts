@@ -6,7 +6,7 @@ export type PluginUiState = Readonly<{
   /**
    * Set between the stop request and the capture actually finishing. Stopping is not
    * instant — it can spend a control timeout plus a full post-processing drain waiting for
-   * Handy's `final` — and without this the status bar still read "capturing" for the whole
+   * Shorthand's `final` — and without this the status bar still read "capturing" for the whole
    * of it, which looks like a hang. Kept as its own flag rather than only a mode because
    * the final enhancement pass runs inside that window and must return to "stopping", not
    * back to "capturing".

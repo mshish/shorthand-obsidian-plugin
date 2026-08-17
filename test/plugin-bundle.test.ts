@@ -43,7 +43,7 @@ function ensureBundle(): void {
 describe("the built plugin bundle", () => {
   test("loads under a stub obsidian and exports a Plugin class with onload/onunload", async () => {
     ensureBundle();
-    const directory = await mkdtemp(join(tmpdir(), "handy-plugin-load-"));
+    const directory = await mkdtemp(join(tmpdir(), "shorthand-plugin-load-"));
     try {
       await mkdir(join(directory, "node_modules", "obsidian"), { recursive: true });
       await writeFile(

@@ -5,10 +5,10 @@ import type { ControlResult, ControlSignal } from "shorthand-core";
  * Obsidian and without spawning anything. It owns three things main.ts must not have to
  * reason about at each call site:
  *
- * - the *order* control signals reach Handy, including recalling a start sequence that a
+ * - the *order* control signals reach Shorthand, including recalling a start sequence that a
  *   stop request overtook (a spawned process cannot be un-spawned, so the only cure is to
  *   sequence a `--cancel` after it);
- * - what the plugin believes Handy's recorder is doing, derived only from records the
+ * - what the plugin believes Shorthand's recorder is doing, derived only from records the
  *   plugin itself observed — never from `StreamClient`'s private session bookkeeping,
  *   which a reconnect silently clears;
  * - waiting for the record that proves a requested finalize actually landed, before
@@ -18,7 +18,7 @@ import type { ControlResult, ControlSignal } from "shorthand-core";
  * and a report callback.
  */
 
-/** The `HandyControl` surface this module uses, and all of it. */
+/** The `ShorthandControl` surface this module uses, and all of it. */
 export type ControlLike = {
   send(signal: ControlSignal): Promise<ControlResult>;
   sendDetached(signal: ControlSignal): void;
@@ -34,22 +34,22 @@ export type RecorderPhase = "start" | "recall" | "finalize" | "backstop";
 export type RecorderReport = (phase: RecorderPhase, result: ControlResult) => void;
 
 export type RecorderStopOutcome =
-  /** Handy was driven to idle by the start sequence's own recall; nothing left to do. */
+  /** Shorthand was driven to idle by the start sequence's own recall; nothing left to do. */
   | "idle"
-  /** Handy is known not to be running, so no signal was sent at all. */
-  | "handy-down"
+  /** Shorthand is known not to be running, so no signal was sent at all. */
+  | "shorthand-down"
   /** Nothing was believed to be recording, so no toggle was sent. */
   | "no-session"
-  /** The finalize toggle never reached Handy. */
+  /** The finalize toggle never reached Shorthand. */
   | "not-finalized"
-  /** The finalize toggle landed and Handy's terminal record arrived. */
+  /** The finalize toggle landed and Shorthand's terminal record arrived. */
   | "finalized"
   /** The finalize toggle landed but the stream ended before any record could arrive. */
   | "abandoned"
   /** The finalize toggle landed but no terminal record arrived within the budget. */
   | "timed-out"
   /**
-   * The finalize toggle landed and Handy answered it by *starting* a recording: it was idle,
+   * The finalize toggle landed and Shorthand answered it by *starting* a recording: it was idle,
    * so the recording this capture was following was already gone. Nothing will finalize.
    */
   | "restarted";
@@ -62,11 +62,11 @@ export type RecorderStopOptions = {
    */
   abandoned?: Promise<unknown>;
   /**
-   * True only when Handy is *known* not to be running — never merely suspected. A control
-   * spawn with no Handy to forward to becomes the Handy app starting up, so this suppresses
+   * True only when Shorthand is *known* not to be running — never merely suspected. A control
+   * spawn with no Shorthand to forward to becomes the Shorthand app starting up, so this suppresses
    * the finalize toggle entirely.
    */
-  handyDown?: boolean;
+  shorthandDown?: boolean;
 };
 
 export type RecorderOptions = {
@@ -75,7 +75,7 @@ export type RecorderOptions = {
   recordingSignal: ControlSignal;
   report: RecorderReport;
   /**
-   * How long to wait for Handy's terminal record after asking it to finalize. Should match
+   * How long to wait for Shorthand's terminal record after asking it to finalize. Should match
    * the follower's own drain budget — this wait replaces it, it does not precede it.
    */
   finalizeTimeoutMs: number;
@@ -86,7 +86,7 @@ export type RecorderOptions = {
   attachGraceMs: number;
   /**
    * How long a stop waits for the `begin` of a recording this capture just started. Covers
-   * only the gap between the start toggle landing and Handy announcing the session.
+   * only the gap between the start toggle landing and Shorthand announcing the session.
    */
   beginGraceMs: number;
   /** Injectable clock; the default is the real one. */
@@ -95,16 +95,16 @@ export type RecorderOptions = {
 
 /**
  * The subset of a wire record this module cares about. `session` is what makes the previous
- * recording's records distinguishable from this capture's — without it, the `cancel` Handy
+ * recording's records distinguishable from this capture's — without it, the `cancel` Shorthand
  * emits for the recording the start sequence's own `--cancel` just ended reads exactly like
  * this capture's recording ending.
  */
 type ObservedRecord = { t: string; session?: number };
 
-/** Records that end a session. Handy sends exactly one of these per recording. */
+/** Records that end a session. Shorthand sends exactly one of these per recording. */
 const TERMINAL_RECORDS = new Set(["final", "no_speech", "cancel", "error"]);
 
-export class HandyRecorder {
+export class ShorthandRecorder {
   readonly #control: ControlLike;
   readonly #recordingSignal: ControlSignal;
   readonly #report: RecorderReport;
@@ -116,38 +116,38 @@ export class HandyRecorder {
   /** True between the first record of a session and whichever terminal record ends it. */
   #sessionLive = false;
   /**
-   * Handy's id for the session `#sessionLive` refers to, so a terminal record can be matched
+   * Shorthand's id for the session `#sessionLive` refers to, so a terminal record can be matched
    * to the session it actually ends. `undefined` while no session is identified.
    */
   #followedSession: number | undefined = undefined;
   /**
    * True once any session-scoped record has been observed, ever. Only meaningful as
-   * evidence that Handy was up and running at some point during this capture.
+   * evidence that Shorthand was up and running at some point during this capture.
    */
   #observedSession = false;
   /**
-   * True once this capture's start toggle reached Handy and until the session it started
-   * announces itself. Handy is recording during that window even though no record says so
+   * True once this capture's start toggle reached Shorthand and until the session it started
+   * announces itself. Shorthand is recording during that window even though no record says so
    * yet, and a stop landing inside it must not conclude "nothing to finalize". Only a
    * session-scoped record from the new session, or a confirmed `--cancel`, clears it — a
    * terminal record arriving inside the window is the *previous* recording ending.
    */
   #expectingSession = false;
-  /** True only while the last signal Handy received was a `--cancel` that reached it. */
+  /** True only while the last signal Shorthand received was a `--cancel` that reached it. */
   #idleGuaranteed = false;
   /**
-   * True once any control signal was confirmed `sent`. `HandyControl.send()` reports `sent`
+   * True once any control signal was confirmed `sent`. `ShorthandControl.send()` reports `sent`
    * only when the control child exited 0, and it only exits at all because
-   * `tauri_plugin_single_instance` forwarded the flag to an *already running* Handy — a spawn
-   * with no Handy to forward to becomes the app starting up and never reports `sent`. So this
-   * is the strongest evidence the plugin ever gets that Handy was up: stronger than the
+   * `tauri_plugin_single_instance` forwarded the flag to an *already running* Shorthand — a spawn
+   * with no Shorthand to forward to becomes the app starting up and never reports `sent`. So this
+   * is the strongest evidence the plugin ever gets that Shorthand was up: stronger than the
    * follower's `hello`, which only proves the follower reached it.
    */
   #controlConfirmed = false;
   /** True once the follower has said `hello` at least once. */
   #attachedEver = false;
   /**
-   * True once the follower has said `hello` a *second* time, i.e. its connection to Handy was
+   * True once the follower has said `hello` a *second* time, i.e. its connection to Shorthand was
    * replaced. See `noteAttached()` for why that makes session ids untrustworthy.
    */
   #reattached = false;
@@ -181,8 +181,8 @@ export class HandyRecorder {
 
   /**
    * True once any session-scoped record has been seen. The follower's exit code 2 means
-   * *either* "Handy is not running" *or* "live transcript streaming is off / the follower
-   * slot was taken" — indistinguishable by the code alone. Having seen Handy narrate a
+   * *either* "Shorthand is not running" *or* "live transcript streaming is off / the follower
+   * slot was taken" — indistinguishable by the code alone. Having seen Shorthand narrate a
    * session rules out the first reading, and the caller needs that to decide whether a
    * control spawn would end a recording or launch the app.
    */
@@ -191,29 +191,29 @@ export class HandyRecorder {
   }
 
   /**
-   * Whether any control signal was ever confirmed delivered to a running Handy. Exposed
-   * because it is the caller's strongest evidence that Handy was up — see the field, and
-   * `handyProvenDown()`, which consumes it.
+   * Whether any control signal was ever confirmed delivered to a running Shorthand. Exposed
+   * because it is the caller's strongest evidence that Shorthand was up — see the field, and
+   * `shorthandProvenDown()`, which consumes it.
    */
   get controlConfirmed(): boolean {
     return this.#controlConfirmed;
   }
 
   /**
-   * The follower's `hello`, i.e. it has just connected to Handy. Called for every one,
+   * The follower's `hello`, i.e. it has just connected to Shorthand. Called for every one,
    * reconnects included: `StreamClient` spawns a fresh follower per reconnect attempt and
    * each one says `hello` again.
    *
-   * A *second* `hello` means the previous connection to Handy died, and one of the ways that
-   * happens is Handy itself exiting. Handy's session counter is process-local and restarts at
+   * A *second* `hello` means the previous connection to Shorthand died, and one of the ways that
+   * happens is Shorthand itself exiting. Shorthand's session counter is process-local and restarts at
    * 1, so from that point on an id is no longer a stable name for a recording: a restarted
-   * Handy will happily reuse ids this capture has already followed. The rule that matters is
+   * Shorthand will happily reuse ids this capture has already followed. The rule that matters is
    * the one-directional one — an id *below* the one being followed can only come from a
-   * different Handy process, which means the recording this capture was following died with
+   * different Shorthand process, which means the recording this capture was following died with
    * the old one.
    *
    * `hello` deliberately does not clear `#sessionLive` on its own. An ordinary mid-recording
-   * reconnect produces exactly the same `hello`, and Handy does not resend `begin` on
+   * reconnect produces exactly the same `hello`, and Shorthand does not resend `begin` on
    * reattach; dropping the belief there is what previously made the plugin skip the finalize
    * and cancel away a live meeting's corrected transcript.
    */
@@ -225,15 +225,15 @@ export class HandyRecorder {
   /**
    * Every *session-scoped* record the follower delivers, in order. This is the only source of
    * session state: `StreamClient` clears its own `#activeSessions` on every disconnect and
-   * repopulates it only from a fresh `begin`, which Handy does not resend when it resumes
+   * repopulates it only from a fresh `begin`, which Shorthand does not resend when it resumes
    * a session after a reattach. A plugin that trusted that bookkeeping would conclude
-   * "nothing is recording" moments after asking Handy to finalize.
+   * "nothing is recording" moments after asking Shorthand to finalize.
    *
    * Session-scoped is a precondition, not a filter: `hello` belongs to `noteAttached()`, and
-   * a connection-level `error` (the only other session-less record Handy emits) is a fault of
+   * a connection-level `error` (the only other session-less record Shorthand emits) is a fault of
    * the transcript channel, not a statement about the recorder — `StreamClient` routes it to
    * `connectionError`, never to `event`. The guard below fails safe rather than trusting that
-   * routing to stay put: a session-less record reaching here would otherwise claim "Handy was
+   * routing to stay put: a session-less record reaching here would otherwise claim "Shorthand was
    * heard narrating a session" and, if it happened to be an `error`, clear a live session —
    * a silently skipped finalize, which is precisely the bug class this module exists for.
    */
@@ -245,13 +245,13 @@ export class HandyRecorder {
     if (!terminal) {
       // *Any* non-terminal session record proves a recording is running right now, `partial`
       // as much as `begin`. That matters because the start sequence deliberately proceeds
-      // when the follower has not attached within the grace, and Handy does not resend
+      // when the follower has not attached within the grace, and Shorthand does not resend
       // `begin` to a follower that attached late or reattached — so a whole meeting can
       // stream in as partials with its `begin` never observed by anyone. Trusting only
       // `begin` made the plugin conclude "nothing is recording" while it was ingesting that
       // very recording's text, send no finalize, and cancel away its `final`.
       if (this.#finalizingSession !== undefined && record.session !== this.#finalizingSession) {
-        // A different session starting while this one is being finalized is Handy answering
+        // A different session starting while this one is being finalized is Shorthand answering
         // the finalize toggle by *starting* a recording rather than ending one: it was idle
         // when the toggle landed, because it restarted while the follower was away and the
         // recording being followed died with the old process. The terminal record being
@@ -263,7 +263,7 @@ export class HandyRecorder {
       this.#sessionLive = true;
       this.#followedSession = record.session;
       this.#expectingSession = false;
-      // A recording is running, so whatever cancel preceded it no longer describes Handy.
+      // A recording is running, so whatever cancel preceded it no longer describes Shorthand.
       this.#idleGuaranteed = false;
       resolveAll(this.#beginWaiters);
       return;
@@ -280,7 +280,7 @@ export class HandyRecorder {
    * Whether a terminal record ends the recording this capture is responsible for.
    *
    * While `#expectingSession` is set the answer is always no: the start sequence's own
-   * `--cancel` makes Handy emit a terminal record for the recording it just ended, and that
+   * `--cancel` makes Shorthand emit a terminal record for the recording it just ended, and that
    * record can land *after* the start toggle was sent. This capture's own session announces
    * itself first — with `begin`, or with a `partial` when `begin` was missed — so a terminal
    * record arriving before any of that belongs to the previous recording. Erring the other
@@ -296,23 +296,23 @@ export class HandyRecorder {
     if (this.#followedSession === undefined || record.session === undefined) return false;
     if (record.session === this.#followedSession) return true;
     // Session ids are process-local and restart at 1. Before any reattach a mismatched id is
-    // simply another session of the same Handy (typically the previous recording ending late)
+    // simply another session of the same Shorthand (typically the previous recording ending late)
     // and means nothing about ours. Once the follower has reconnected, a *lower* id can only
-    // have come from a different Handy process — so the recording we were following went with
+    // have come from a different Shorthand process — so the recording we were following went with
     // the one that exited, and the belief must not carry across. Ending the belief is the safe
-    // direction: it suppresses the finalize toggle, and a toggle against an idle Handy would
+    // direction: it suppresses the finalize toggle, and a toggle against an idle Shorthand would
     // start a recording rather than end one.
     return this.#reattached && record.session < this.#followedSession;
   }
 
   /**
-   * Drives Handy into recording from any prior state: `--cancel` always lands it in idle
+   * Drives Shorthand into recording from any prior state: `--cancel` always lands it in idle
    * and is a no-op when it already is, so the toggle that follows can only ever turn
    * recording *on*. The two must be sequential — fired together, the cancel could undo the
    * toggle it raced.
    *
    * `attached` resolves on the follower's `hello`. `client.start()` returns as soon as the
-   * child process object exists, long before it has connected to Handy, and a `begin`
+   * child process object exists, long before it has connected to Shorthand, and a `begin`
    * emitted before that attach is never observed by anyone.
    *
    * The returned promise is what makes a stop safe: it is stored, awaited by `stop()`, and
@@ -328,7 +328,7 @@ export class HandyRecorder {
   async #runStart(attached: Promise<void>): Promise<void> {
     await Promise.race([attached, this.#delay(this.#attachGraceMs)]);
     // Before the first spawn a plain check is enough: nothing has been sent, so there is
-    // nothing to recall and no state of Handy's this capture is responsible for.
+    // nothing to recall and no state of Shorthand's this capture is responsible for.
     if (this.#stopping) return;
     if (!await this.#send("cancel", "start")) return;
     this.#markIdle();
@@ -338,7 +338,7 @@ export class HandyRecorder {
       this.#idleGuaranteed = false;
     }
     // The one check that cannot be a guard. A stop that arrived while that toggle was in
-    // flight could not stop the spawn — the process was already on its way to Handy — so
+    // flight could not stop the spawn — the process was already on its way to Shorthand — so
     // the only way to end deterministically idle is to sequence a cancel *after* it. This
     // is also what heals the teardown paths, which cannot await anything.
     if (this.#stopping) await this.#recall();
@@ -382,29 +382,29 @@ export class HandyRecorder {
   async stop(options: RecorderStopOptions = {}): Promise<RecorderStopOutcome> {
     this.#stopping = true;
     await this.#startSequence;
-    // Handy is gone, so there is no recording left to finalize and no signal worth sending:
-    // a control spawn with nothing to forward to *becomes* the Handy app starting up, which
-    // would answer a dead-Handy stop by launching Handy.
-    if (options.handyDown === true) return "handy-down";
-    // The start sequence recalled itself; Handy is idle and there is nothing to finalize.
+    // Shorthand is gone, so there is no recording left to finalize and no signal worth sending:
+    // a control spawn with nothing to forward to *becomes* the Shorthand app starting up, which
+    // would answer a dead-Shorthand stop by launching Shorthand.
+    if (options.shorthandDown === true) return "shorthand-down";
+    // The start sequence recalled itself; Shorthand is idle and there is nothing to finalize.
     if (this.#idleGuaranteed) return "idle";
     if (!this.#sessionLive && this.#expectingSession) {
       // Mirror of the reconnect case: the start toggle landed but `begin` has not arrived
       // yet (~100ms). Waiting turns the race into an ordinary stop. If `begin` never comes
-      // no toggle is sent — a toggle against an idle Handy would *start* a recording —
+      // no toggle is sent — a toggle against an idle Shorthand would *start* a recording —
       // and the caller's cancel backstop is what still guarantees idle.
       await Promise.race([this.#waitFor(this.#beginWaiters), this.#delay(this.#beginGraceMs)]);
     }
     if (!this.#sessionLive) return "no-session";
     if (!await this.#send(this.#recordingSignal, "finalize")) return "not-finalized";
-    // Handy has been asked to finalize; the `final` it is computing is the whole point of
+    // Shorthand has been asked to finalize; the `final` it is computing is the whole point of
     // the capture. Nothing may tear the follower down until the record that ends the
     // session arrives or the budget expires.
     this.#finalizingSession = this.#followedSession;
     const waits: Array<Promise<RecorderStopOutcome>> = [
       this.#waitFor(this.#terminalWaiters).then(() => "finalized" as const),
       this.#delay(this.#finalizeTimeoutMs).then(() => "timed-out" as const),
-      // A recording *starting* is Handy's answer that it had nothing to finalize — see
+      // A recording *starting* is Shorthand's answer that it had nothing to finalize — see
       // `observe()`. Waiting out the full budget with a live microphone is strictly worse
       // than saying so at once.
       this.#waitFor(this.#usurpedWaiters).then(() => "restarted" as const),
@@ -420,7 +420,7 @@ export class HandyRecorder {
 
   /**
    * Synchronous teardown, for Obsidian's shutdown hooks, which do not await. `--cancel`
-   * and never a toggle: a toggle would *start* a recording if Handy happened to be idle.
+   * and never a toggle: a toggle would *start* a recording if Shorthand happened to be idle.
    * Detached because there is no result anyone could still act on.
    */
   teardown(): void {
@@ -430,8 +430,8 @@ export class HandyRecorder {
 
   /**
    * Last-resort cancel once nothing is left to finalize. It is fire-and-forget on purpose:
-   * guaranteeing Handy is not left recording outranks everything else here, and `--cancel`
-   * against an idle Handy is a no-op.
+   * guaranteeing Shorthand is not left recording outranks everything else here, and `--cancel`
+   * against an idle Shorthand is a no-op.
    */
   backstop(): void {
     void this.#send("cancel", "backstop");
@@ -450,9 +450,9 @@ export class HandyRecorder {
   }
 
   /**
-   * Reports the outcome and answers only whether the signal reached Handy. The two-arm
+   * Reports the outcome and answers only whether the signal reached Shorthand. The two-arm
    * `then` is load-bearing: a control failure must never throw out of, and so unwind, a
-   * capture that is otherwise healthy — capture still works with Handy's own hotkey.
+   * capture that is otherwise healthy — capture still works with Shorthand's own hotkey.
    */
   #send(signal: ControlSignal, phase: RecorderPhase): Promise<boolean> {
     let sending: Promise<ControlResult>;
@@ -465,8 +465,8 @@ export class HandyRecorder {
     return sending.then(
       (result) => {
         this.#report(phase, result);
-        // `sent` is the one thing that proves Handy was running: the control child only
-        // exits 0 because single-instance forwarding handed the flag to a live Handy.
+        // `sent` is the one thing that proves Shorthand was running: the control child only
+        // exits 0 because single-instance forwarding handed the flag to a live Shorthand.
         if (result.status === "sent") this.#controlConfirmed = true;
         return result.status === "sent";
       },
@@ -482,50 +482,50 @@ export class HandyRecorder {
   }
 }
 
-/** Everything the plugin knows about whether Handy was ever actually reached. */
-export type HandyDownEvidence = {
+/** Everything the plugin knows about whether Shorthand was ever actually reached. */
+export type ShorthandDownEvidence = {
   /** The follower's exit code, as the stream's own diagnosis reported it. */
   exitCode: number | null;
-  /** Whether the follower's `hello` ever arrived, i.e. it really did connect to Handy. */
+  /** Whether the follower's `hello` ever arrived, i.e. it really did connect to Shorthand. */
   helloEver: boolean;
-  /** `HandyRecorder.observedSession` — whether Handy was ever heard narrating a session. */
+  /** `ShorthandRecorder.observedSession` — whether Shorthand was ever heard narrating a session. */
   observedSession: boolean;
   /**
-   * `HandyRecorder.controlConfirmed` — whether any control signal was ever confirmed
-   * delivered to a *running* Handy. Unlike the other three this is not follower-derived.
+   * `ShorthandRecorder.controlConfirmed` — whether any control signal was ever confirmed
+   * delivered to a *running* Shorthand. Unlike the other three this is not follower-derived.
    */
   controlConfirmed: boolean;
 };
 
 /**
- * Whether the follower's exit *proves* Handy is not running. Only that proof makes it safe
- * to suppress a control signal, because a control spawn with no Handy to forward to becomes
- * the Handy app starting up.
+ * Whether the follower's exit *proves* Shorthand is not running. Only that proof makes it safe
+ * to suppress a control signal, because a control spawn with no Shorthand to forward to becomes
+ * the Shorthand app starting up.
  *
- * Exit 2 alone proves nothing. The follower reports it both for "Handy is not running" and
- * for a live, recording Handy whose live transcript streaming was switched off, whose
+ * Exit 2 alone proves nothing. The follower reports it both for "Shorthand is not running" and
+ * for a live, recording Shorthand whose live transcript streaming was switched off, whose
  * follower slot was taken, or whose endpoint faulted — its own message says as much, and
  * connection-level failures are indistinguishable by the code. Reading exit 2 as proof
- * skipped the `--cancel` backstop against a Handy that was still recording, minutes into a
- * meeting: a hot mic, with the user told Handy was not running.
+ * skipped the `--cancel` backstop against a Shorthand that was still recording, minutes into a
+ * meeting: a hot mic, with the user told Shorthand was not running.
  *
  * So exit 2 counts only when *nothing* the plugin ever saw contradicts it. Three of the four
  * pieces of evidence are follower-derived — no `hello` ever, nothing heard from a session —
  * and those alone were not enough. A confirmed control signal is the fourth and the strongest:
- * `HandyControl.send()` reports `sent` only when the control child exited 0, which it does
- * only because single-instance forwarding handed the flag to an already-running Handy. That
+ * `ShorthandControl.send()` reports `sent` only when the control child exited 0, which it does
+ * only because single-instance forwarding handed the flag to an already-running Shorthand. That
  * reproduced as a hot mic: with live-transcript streaming switched off (or the follower slot
  * taken) the follower never says `hello`, never sees a session, and exits 2 — while the start
- * sequence has meanwhile driven a very much running Handy into recording, both signals
+ * sequence has meanwhile driven a very much running Shorthand into recording, both signals
  * confirmed `sent`. Reading that exit as proof skipped the `--cancel` backstop and told the
- * user Handy was not running.
+ * user Shorthand was not running.
  *
- * Deliberate bias: any evidence at all that Handy was reached defeats exit 2. When in doubt,
- * fire the cancel — a redundant `--cancel` against a Handy that is down costs an unwanted app
- * launch; a skipped one against a live Handy leaves the microphone recording with nobody
+ * Deliberate bias: any evidence at all that Shorthand was reached defeats exit 2. When in doubt,
+ * fire the cancel — a redundant `--cancel` against a Shorthand that is down costs an unwanted app
+ * launch; a skipped one against a live Shorthand leaves the microphone recording with nobody
  * following it.
  */
-export function handyProvenDown(evidence: HandyDownEvidence): boolean {
+export function shorthandProvenDown(evidence: ShorthandDownEvidence): boolean {
   if (evidence.exitCode !== 2) return false;
   return !evidence.helloEver && !evidence.observedSession && !evidence.controlConfirmed;
 }

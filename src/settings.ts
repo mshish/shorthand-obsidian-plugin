@@ -1,7 +1,7 @@
 import { DEFAULT_CONFIG } from "shorthand-core";
 
 export type ShorthandPluginSettings = Readonly<{
-  handyExecutable: string;
+  shorthandExecutable: string;
   claudeExecutable: string;
   sidecarDirectory: string;
   minNewChars: number;
@@ -9,12 +9,12 @@ export type ShorthandPluginSettings = Readonly<{
   maxPasses: number;
   maxUsd: number;
   enableLiveEnhancement: boolean;
-  controlHandyRecording: boolean;
-  useHandyPostProcessing: boolean;
+  controlShorthandRecording: boolean;
+  useShorthandPostProcessing: boolean;
 }>;
 
 export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
-  handyExecutable: DEFAULT_CONFIG.handyBinaryPath,
+  shorthandExecutable: DEFAULT_CONFIG.shorthandBinaryPath,
   claudeExecutable: "",
   sidecarDirectory: DEFAULT_CONFIG.sidecarDirectory.replaceAll("\\", "/"),
   minNewChars: DEFAULT_CONFIG.thresholds.enhancementNewCharacters,
@@ -22,14 +22,14 @@ export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
   maxPasses: DEFAULT_CONFIG.enhancement.maxPasses,
   maxUsd: DEFAULT_CONFIG.enhancement.maxUsd,
   enableLiveEnhancement: true,
-  controlHandyRecording: true,
-  useHandyPostProcessing: false,
+  controlShorthandRecording: true,
+  useShorthandPostProcessing: false,
 });
 
 export function normalizePluginSettings(input: unknown): ShorthandPluginSettings {
   const value = isRecord(input) ? input : {};
   return {
-    handyExecutable: nonEmptyString(value.handyExecutable, DEFAULT_PLUGIN_SETTINGS.handyExecutable),
+    shorthandExecutable: nonEmptyString(value.shorthandExecutable, DEFAULT_PLUGIN_SETTINGS.shorthandExecutable),
     claudeExecutable: stringValue(value.claudeExecutable, DEFAULT_PLUGIN_SETTINGS.claudeExecutable),
     sidecarDirectory: vaultRelativeDirectory(value.sidecarDirectory, DEFAULT_PLUGIN_SETTINGS.sidecarDirectory),
     minNewChars: finiteInteger(value.minNewChars, DEFAULT_PLUGIN_SETTINGS.minNewChars, 1),
@@ -39,12 +39,12 @@ export function normalizePluginSettings(input: unknown): ShorthandPluginSettings
     enableLiveEnhancement: typeof value.enableLiveEnhancement === "boolean"
       ? value.enableLiveEnhancement
       : DEFAULT_PLUGIN_SETTINGS.enableLiveEnhancement,
-    controlHandyRecording: typeof value.controlHandyRecording === "boolean"
-      ? value.controlHandyRecording
-      : DEFAULT_PLUGIN_SETTINGS.controlHandyRecording,
-    useHandyPostProcessing: typeof value.useHandyPostProcessing === "boolean"
-      ? value.useHandyPostProcessing
-      : DEFAULT_PLUGIN_SETTINGS.useHandyPostProcessing,
+    controlShorthandRecording: typeof value.controlShorthandRecording === "boolean"
+      ? value.controlShorthandRecording
+      : DEFAULT_PLUGIN_SETTINGS.controlShorthandRecording,
+    useShorthandPostProcessing: typeof value.useShorthandPostProcessing === "boolean"
+      ? value.useShorthandPostProcessing
+      : DEFAULT_PLUGIN_SETTINGS.useShorthandPostProcessing,
   };
 }
 

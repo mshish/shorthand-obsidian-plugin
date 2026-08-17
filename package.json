@@ -1,7 +1,7 @@
 {
   "name": "obsidian-shorthand",
   "version": "0.1.0",
-  "description": "Capture Handy transcripts and maintain an AI-owned meeting-note summary.",
+  "description": "Capture Shorthand transcripts and maintain an AI-owned meeting-note summary.",
   "main": "main.js",
   "type": "module",
   "private": true,
@@ -15,7 +15,7 @@
     "version": "node version-bump.mjs && git add manifest.json versions.json"
   },
   "dependencies": {
-    "shorthand-core": "github:mshish/shorthand-core#0.4.0"
+    "shorthand-core": "github:mshish/shorthand-core#0.5.0"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",

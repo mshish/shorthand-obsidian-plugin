@@ -32,7 +32,7 @@ describe("plugin status state machine", () => {
   });
 
   // Stopping is not instant: it can spend a control timeout plus a whole post-processing
-  // drain waiting for Handy's `final`, and the status bar used to read "capturing"
+  // drain waiting for Shorthand's `final`, and the status bar used to read "capturing"
   // throughout, which looks like a hang.
   test("a stop request is visible before the capture has finished stopping", () => {
     const capturing = reducePluginState(INITIAL_PLUGIN_STATE, { type: "capture-started" });
