@@ -10,6 +10,7 @@ main.js
 
 # Obsidian writes plugin settings here when this repo is cloned into a vault.
 data.json
+data.json.bak
 
 # Editors
 .vscode
