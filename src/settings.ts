@@ -1,4 +1,4 @@
-import { DEFAULT_CONFIG } from "shorthand-core";
+import { DEFAULT_CONFIG, MAX_GUIDANCE_CHARACTERS, parseTemplateSections, type Section } from "shorthand-core";
 
 export type ShorthandPluginSettings = Readonly<{
   shorthandExecutable: string;
@@ -9,6 +9,16 @@ export type ShorthandPluginSettings = Readonly<{
   enableLiveEnhancement: boolean;
   controlShorthandRecording: boolean;
   useShorthandPostProcessing: boolean;
+  /**
+   * Replaces core's `DEFAULT_EDITORIAL_GUIDANCE`. Empty means "use core's default" and is
+   * stored as empty rather than as a copy of that default: a user who never touches this
+   * keeps inheriting improvements to it, instead of being frozen at whatever the text
+   * happened to be the day they installed the plugin. The safety preamble is prepended by
+   * core regardless and is not reachable from here.
+   */
+  noteTakingGuidance: string;
+  /** One heading per line. Empty means core's `DEFAULT_CONFIG.templateSections`, for the same reason. */
+  templateSectionText: string;
 }>;
 
 export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
@@ -20,6 +30,8 @@ export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
   enableLiveEnhancement: true,
   controlShorthandRecording: true,
   useShorthandPostProcessing: false,
+  noteTakingGuidance: "",
+  templateSectionText: "",
 });
 
 export function normalizePluginSettings(input: unknown): ShorthandPluginSettings {
@@ -39,7 +51,56 @@ export function normalizePluginSettings(input: unknown): ShorthandPluginSettings
     useShorthandPostProcessing: typeof value.useShorthandPostProcessing === "boolean"
       ? value.useShorthandPostProcessing
       : DEFAULT_PLUGIN_SETTINGS.useShorthandPostProcessing,
+    noteTakingGuidance: guidanceText(value.noteTakingGuidance, DEFAULT_PLUGIN_SETTINGS.noteTakingGuidance),
+    templateSectionText: headingListText(value.templateSectionText, DEFAULT_PLUGIN_SETTINGS.templateSectionText),
   };
+}
+
+export type PromptSettingsValidation =
+  | Readonly<{ ok: true; settings: Readonly<{ noteTakingGuidance: string; templateSectionText: string }> }>
+  | Readonly<{ ok: false; field: "noteTakingGuidance" | "templateSectionText"; error: string }>;
+
+/**
+ * Everything the prompt modal does that is not DOM wiring. It lives here, not in `main.ts`,
+ * because nothing in this repository can import `main.ts` under `bun test` — so a rule left
+ * inside the modal is a rule with no test at all.
+ *
+ * Empty is always valid on both fields and always means "use the default".
+ */
+export function validatePromptSettings(
+  input: Readonly<{ noteTakingGuidance: string; templateSectionText: string }>,
+): PromptSettingsValidation {
+  const noteTakingGuidance = input.noteTakingGuidance.trim();
+  if (noteTakingGuidance.length > MAX_GUIDANCE_CHARACTERS) {
+    return {
+      ok: false,
+      field: "noteTakingGuidance",
+      error: `The note-taking prompt is ${noteTakingGuidance.length} characters; the limit is ${MAX_GUIDANCE_CHARACTERS}.`,
+    };
+  }
+  const templateSectionText = input.templateSectionText.trim();
+  if (templateSectionText.length > 0) {
+    const parsed = parseTemplateSections(templateSectionText);
+    // Core's message names the offending heading; a rewritten one here would drift from the
+    // rule that actually rejected it.
+    if (!parsed.ok) return { ok: false, field: "templateSectionText", error: parsed.error };
+  }
+  return { ok: true, settings: { noteTakingGuidance, templateSectionText } };
+}
+
+/**
+ * The sections a note is scaffolded with. Falls back to core's default rather than to a copy
+ * of it, and never throws: a stored value can be unparseable, and a note scaffolded with no
+ * sections at all is worse than one scaffolded with the standard three.
+ */
+export function resolveTemplateSections(templateSectionText: string): readonly Section[] {
+  const parsed = parseTemplateSections(templateSectionText);
+  return parsed.ok ? parsed.sections : DEFAULT_CONFIG.templateSections;
+}
+
+/** Shown as the heading field's placeholder, so a user can read what they are replacing. */
+export function defaultTemplateSectionText(): string {
+  return DEFAULT_CONFIG.templateSections.map(({ heading }) => heading).join("\n");
 }
 
 function vaultRelativeDirectory(value: unknown, fallback: string): string {
@@ -63,6 +124,29 @@ function nonEmptyString(value: unknown, fallback: string): string {
 
 function stringValue(value: unknown, fallback: string): string {
   return typeof value === "string" ? value.trim() : fallback;
+}
+
+/**
+ * Over the cap falls back to "" — core's own default guidance — rather than throwing or
+ * truncating. `data.json` is untrusted (hand-edited, synced, written by an older build), and
+ * a prompt cut off mid-sentence is worse than no override at all: the user would see notes
+ * following half an instruction with nothing anywhere to explain why.
+ */
+function guidanceText(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  return trimmed.length > MAX_GUIDANCE_CHARACTERS ? fallback : trimmed;
+}
+
+/**
+ * Same discipline, same fallback: "" means `DEFAULT_CONFIG.templateSections`. Validated on
+ * load and not only on save, because the value could have arrived from anywhere.
+ */
+function headingListText(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return fallback;
+  return parseTemplateSections(trimmed).ok ? trimmed : fallback;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
