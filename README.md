@@ -44,7 +44,11 @@ BRAT's settings; then add `mshish/obsidian-shorthand` as a beta plugin.
 
 ### From source — the standard Obsidian dev loop
 
-The repository root **is** the plugin, so Obsidian's documented loop applies directly:
+Obsidian loads a plugin only from `<vault>/.obsidian/plugins/<id>/`. Both layouts below are
+documented by Obsidian; pick one.
+
+**Clone into the vault.** The repository root *is* the plugin folder, so the loop applies
+directly:
 
 ```sh
 git clone https://github.com/mshish/obsidian-shorthand.git \
@@ -55,12 +59,35 @@ npm run build   # a fresh clone has no main.js — it is gitignored
 npm run dev     # esbuild watch; rebuilds main.js in place on every save
 ```
 
-Enable **Shorthand** under Community plugins and configure the executable paths and enhancement
-thresholds in its settings tab. Install the community [Hot Reload](https://github.com/pjeby/hot-reload) plugin
-in that vault and reloads become automatic — it keys off the `.git` directory a clone leaves
-behind. Without it, Obsidian caches the bundle, so **toggle the plugin off and on** after each
-rebuild; otherwise you are still running the previous build, which looks exactly like your change
-having no effect.
+**Clone outside the vault.** Point `OBSIDIAN_PLUGIN_DIR` at the vault's plugin folder and every
+build — including each watch rebuild — copies `main.js` and `manifest.json` there. This keeps
+`node_modules/` and `.git/` out of a synced vault:
+
+```sh
+git clone https://github.com/mshish/obsidian-shorthand.git
+cd obsidian-shorthand
+npm install
+export OBSIDIAN_PLUGIN_DIR="<vault>/.obsidian/plugins/shorthand"
+#   PowerShell: $env:OBSIDIAN_PLUGIN_DIR = "<vault>\.obsidian\plugins\shorthand"
+npm run build
+npm run dev
+```
+
+`main.js` is still written to the repository root and copied across from there — releases attach
+that same file and the bundle-load test resolves it from the root. A failed rebuild copies
+nothing, leaving the last loadable bundle in the vault.
+
+Enable **Shorthand** under Community plugins and configure the executable paths and budgets in
+its settings tab. Settings live in `data.json` **in the vault's plugin folder**, which is not the
+repository when the clone is outside the vault.
+
+Install the community [Hot Reload](https://github.com/pjeby/hot-reload) plugin in that vault and
+reloads become automatic — it watches any plugin folder containing a `.git` directory *or* a
+`.hotreload` file. A clone in the vault provides the former; a clone outside the vault leaves the
+vault folder with neither, so create an empty `.hotreload` beside `main.js` there. Without hot
+reload, Obsidian caches the bundle, so **toggle the plugin off and on** after each rebuild;
+otherwise you are still running the previous build, which looks exactly like your change having
+no effect.
 
 **npm, not bun.** Core is a private GitHub dependency: npm resolves `git+https://…#<tag>` by
 cloning through the `gh` credential helper, while bun rewrites GitHub dependencies to the API

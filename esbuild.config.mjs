@@ -6,7 +6,10 @@
 //   - node builtins are external, not just the sample's CodeMirror/electron list.
 //   - the import.meta.url banner below.
 //   - no minify: deliberately out of scope while the bundle ships as a release asset.
+//   - the OBSIDIAN_PLUGIN_DIR delivery step below.
 import { builtinModules } from "node:module";
+import { copyFile, mkdir } from "node:fs/promises";
+import { resolve } from "node:path";
 import process from "node:process";
 import esbuild from "esbuild";
 
@@ -18,6 +21,37 @@ if you want to view the source, please visit the github repository of this plugi
 
 const nodeBuiltins = [...new Set(builtinModules.flatMap((name) => [name, `node:${name}`]))];
 const prod = process.argv[2] === "production";
+
+/**
+ * Obsidian loads a plugin only from `<vault>/.obsidian/plugins/<id>/`, so a repository kept
+ * outside the vault has to deliver its build there. That is the outside-the-vault workflow
+ * obsidian-sample-plugin's README documents — copy `main.js` and `manifest.json` across —
+ * automated here so a watch rebuild lands in the vault without a second command.
+ *
+ * The build still writes `main.js` at the repository root and copies from there rather than
+ * pointing `outfile` at the vault: the bundle-load test resolves it from the root and rebuilds
+ * it there when missing, releases attach that same file, and the recorded byte baseline has to
+ * keep meaning one file. Unset, nothing is copied and the build behaves as it always has.
+ */
+const vaultPluginDirectory = process.env.OBSIDIAN_PLUGIN_DIR;
+
+const deliverToVault = {
+  name: "deliver-to-vault",
+  setup(build) {
+    if (vaultPluginDirectory === undefined || vaultPluginDirectory.length === 0) return;
+    const target = resolve(vaultPluginDirectory);
+    build.onEnd(async (result) => {
+      // Leave the last good build in place when a rebuild fails, so Obsidian keeps running
+      // something that loads instead of a half-written bundle.
+      if (result.errors.length > 0) return;
+      await mkdir(target, { recursive: true });
+      for (const file of ["main.js", "manifest.json"]) {
+        await copyFile(file, resolve(target, file));
+      }
+      console.log(`delivered main.js and manifest.json to ${target}`);
+    });
+  },
+};
 
 const context = await esbuild.context({
   entryPoints: ["main.ts"],
@@ -39,6 +73,7 @@ const context = await esbuild.context({
     js: `${banner}const __shorthandImportMetaUrl = require('node:url').pathToFileURL(__filename).href;`,
   },
   external: ["obsidian", "electron", ...nodeBuiltins],
+  plugins: [deliverToVault],
   logLevel: "info",
 });
 
