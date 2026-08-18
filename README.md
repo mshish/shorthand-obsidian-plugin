@@ -286,12 +286,6 @@ skipped:
 - A core change can move the bundle size and break the bundle-load test long before it breaks
   a type, so `npm test` is not optional after a bump.
 
-Developing against an unreleased core is a directory junction at
-`node_modules/shorthand-core`, pointing at a local checkout — `node_modules/` is gitignored, so
-it cannot be committed by accident, unlike an `overrides` entry. Remove it with
-`cmd /c "rmdir node_modules\shorthand-core"` and never with `rm -rf` or `Remove-Item -Recurse`:
-both follow the junction and delete the checkout it points at.
-
 ## License
 
 MIT — see [LICENSE](LICENSE).
