@@ -590,9 +590,10 @@ export default class ShorthandPlugin extends Plugin {
       // picks the guidance", not "run with no editorial instruction at all".
       ...(guidance.length === 0 ? {} : { guidance }),
       maxDurationMs: DEFAULT_CONFIG.enhancement.maxDurationMs,
-      // This bound belongs to the runner, not the individual call: a capture reuses its
-      // live runner for the closing pass because that path has a retry ladder, while the
-      // standalone command gets the longer one-shot bound because it has no retry.
+      // This bound belongs to the runner, not the individual call: there is one runner per
+      // capture, so its closing pass inherits the live bound. That shorter bound is tolerable
+      // because runFinalEnhancementWithRetries can reissue the pass; the standalone command
+      // gets the longer one-shot bound because it cannot.
       timeoutMs,
       maxTurns: DEFAULT_CONFIG.enhancement.maxTurns,
       ...(claudeExecutable === undefined ? {} : { pathToClaudeCodeExecutable: claudeExecutable }),
@@ -704,7 +705,7 @@ export default class ShorthandPlugin extends Plugin {
         : "The meeting note was busy. Close competing file handles and run Enhance now again.");
     } else if (outcome.status === "failed") {
       this.fail(outcome.error);
-    } else if (outcome.status !== "not-ready" && outcome.status !== "in-flight") {
+    } else if (outcome.status === "timed-out") {
       this.fail(`Enhancement did not complete (${outcome.status}).`);
     }
   }

@@ -29,7 +29,8 @@ on by package name and a pinned tag. The core repo also holds the design notes
 
 ## Enhancement backends
 
-The default **Claude Agent SDK** backend is unchanged. To use an ordinary provider API instead,
+The default **Claude Agent SDK** backend keeps its existing capabilities and vault access. To use
+an ordinary provider API instead,
 choose **LLM provider** under **Enhancement backend** in the plugin settings. That reveals the
 provider, exact model ID, base URL and API-key controls. The supported provider families are
 OpenAI, Anthropic and OpenAI-compatible endpoints, including a locally served Ollama model.

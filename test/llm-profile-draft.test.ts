@@ -73,8 +73,12 @@ describe("LLM profile draft rules", () => {
     });
   });
 
-  test("omits cleared optional fields instead of assigning undefined", () => {
+  test("omits cleared or whitespace-only optional fields instead of assigning undefined", () => {
     expect(validateLlmProfileDraft(draft({ api_key: "", base_url: "" }))).toEqual({
+      ok: true,
+      credentials: { provider: "openai", model: "gpt-5" },
+    });
+    expect(validateLlmProfileDraft(draft({ api_key: " \t\n" }))).toEqual({
       ok: true,
       credentials: { provider: "openai", model: "gpt-5" },
     });
@@ -108,6 +112,15 @@ describe("LLM profile reader states", () => {
       ok: true,
       value: { provider: "openai", model: "gpt-5" },
     }, true)).toMatchObject({ status: "ok", hasStoredKey: false });
+
+    expect(resolveLlmProfileReadState({
+      ok: true,
+      value: { provider: "openai", model: "gpt-5", api_key: " \t\n" },
+    }, true)).toMatchObject({
+      status: "ok",
+      draft: { api_key: "" },
+      hasStoredKey: false,
+    });
   });
 
   test("treats an absent file as an empty first-run form", () => {

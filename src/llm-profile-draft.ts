@@ -50,13 +50,14 @@ export function validateLlmProfileDraft(
 ): LlmProfileDraftValidation {
   const missing = missingLlmProfileFields(draft);
   if (missing.length > 0) return { ok: false, missing };
+  const apiKey = draft.api_key.trim().length === 0 ? undefined : draft.api_key;
 
   return {
     ok: true,
     credentials: {
       provider: draft.provider as LlmProviderId,
       model: draft.model.trim(),
-      ...(draft.api_key.length === 0 ? {} : { api_key: draft.api_key }),
+      ...(apiKey === undefined ? {} : { api_key: apiKey }),
       ...(draft.base_url.trim().length === 0 ? {} : { base_url: draft.base_url.trim() }),
     },
   };
@@ -72,14 +73,19 @@ export function resolveLlmProfileReadState(
       : { status: "missing", draft: EMPTY_LLM_PROFILE_DRAFT, hasStoredKey: false };
   }
 
+  const storedApiKey = result.value.api_key !== undefined &&
+    result.value.api_key.trim().length > 0
+    ? result.value.api_key
+    : "";
+
   return {
     status: "ok",
     draft: {
       provider: result.value.provider,
       model: result.value.model,
-      api_key: result.value.api_key ?? "",
+      api_key: storedApiKey,
       base_url: result.value.base_url ?? "",
     },
-    hasStoredKey: result.value.api_key !== undefined,
+    hasStoredKey: storedApiKey.length > 0,
   };
 }

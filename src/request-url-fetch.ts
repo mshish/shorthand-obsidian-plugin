@@ -14,6 +14,12 @@ export type RequestUrl = (
  *
  * The LLM backend uses only buffered generateText calls, so no streaming bridge is
  * needed here.
+ *
+ * requestUrl has no cancellation API, so this adapter deliberately cannot forward the
+ * Request's signal. A timed-out pass therefore leaves its HTTP request running, and repeated
+ * timeouts can accumulate dangling requests for the life of a capture. This wastes sockets and
+ * memory but cannot corrupt conversation history: LlmAgentClient checks both the pass generation
+ * and signal.aborted before appending a late response.
  */
 export function createRequestUrlFetch(requestUrl: RequestUrl): typeof globalThis.fetch {
   const fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
