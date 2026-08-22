@@ -671,23 +671,55 @@ export default class ShorthandPlugin extends Plugin {
     await this.finishRuntime(runtime, "died");
   }
 
+  /**
+   * A `switch` with a `never` default, not an if/else chain. This handler previously
+   * dropped statuses it did not name, and shorthand-core 0.10.0 added three kinds:
+   * a silent fall-through would have hidden `disabled-for-read-failures`, after which
+   * enhancement is off for the rest of the capture and the user is never told. The
+   * default branch turns the next added kind into a compile error instead.
+   */
   private onEnhanceStatus(status: EnhanceStatus): void {
-    if (status.kind === "started") {
-      this.dispatch({ type: "enhancement-started" });
-    } else if (status.kind === "finished") {
-      this.dispatch({ type: "enhancement-finished" });
-    } else if (status.kind === "expired") {
-      this.dispatch({ type: "enhancement-stopped", message: status.message });
-      new Notice(status.message, 8_000);
-    } else if (status.kind === "error") {
-      this.fail(status.message);
-    } else if (status.kind === "skipped") {
-      this.fail(status.message);
-    } else if (status.kind === "requeued" && status.retryAfterMs !== undefined) {
-      // Only a target that asked for a backoff is actionable. A plain re-queue means
-      // the note kept changing under the writer — i.e. the user is typing during the
-      // meeting — which self-heals on the next pass and must stay silent.
-      this.fail(`${status.message} Close competing file handles; Shorthand will retry on the next pass.`);
+    switch (status.kind) {
+      case "started":
+        this.dispatch({ type: "enhancement-started" });
+        return;
+      case "finished":
+        this.dispatch({ type: "enhancement-finished" });
+        return;
+      case "expired":
+        this.dispatch({ type: "enhancement-stopped", message: status.message });
+        new Notice(status.message, 8_000);
+        return;
+      case "disabled-for-read-failures":
+        // Terminal for this capture: the note could not be read repeatedly and the
+        // kill switch never resets. Before 0.10.0 this arrived as `error`, so losing
+        // it here would silently strand enhancement for the rest of the meeting.
+        this.dispatch({ type: "enhancement-stopped", message: status.message });
+        new Notice(status.message, 8_000);
+        return;
+      case "error":
+      case "skipped":
+        this.fail(status.message);
+        return;
+      case "requeued":
+        // Only a target that asked for a backoff is actionable. A plain re-queue means
+        // the note kept changing under the writer — i.e. the user is typing during the
+        // meeting — which self-heals on the next pass and must stay silent.
+        if (status.retryAfterMs !== undefined) {
+          this.fail(`${status.message} Close competing file handles; Shorthand will retry on the next pass.`);
+        }
+        return;
+      case "timed-out":
+        // Self-healing like a re-queue: the transcript is kept and retried. Only the
+        // eventual drop at the re-queue limit loses data, and that arrives as `error`.
+        return;
+      case "declined":
+        // Fires whenever a gate holds, which is most stream events. Never user-facing.
+        return;
+      default: {
+        const unhandled: never = status;
+        throw new Error(`Unhandled enhancement status: ${JSON.stringify(unhandled)}`);
+      }
     }
   }
 
