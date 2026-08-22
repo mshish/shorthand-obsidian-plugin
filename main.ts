@@ -591,9 +591,9 @@ export default class ShorthandPlugin extends Plugin {
       ...(guidance.length === 0 ? {} : { guidance }),
       maxDurationMs: DEFAULT_CONFIG.enhancement.maxDurationMs,
       // This bound belongs to the runner, not the individual call: there is one runner per
-      // capture, so its closing pass inherits the live bound. That shorter bound is tolerable
-      // because runFinalEnhancementWithRetries can reissue the pass; the standalone command
-      // gets the longer one-shot bound because it cannot.
+      // capture, so its closing pass inherits the live bound. Unlike the core CLI's retry ladder,
+      // the plugin issues that pass once: if it exceeds the bound, only the closing summary is
+      // lost. Standalone "Enhance now" builds its own runner and gets the longer one-shot bound.
       timeoutMs,
       maxTurns: DEFAULT_CONFIG.enhancement.maxTurns,
       ...(claudeExecutable === undefined ? {} : { pathToClaudeCodeExecutable: claudeExecutable }),
