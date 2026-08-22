@@ -63,13 +63,12 @@ import {
 import { ShorthandRecorder, shorthandProvenDown, type RecorderPhase } from "./src/recorder.js";
 import { formatElapsed } from "./src/elapsed.js";
 import { createRequestUrlFetch } from "./src/request-url-fetch.js";
-import { writeLlmCredentials } from "./src/llm-credentials-writer.js";
+import { deleteLlmCredentials, writeLlmCredentials } from "./src/llm-credentials-writer.js";
+import { LlmProfileCommitQueue } from "./src/llm-profile-commit-queue.js";
 import {
   EMPTY_LLM_PROFILE_DRAFT,
-  FRESH_LLM_CREDENTIALS,
   missingLlmProfileFields,
   resolveLlmProfileReadState,
-  validateLlmProfileDraft,
   type LlmProfileDraft,
 } from "./src/llm-profile-draft.js";
 
@@ -850,9 +849,7 @@ class ShorthandSettingTab extends PluginSettingTab {
     let draft: LlmProfileDraft = EMPTY_LLM_PROFILE_DRAFT;
     let storedKey = "";
     let ready = false;
-    let revision = 0;
-    let lastQueuedRevision = 0;
-    let writeQueue = Promise.resolve();
+    let commitQueue: LlmProfileCommitQueue | undefined;
     let clearKeyPointerDown = false;
 
     new Setting(containerEl)
@@ -866,7 +863,7 @@ class ShorthandSettingTab extends PluginSettingTab {
       .setDesc("Loading the provider profile…")
       .addButton((button) => {
         startOverButton = button
-          .setButtonText("Start over")
+          .setButtonText("Discard file")
           .setWarning()
           .onClick(() => { void startOver(); });
         button.buttonEl.hide();
@@ -886,7 +883,7 @@ class ShorthandSettingTab extends PluginSettingTab {
           .onChange((value) => {
             if (value !== "" && value !== "openai" && value !== "anthropic" && value !== "openai-compatible") return;
             draft = { ...draft, provider: value };
-            revision += 1;
+            commitQueue?.acceptEdit(draft);
             showDraftStatus();
           });
         dropdown.selectEl.addEventListener("blur", () => { void commitDraft(); });
@@ -899,7 +896,7 @@ class ShorthandSettingTab extends PluginSettingTab {
       .addText((text) => {
         modelInput = text.setDisabled(true).onChange((value) => {
           draft = { ...draft, model: value };
-          revision += 1;
+          commitQueue?.acceptEdit(draft);
           showDraftStatus();
         });
         text.inputEl.addEventListener("blur", () => { void commitDraft(); });
@@ -912,7 +909,7 @@ class ShorthandSettingTab extends PluginSettingTab {
       .addText((text) => {
         baseUrlInput = text.setDisabled(true).onChange((value) => {
           draft = { ...draft, base_url: value };
-          revision += 1;
+          commitQueue?.acceptEdit(draft);
           showDraftStatus();
         });
         text.inputEl.addEventListener("blur", () => { void commitDraft(); });
@@ -927,7 +924,7 @@ class ShorthandSettingTab extends PluginSettingTab {
           // The rendered field stays blank for a loaded secret. An empty edit therefore
           // restores the carried key; otherwise deleting masked text would clear it by accident.
           draft = { ...draft, api_key: value.length === 0 ? storedKey : value };
-          revision += 1;
+          commitQueue?.acceptEdit(draft);
           showDraftStatus();
         });
         text.inputEl.type = "password";
@@ -942,7 +939,7 @@ class ShorthandSettingTab extends PluginSettingTab {
           .onClick(() => {
             draft = { ...draft, api_key: "" };
             apiKeyInput.setValue("");
-            revision += 1;
+            commitQueue?.acceptEdit(draft);
             clearKeyPointerDown = false;
             showDraftStatus();
             void commitDraft();
@@ -984,47 +981,19 @@ class ShorthandSettingTab extends PluginSettingTab {
     // whole-profile document validated as a unit: keystroke writes would emit profiles core
     // rejects wholesale and would put an API key on disk once for every character typed.
     const commitDraft = async (): Promise<void> => {
-      if (!ready || revision === lastQueuedRevision) return;
-      const validation = validateLlmProfileDraft(draft);
-      if (!validation.ok) {
-        statusSetting.setDesc(`Not saved. Complete: ${validation.missing.join(", ")}.`);
-        return;
-      }
-
-      const committedRevision = revision;
-      const credentials = validation.credentials;
-      lastQueuedRevision = committedRevision;
-      statusSetting.setDesc(`Saving the complete profile to ${credentialsPath}…`);
-      writeQueue = writeQueue.then(async () => {
-        try {
-          await writeLlmCredentials(credentials);
-          if (!isCurrentDisplay()) return;
-          storedKey = credentials.api_key ?? "";
-          if (revision === committedRevision) apiKeyInput.setValue("");
-          setKeyDescription();
-          if (revision === committedRevision) {
-            statusSetting.setDesc(`Profile saved to ${credentialsPath}.`);
-          } else {
-            showDraftStatus();
-          }
-        } catch (error) {
-          if (!isCurrentDisplay()) return;
-          if (revision === committedRevision) lastQueuedRevision = -1;
-          statusSetting.setDesc(`The profile could not be saved: ${errorMessage(error)}`);
-        }
-      });
-      await writeQueue;
+      if (!ready) return;
+      await commitQueue?.commit();
     };
 
     const startOver = async (): Promise<void> => {
       startOverButton.setDisabled(true);
-      statusSetting.setDesc(`Replacing the malformed profile at ${credentialsPath}…`);
+      statusSetting.setDesc(`Discarding the malformed profile at ${credentialsPath}…`);
       try {
-        await writeLlmCredentials(FRESH_LLM_CREDENTIALS);
+        await deleteLlmCredentials();
         if (isCurrentDisplay()) this.display();
       } catch (error) {
         if (!isCurrentDisplay()) return;
-        statusSetting.setDesc(`The profile could not be replaced: ${errorMessage(error)}`);
+        statusSetting.setDesc(`The profile could not be discarded: ${errorMessage(error)}`);
         startOverButton.setDisabled(false);
       }
     };
@@ -1032,7 +1001,7 @@ class ShorthandSettingTab extends PluginSettingTab {
     const renderMalformed = (message: string): void => {
       ready = false;
       setFieldsDisabled(true);
-      statusSetting.setDesc(`${message} Start over replaces the file, including any key that could still be recovered from it by hand.`);
+      statusSetting.setDesc(`${message} Discard file deletes the existing profile, including any key that could still be recovered from it by hand.`);
       startOverButton.buttonEl.show();
       startOverButton.setDisabled(false);
       setKeyDescription("unknown");
@@ -1048,6 +1017,30 @@ class ShorthandSettingTab extends PluginSettingTab {
 
       draft = state.draft;
       storedKey = state.hasStoredKey ? draft.api_key : "";
+      commitQueue = new LlmProfileCommitQueue(draft, {
+        write: writeLlmCredentials,
+        onInvalid: (missing) => {
+          statusSetting.setDesc(`Not saved. Complete: ${missing.join(", ")}.`);
+        },
+        onSaving: () => {
+          statusSetting.setDesc(`Saving the complete profile to ${credentialsPath}…`);
+        },
+        onSaved: (credentials, isLatestRevision) => {
+          if (!isCurrentDisplay()) return;
+          storedKey = credentials.api_key ?? "";
+          if (isLatestRevision) apiKeyInput.setValue("");
+          setKeyDescription();
+          if (isLatestRevision) {
+            statusSetting.setDesc(`Profile saved to ${credentialsPath}.`);
+          } else {
+            showDraftStatus();
+          }
+        },
+        onSaveFailed: (error) => {
+          if (!isCurrentDisplay()) return;
+          statusSetting.setDesc(`The profile could not be saved: ${errorMessage(error)}`);
+        },
+      });
       providerInput.setValue(draft.provider);
       modelInput.setValue(draft.model);
       baseUrlInput.setValue(draft.base_url);

@@ -29,13 +29,6 @@ export const EMPTY_LLM_PROFILE_DRAFT: LlmProfileDraft = {
   base_url: "",
 };
 
-// Start over must replace a malformed file with something core can read immediately;
-// writing an empty JSON shell would leave the user trapped in the same recovery state.
-export const FRESH_LLM_CREDENTIALS: LlmCredentials = {
-  provider: "openai",
-  model: "gpt-5",
-};
-
 export function missingLlmProfileFields(
   draft: LlmProfileDraft,
 ): readonly MissingLlmProfileField[] {

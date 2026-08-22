@@ -50,3 +50,11 @@ export async function writeLlmCredentials(
     if (temporaryCreated && !renamed) await rm(temporary, { force: true });
   }
 }
+
+export async function deleteLlmCredentials(
+  environment: NodeJS.ProcessEnv = process.env,
+): Promise<string> {
+  const target = llmCredentialsPath(environment);
+  await rm(target, { force: true });
+  return target;
+}

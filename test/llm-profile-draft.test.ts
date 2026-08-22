@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   EMPTY_LLM_PROFILE_DRAFT,
-  FRESH_LLM_CREDENTIALS,
   isCompleteLlmProfileDraft,
   missingLlmProfileFields,
   resolveLlmProfileReadState,
@@ -126,7 +125,4 @@ describe("LLM profile reader states", () => {
     });
   });
 
-  test("defines a readable keyless profile for explicit recovery", () => {
-    expect(FRESH_LLM_CREDENTIALS).toEqual({ provider: "openai", model: "gpt-5" });
-  });
 });
