@@ -11,6 +11,7 @@ import { DEFAULT_CONFIG, MAX_GUIDANCE_CHARACTERS } from "shorthand-core";
 describe("plugin settings normalization", () => {
   test("normalizes valid persisted values", () => {
     expect(normalizePluginSettings({
+      backend: "llm",
       shorthandExecutable: "  C:\\Apps\\shorthand.exe ",
       claudeExecutable: " C:\\Apps\\claude.exe ",
       sidecarDirectory: "./Calls\\Transcripts/",
@@ -22,6 +23,7 @@ describe("plugin settings normalization", () => {
       noteTakingGuidance: "  Write terse bullets.  ",
       templateSectionText: " Agenda \n\n Decisions ",
     })).toEqual({
+      backend: "llm",
       shorthandExecutable: "C:\\Apps\\shorthand.exe",
       claudeExecutable: "C:\\Apps\\claude.exe",
       sidecarDirectory: "Calls/Transcripts",
@@ -33,6 +35,22 @@ describe("plugin settings normalization", () => {
       noteTakingGuidance: "Write terse bullets.",
       templateSectionText: "Agenda \n\n Decisions",
     });
+  });
+
+  test("round-trips either note-enhancement backend", () => {
+    expect(normalizePluginSettings({ backend: "llm" }).backend).toBe("llm");
+    expect(normalizePluginSettings({ backend: "claude-agent-sdk" }).backend).toBe("claude-agent-sdk");
+  });
+
+  test("defaults an absent backend to Claude Agent SDK, preserving existing behavior", () => {
+    expect(normalizePluginSettings({}).backend).toBe("claude-agent-sdk");
+    expect(DEFAULT_PLUGIN_SETTINGS.backend).toBe("claude-agent-sdk");
+  });
+
+  test("falls back for malformed note-enhancement backends without throwing", () => {
+    for (const backend of [42, "claude", null, { backend: "llm" }]) {
+      expect(normalizePluginSettings({ backend }).backend).toBe(DEFAULT_PLUGIN_SETTINGS.backend);
+    }
   });
 
   test("defaults the Shorthand control toggles", () => {
