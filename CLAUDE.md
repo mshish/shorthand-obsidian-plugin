@@ -20,7 +20,3 @@ The rest is deliberately not imported — open it only when the work calls for i
   barrel. It loads the built `main.js` under a stub `obsidian`, and it exists
   because CI once built the bundle and never required it, which shipped a load
   failure with every check green.
-
-`onEnhanceStatus` in `main.ts` switches exhaustively over `EnhanceStatus["kind"]`
-with a `never` default. Keep it that way: it was an if/else chain once, and a
-status added upstream fell through silently while every check stayed green.
