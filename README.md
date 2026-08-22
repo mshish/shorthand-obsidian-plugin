@@ -316,6 +316,10 @@ git tag 0.2.0 && git push origin 0.2.0
 npm run build        # attach main.js and manifest.json to the release by hand
 ```
 
+These tags are lightweight, unlike `shorthand-core`'s annotated ones. That is deliberate, not
+drift: Obsidian and BRAT care only that the tag name equals `manifest.json`'s version, and the
+bump script creates it. Do not harmonise the two repos.
+
 `minAppVersion` is never bumped for you — raise it by hand in `manifest.json` first if a release
 needs a newer Obsidian, and the bump records that value against the new version in `versions.json`.
 `versions.json` lets an older Obsidian resolve the newest build it can still run; it is read from
