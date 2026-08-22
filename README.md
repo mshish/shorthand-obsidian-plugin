@@ -266,8 +266,10 @@ npm test        # unit tests plus the bundle-load smoke
 
 `npm test` runs under Bun (`bun test`); npm still owns dependency installation. The bundle-load
 test is the one that matters most — nothing else ever *loads* `main.js`, and a bundle that builds
-cleanly can still throw at Obsidian load. It also asserts a recorded byte baseline, which moves
-whenever core's lockfile does, since esbuild resolves the Claude Agent SDK and zod out of core.
+cleanly can still throw at Obsidian load. It also *reports* drift against a recorded byte
+baseline without failing on it, since that number moves whenever core's lockfile does (esbuild
+resolves the Claude Agent SDK and zod out of core) and whenever the plugin legitimately gains a
+dependency. Read the reported percentage; a jump you cannot account for is the signal.
 
 ## Cutting a release
 
@@ -309,9 +311,9 @@ skipped:
   the `resolved` commit does not move, re-run the install naming the tag explicitly
   (`npm install "shorthand-core@github:mshish/shorthand-core#<tag>"`).
 - `test/plugin-bundle.test.ts` only builds `main.js` when it is absent, so delete it and
-  rebuild first. Otherwise the bundle-size baseline is silently checked against the old core.
-- A core change can move the bundle size and break the bundle-load test long before it breaks
-  a type, so `npm test` is not optional after a bump.
+  rebuild first. Otherwise the reported bundle size describes the old core.
+- A core change can break the bundle-*load* test long before it breaks a type, so `npm test` is
+  not optional after a bump. It can also move the reported bundle size, which is informational.
 
 ## License
 
