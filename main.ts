@@ -8,7 +8,10 @@ import {
   Setting,
   requestUrl,
   type App,
+  type ButtonComponent,
+  type DropdownComponent,
   type TFile,
+  type TextComponent,
 } from "obsidian";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -60,6 +63,15 @@ import {
 import { ShorthandRecorder, shorthandProvenDown, type RecorderPhase } from "./src/recorder.js";
 import { formatElapsed } from "./src/elapsed.js";
 import { createRequestUrlFetch } from "./src/request-url-fetch.js";
+import { writeLlmCredentials } from "./src/llm-credentials-writer.js";
+import {
+  EMPTY_LLM_PROFILE_DRAFT,
+  FRESH_LLM_CREDENTIALS,
+  missingLlmProfileFields,
+  resolveLlmProfileReadState,
+  validateLlmProfileDraft,
+  type LlmProfileDraft,
+} from "./src/llm-profile-draft.js";
 
 /**
  * Shorthand's follower needs a moment after spawn before Shorthand's events reach it, and the
@@ -745,17 +757,36 @@ export default class ShorthandPlugin extends Plugin {
 }
 
 class ShorthandSettingTab extends PluginSettingTab {
+  #displayGeneration = 0;
+
   constructor(app: App, private readonly plugin: ShorthandPlugin) {
     super(app, plugin);
   }
 
   display(): void {
+    const displayGeneration = ++this.#displayGeneration;
     const { containerEl } = this;
     containerEl.empty();
     // No plugin-name heading at the top: Obsidian already titles this pane "Shorthand", and
     // the guidelines reserve headings for separating multiple sections.
     textSetting(containerEl, this.plugin, "Shorthand executable", "Path to shorthand.exe, or a command available on PATH.", "shorthandExecutable");
-    textSetting(containerEl, this.plugin, "Claude executable", "Optional path to claude.exe. Leave blank for automatic detection.", "claudeExecutable");
+    new Setting(containerEl)
+      .setName("Enhancement backend")
+      .setDesc("Choose whether note enhancement uses the Claude Agent SDK or a directly configured LLM provider.")
+      .addDropdown((dropdown) => dropdown
+        .addOption("claude-agent-sdk", "Claude Agent SDK")
+        .addOption("llm", "LLM provider")
+        .setValue(this.plugin.settings.backend)
+        .onChange(async (value) => {
+          if (value !== "claude-agent-sdk" && value !== "llm") return;
+          await this.plugin.saveSettings({ ...this.plugin.settings, backend: value });
+          this.display();
+        }));
+    if (this.plugin.settings.backend === "claude-agent-sdk") {
+      textSetting(containerEl, this.plugin, "Claude executable", "Optional path to claude.exe. Leave blank for automatic detection.", "claudeExecutable");
+    } else {
+      this.displayLlmProfileControls(containerEl, displayGeneration);
+    }
     textSetting(containerEl, this.plugin, "Transcript sidecar directory", "Vault-relative directory used for new transcript notes.", "sidecarDirectory");
     numberSetting(containerEl, this.plugin, "Minimum new characters", "Live-pass transcript threshold.", "minNewChars");
     numberSetting(containerEl, this.plugin, "Minimum interval (ms)", "Minimum time between completed live passes.", "minIntervalMs");
@@ -808,6 +839,228 @@ class ShorthandSettingTab extends PluginSettingTab {
       .setDesc(
         "Shorthand writes through its core atomic file writer, not Obsidian's vault API. Obsidian detects those writes with its file watcher. If a note has unsaved keystrokes in an editor buffer, that buffer can win on its next save and an AI update may be lost. This is the safe direction: user text is never discarded by Shorthand.",
       );
+  }
+
+  private displayLlmProfileControls(
+    containerEl: HTMLElement,
+    displayGeneration: number,
+  ): void {
+    const credentialsPath = llmCredentialsPath();
+    const credentialsFileExisted = existsSync(credentialsPath);
+    let draft: LlmProfileDraft = EMPTY_LLM_PROFILE_DRAFT;
+    let storedKey = "";
+    let ready = false;
+    let revision = 0;
+    let lastQueuedRevision = 0;
+    let writeQueue = Promise.resolve();
+    let clearKeyPointerDown = false;
+
+    new Setting(containerEl)
+      .setName("LLM provider profile")
+      .setHeading()
+      .setDesc("Provider requests use this profile only when the LLM backend is selected.");
+
+    let startOverButton: ButtonComponent;
+    const statusSetting = new Setting(containerEl)
+      .setName("Profile status")
+      .setDesc("Loading the provider profile…")
+      .addButton((button) => {
+        startOverButton = button
+          .setButtonText("Start over")
+          .setWarning()
+          .onClick(() => { void startOver(); });
+        button.buttonEl.hide();
+      });
+
+    let providerInput: DropdownComponent;
+    const providerSetting = new Setting(containerEl)
+      .setName("Provider")
+      .setDesc("Select the API family used for enhancement requests.")
+      .addDropdown((dropdown) => {
+        providerInput = dropdown
+          .addOption("", "Select a provider")
+          .addOption("openai", "OpenAI")
+          .addOption("anthropic", "Anthropic")
+          .addOption("openai-compatible", "OpenAI-compatible")
+          .setDisabled(true)
+          .onChange((value) => {
+            if (value !== "" && value !== "openai" && value !== "anthropic" && value !== "openai-compatible") return;
+            draft = { ...draft, provider: value };
+            revision += 1;
+            showDraftStatus();
+          });
+        dropdown.selectEl.addEventListener("blur", () => { void commitDraft(); });
+      });
+
+    let modelInput: TextComponent;
+    const modelSetting = new Setting(containerEl)
+      .setName("Model")
+      .setDesc("Enter the provider's exact model ID.")
+      .addText((text) => {
+        modelInput = text.setDisabled(true).onChange((value) => {
+          draft = { ...draft, model: value };
+          revision += 1;
+          showDraftStatus();
+        });
+        text.inputEl.addEventListener("blur", () => { void commitDraft(); });
+      });
+
+    let baseUrlInput: TextComponent;
+    const baseUrlSetting = new Setting(containerEl)
+      .setName("Base URL")
+      .setDesc("Required for OpenAI-compatible providers; optional endpoint override for OpenAI and Anthropic.")
+      .addText((text) => {
+        baseUrlInput = text.setDisabled(true).onChange((value) => {
+          draft = { ...draft, base_url: value };
+          revision += 1;
+          showDraftStatus();
+        });
+        text.inputEl.addEventListener("blur", () => { void commitDraft(); });
+      });
+
+    let apiKeyInput: TextComponent;
+    let clearKeyButton: ButtonComponent;
+    const apiKeySetting = new Setting(containerEl)
+      .setName("API key")
+      .addText((text) => {
+        apiKeyInput = text.setDisabled(true).onChange((value) => {
+          // The rendered field stays blank for a loaded secret. An empty edit therefore
+          // restores the carried key; otherwise deleting masked text would clear it by accident.
+          draft = { ...draft, api_key: value.length === 0 ? storedKey : value };
+          revision += 1;
+          showDraftStatus();
+        });
+        text.inputEl.type = "password";
+        text.inputEl.addEventListener("blur", () => {
+          if (!clearKeyPointerDown) void commitDraft();
+        });
+      })
+      .addButton((button) => {
+        clearKeyButton = button
+          .setButtonText("Clear key")
+          .setDisabled(true)
+          .onClick(() => {
+            draft = { ...draft, api_key: "" };
+            apiKeyInput.setValue("");
+            revision += 1;
+            clearKeyPointerDown = false;
+            showDraftStatus();
+            void commitDraft();
+          });
+        button.buttonEl.addEventListener("pointerdown", () => {
+          // Pointer-down precedes the password field's blur. Suppressing that blur prevents
+          // Clear key from first writing a partially typed rotation and then writing a clear.
+          clearKeyPointerDown = true;
+          window.setTimeout(() => { clearKeyPointerDown = false; }, 0);
+        });
+      });
+
+    const isCurrentDisplay = (): boolean => this.#displayGeneration === displayGeneration;
+
+    const setFieldsDisabled = (disabled: boolean): void => {
+      providerSetting.setDisabled(disabled);
+      modelSetting.setDisabled(disabled);
+      baseUrlSetting.setDisabled(disabled);
+      apiKeySetting.setDisabled(disabled);
+      clearKeyButton.setDisabled(disabled);
+    };
+
+    const setKeyDescription = (keyStatus: "known" | "unknown" = "known"): void => {
+      const keyState = keyStatus === "unknown"
+        ? "The stored key status is unknown because the profile could not be read."
+        : storedKey.length > 0 ? "A key is stored." : "No key is stored.";
+      apiKeySetting.setDesc(`${keyState} Leave this field blank to preserve the existing key, enter a value to rotate it, or use Clear key to remove it. The key is stored at ${credentialsPath}, deliberately outside the vault.`);
+    };
+
+    const showDraftStatus = (): void => {
+      if (!ready) return;
+      const missing = missingLlmProfileFields(draft);
+      statusSetting.setDesc(missing.length > 0
+        ? `Not saved. Complete: ${missing.join(", ")}.`
+        : "Complete. Changes stay in memory until the edited field loses focus.");
+    };
+
+    // This deliberately introduces commit-on-blur. The credentials file is an external,
+    // whole-profile document validated as a unit: keystroke writes would emit profiles core
+    // rejects wholesale and would put an API key on disk once for every character typed.
+    const commitDraft = async (): Promise<void> => {
+      if (!ready || revision === lastQueuedRevision) return;
+      const validation = validateLlmProfileDraft(draft);
+      if (!validation.ok) {
+        statusSetting.setDesc(`Not saved. Complete: ${validation.missing.join(", ")}.`);
+        return;
+      }
+
+      const committedRevision = revision;
+      const credentials = validation.credentials;
+      lastQueuedRevision = committedRevision;
+      statusSetting.setDesc(`Saving the complete profile to ${credentialsPath}…`);
+      writeQueue = writeQueue.then(async () => {
+        try {
+          await writeLlmCredentials(credentials);
+          if (!isCurrentDisplay()) return;
+          storedKey = credentials.api_key ?? "";
+          if (revision === committedRevision) apiKeyInput.setValue("");
+          setKeyDescription();
+          if (revision === committedRevision) {
+            statusSetting.setDesc(`Profile saved to ${credentialsPath}.`);
+          } else {
+            showDraftStatus();
+          }
+        } catch (error) {
+          if (!isCurrentDisplay()) return;
+          if (revision === committedRevision) lastQueuedRevision = -1;
+          statusSetting.setDesc(`The profile could not be saved: ${errorMessage(error)}`);
+        }
+      });
+      await writeQueue;
+    };
+
+    const startOver = async (): Promise<void> => {
+      startOverButton.setDisabled(true);
+      statusSetting.setDesc(`Replacing the malformed profile at ${credentialsPath}…`);
+      try {
+        await writeLlmCredentials(FRESH_LLM_CREDENTIALS);
+        if (isCurrentDisplay()) this.display();
+      } catch (error) {
+        if (!isCurrentDisplay()) return;
+        statusSetting.setDesc(`The profile could not be replaced: ${errorMessage(error)}`);
+        startOverButton.setDisabled(false);
+      }
+    };
+
+    const renderMalformed = (message: string): void => {
+      ready = false;
+      setFieldsDisabled(true);
+      statusSetting.setDesc(`${message} Start over replaces the file, including any key that could still be recovered from it by hand.`);
+      startOverButton.buttonEl.show();
+      startOverButton.setDisabled(false);
+      setKeyDescription("unknown");
+    };
+
+    void readLlmCredentials(credentialsPath).then((result) => {
+      if (!isCurrentDisplay()) return;
+      const state = resolveLlmProfileReadState(result, credentialsFileExisted);
+      if (state.status === "malformed") {
+        renderMalformed(state.message);
+        return;
+      }
+
+      draft = state.draft;
+      storedKey = state.hasStoredKey ? draft.api_key : "";
+      providerInput.setValue(draft.provider);
+      modelInput.setValue(draft.model);
+      baseUrlInput.setValue(draft.base_url);
+      apiKeyInput.setValue("");
+      ready = true;
+      setFieldsDisabled(false);
+      setKeyDescription();
+      statusSetting.setDesc(state.status === "missing"
+        ? "Complete the profile. It will be created only after a valid edit is committed."
+        : `Profile loaded from ${credentialsPath}.`);
+    }).catch((error: unknown) => {
+      if (isCurrentDisplay()) renderMalformed(`The LLM profile could not be loaded: ${errorMessage(error)}`);
+    });
   }
 }
 
