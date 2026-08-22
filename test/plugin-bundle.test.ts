@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { copyFile, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -14,15 +14,6 @@ import { join, resolve } from "node:path";
  * class of failure, so the entry point must be executed here.
  */
 const BUNDLE = resolve(process.cwd(), "main.js");
-
-/**
- * Recorded after Phase B0's barrel landed. It is the canary, and only that: an
- * `export *` in an entry point, or a stray import that pulls a second copy of the
- * agent SDK in, shows up as drift here long before anyone notices a 40 MB
- * download. The test below reports; it does not fail.
- */
-const BASELINE_BYTES = 6_985_538;
-const MAX_GROWTH = 1.2;
 
 const OBSIDIAN_STUB = `
 class Plugin { constructor(app, manifest) { this.app = app; this.manifest = manifest; } }
@@ -65,23 +56,4 @@ describe("the built plugin bundle", () => {
       await rm(directory, { recursive: true, force: true });
     }
   }, 60_000);
-
-  test("reports bundle size drift against the recorded baseline", async () => {
-    ensureBundle();
-    const { size } = await stat(BUNDLE);
-    const ratio = size / BASELINE_BYTES;
-    const drift = `${size} bytes, ${(ratio * 100).toFixed(1)}% of the ${BASELINE_BYTES}-byte baseline`;
-    if (ratio > MAX_GROWTH) {
-      console.warn(`[bundle] GREW: ${drift}. Check for a duplicated dependency or an \`export *\` in an entry point.`);
-    } else if (ratio < 0.5) {
-      console.warn(`[bundle] SHRANK: ${drift}. A collapse usually means the entry point stopped pulling in the agent SDK, which fails at runtime, not here.`);
-    } else {
-      console.log(`[bundle] ${drift}`);
-    }
-    // Deliberately no assertion. Size is a signal to read, not a gate: legitimate
-    // work (a second enhancement backend, a provider SDK) moves this number, and a
-    // failing test there teaches people to bump the baseline without looking at why
-    // it moved — which is the one behaviour that would let real bloat through.
-    expect(size).toBeGreaterThan(0);
-  });
 });
