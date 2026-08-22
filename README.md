@@ -20,11 +20,46 @@ on by package name and a pinned tag. The core repo also holds the design notes
 - Shorthand must be running with **Follow Live Transcript Output** enabled under **Advanced
   settings**. If Shorthand is stopped or that setting is disabled, `--follow-stream` exits with code 2
   and Shorthand reports both remedies.
-- The `claude` CLI must be installed and logged in. On Windows the standard
-  `C:\Users\<you>\.local\bin\claude.exe` location is detected; another location can be configured
-  in the plugin's settings tab.
+- For the default Claude Agent SDK enhancement backend, the `claude` CLI must be installed and
+  logged in. On Windows the standard `C:\Users\<you>\.local\bin\claude.exe` location is detected;
+  another location can be configured in the plugin's settings tab. The LLM provider backend does
+  not use this CLI.
 - A desktop, filesystem-backed vault. The plugin is `isDesktopOnly`.
 - Node.js 20+ and npm, to build from source.
+
+## Enhancement backends
+
+The default **Claude Agent SDK** backend keeps its existing capabilities and vault access. To use
+an ordinary provider API instead,
+choose **LLM provider** under **Enhancement backend** in the plugin settings. That reveals the
+provider, exact model ID, base URL and API-key controls. The supported provider families are
+OpenAI, Anthropic and OpenAI-compatible endpoints, including a locally served Ollama model.
+`base_url` is required for **OpenAI-compatible** because that provider name does not identify an
+endpoint; for OpenAI and Anthropic it is an optional override for gateways and proxies.
+
+The provider profile is deliberately kept outside the vault in `llm-credentials.json`:
+
+- Windows: `%APPDATA%\Shorthand\llm-credentials.json` (normally
+  `%USERPROFILE%\AppData\Roaming\Shorthand\llm-credentials.json`)
+- macOS: `~/Library/Application Support/Shorthand/llm-credentials.json`
+- Linux: `$XDG_CONFIG_HOME/shorthand/llm-credentials.json`, or
+  `~/.config/shorthand/llm-credentials.json` when `XDG_CONFIG_HOME` is unset
+
+Obsidian's `data.json` is plaintext and syncs with the vault, so storing an API key there would put
+it on every synced machine and in every vault backup. The API-key field therefore has deliberate
+update semantics: leave it blank to preserve the stored key, enter a value to rotate the key, or
+use **Clear key** to remove it. If the credentials file is malformed, the settings tab reports the
+specific problem and disables the profile fields. **Discard file** deletes the entire profile,
+including any key that might still have been recoverable by editing the file by hand.
+
+The backends do not have the same view of your notes. The LLM provider backend cannot use
+Read/Glob/Grep, so no enhancement pass—including the closing pass or **Enhance now**—looks elsewhere
+in the vault. Its notes will not reference people, projects or prior meetings found in other files.
+The default Claude Agent SDK backend still performs those vault lookups.
+
+Both backends validate the returned section structure before writing. With the LLM provider
+backend, however, generation depends on the endpoint honouring the supplied schema; a weak local
+model may fail validation more often, in which case the existing note sections are kept.
 
 ## Install
 
@@ -266,8 +301,10 @@ npm test        # unit tests plus the bundle-load smoke
 
 `npm test` runs under Bun (`bun test`); npm still owns dependency installation. The bundle-load
 test is the one that matters most — nothing else ever *loads* `main.js`, and a bundle that builds
-cleanly can still throw at Obsidian load. It also asserts a recorded byte baseline, which moves
-whenever core's lockfile does, since esbuild resolves the Claude Agent SDK and zod out of core.
+cleanly can still throw at Obsidian load. It also *reports* drift against a recorded byte
+baseline without failing on it, since that number moves whenever core's lockfile does (esbuild
+resolves the Claude Agent SDK and zod out of core) and whenever the plugin legitimately gains a
+dependency. Read the reported percentage; a jump you cannot account for is the signal.
 
 ## Cutting a release
 
@@ -309,9 +346,9 @@ skipped:
   the `resolved` commit does not move, re-run the install naming the tag explicitly
   (`npm install "shorthand-core@github:mshish/shorthand-core#<tag>"`).
 - `test/plugin-bundle.test.ts` only builds `main.js` when it is absent, so delete it and
-  rebuild first. Otherwise the bundle-size baseline is silently checked against the old core.
-- A core change can move the bundle size and break the bundle-load test long before it breaks
-  a type, so `npm test` is not optional after a bump.
+  rebuild first. Otherwise the reported bundle size describes the old core.
+- A core change can break the bundle-*load* test long before it breaks a type, so `npm test` is
+  not optional after a bump. It can also move the reported bundle size, which is informational.
 
 ## License
 

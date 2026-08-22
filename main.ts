@@ -6,8 +6,12 @@ import {
   Plugin,
   PluginSettingTab,
   Setting,
+  requestUrl,
   type App,
+  type ButtonComponent,
+  type DropdownComponent,
   type TFile,
+  type TextComponent,
 } from "obsidian";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -21,6 +25,9 @@ import {
   detectClaudeExecutable,
   detectShorthandExecutable,
   EnhanceRunner,
+  LlmAgentClient,
+  llmCredentialsPath,
+  readLlmCredentials,
   ShorthandControl,
   SidecarWriter,
   StreamClient,
@@ -55,6 +62,15 @@ import {
 } from "./src/state.js";
 import { ShorthandRecorder, shorthandProvenDown, type RecorderPhase } from "./src/recorder.js";
 import { formatElapsed } from "./src/elapsed.js";
+import { createRequestUrlFetch } from "./src/request-url-fetch.js";
+import { deleteLlmCredentials, writeLlmCredentials } from "./src/llm-credentials-writer.js";
+import { LlmProfileCommitQueue } from "./src/llm-profile-commit-queue.js";
+import {
+  EMPTY_LLM_PROFILE_DRAFT,
+  missingLlmProfileFields,
+  resolveLlmProfileReadState,
+  type LlmProfileDraft,
+} from "./src/llm-profile-draft.js";
 
 /**
  * Shorthand's follower needs a moment after spawn before Shorthand's events reach it, and the
@@ -244,7 +260,11 @@ export default class ShorthandPlugin extends Plugin {
       let enhancer: EnhanceRunner | undefined;
       let enhancementUnavailable: string | undefined;
       try {
-        enhancer = this.createEnhancer(notePath, vaultRoot);
+        enhancer = await this.createEnhancer(
+          notePath,
+          vaultRoot,
+          DEFAULT_CONFIG.enhancement.timeoutMs,
+        );
       } catch (error) {
         enhancementUnavailable = `${errorMessage(error)} Capture will continue with transcript only.`;
       }
@@ -470,7 +490,11 @@ export default class ShorthandPlugin extends Plugin {
         this.fail("The note's shorthand-transcript link resolves outside the vault.");
         return;
       }
-      const enhancer = this.createEnhancer(notePath, vaultRoot);
+      const enhancer = await this.createEnhancer(
+        notePath,
+        vaultRoot,
+        DEFAULT_CONFIG.enhancement.standaloneTimeoutMs,
+      );
       enhancer.appendTranscript(await readFile(sidecarPath, "utf8"));
       const outcome = await enhancer.enhanceNow("link");
       this.reportOutcome(outcome);
@@ -527,19 +551,38 @@ export default class ShorthandPlugin extends Plugin {
     this.fail(`Shorthand control failed: ${result.message}`);
   }
 
-  private createEnhancer(notePath: string, vaultRoot: string): EnhanceRunner {
+  private async createEnhancer(
+    notePath: string,
+    vaultRoot: string,
+    timeoutMs: number,
+  ): Promise<EnhanceRunner> {
+    const backend = this.settings.backend;
     const configuredClaude = this.settings.claudeExecutable;
     const guidance = this.settings.noteTakingGuidance;
-    if (configuredClaude.length > 0 && !existsSync(configuredClaude)) {
-      throw new Error(`claude.exe was not found at "${configuredClaude}". Update the path in Shorthand settings.`);
-    }
-    const claudeExecutable = detectClaudeExecutable(configuredClaude.length === 0 ? undefined : configuredClaude);
-    if (claudeExecutable === undefined && process.platform === "win32") {
-      throw new Error("claude.exe was not found. Install and log in to Claude CLI, or configure its full path in Shorthand settings.");
+    let claudeExecutable: string | undefined;
+    let agent: ClaudeAgentClient | LlmAgentClient;
+    if (backend === "claude-agent-sdk") {
+      if (configuredClaude.length > 0 && !existsSync(configuredClaude)) {
+        throw new Error(`claude.exe was not found at "${configuredClaude}". Update the path in Shorthand settings.`);
+      }
+      claudeExecutable = detectClaudeExecutable(configuredClaude.length === 0 ? undefined : configuredClaude);
+      if (claudeExecutable === undefined && process.platform === "win32") {
+        throw new Error("claude.exe was not found. Install and log in to Claude CLI, or configure its full path in Shorthand settings.");
+      }
+      agent = new ClaudeAgentClient();
+    } else {
+      const credentialsPath = llmCredentialsPath();
+      const credentials = await readLlmCredentials(credentialsPath);
+      if (!credentials.ok) throw new Error(credentials.message);
+      agent = new LlmAgentClient({
+        credentials: credentials.value,
+        credentialsPath,
+        fetch: createRequestUrlFetch(requestUrl),
+      });
     }
     return new EnhanceRunner({
       sink: new MarkdownNoteSink({ notePath, vaultRoot }),
-      agent: new ClaudeAgentClient(),
+      agent,
       minNewChars: this.settings.minNewChars,
       minIntervalMs: this.settings.minIntervalMs,
       // Conditional spread, like pathToClaudeCodeExecutable below: `exactOptionalPropertyTypes`
@@ -547,7 +590,11 @@ export default class ShorthandPlugin extends Plugin {
       // picks the guidance", not "run with no editorial instruction at all".
       ...(guidance.length === 0 ? {} : { guidance }),
       maxDurationMs: DEFAULT_CONFIG.enhancement.maxDurationMs,
-      timeoutMs: DEFAULT_CONFIG.enhancement.timeoutMs,
+      // This bound belongs to the runner, not the individual call: there is one runner per
+      // capture, so its closing pass inherits the live bound. Unlike the core CLI's retry ladder,
+      // the plugin issues that pass once: if it exceeds the bound, only the closing summary is
+      // lost. Standalone "Enhance now" builds its own runner and gets the longer one-shot bound.
+      timeoutMs,
       maxTurns: DEFAULT_CONFIG.enhancement.maxTurns,
       ...(claudeExecutable === undefined ? {} : { pathToClaudeCodeExecutable: claudeExecutable }),
       onStatus: (status) => this.onEnhanceStatus(status),
@@ -634,6 +681,8 @@ export default class ShorthandPlugin extends Plugin {
       new Notice(status.message, 8_000);
     } else if (status.kind === "error") {
       this.fail(status.message);
+    } else if (status.kind === "skipped") {
+      this.fail(status.message);
     } else if (status.kind === "requeued" && status.retryAfterMs !== undefined) {
       // Only a target that asked for a backoff is actionable. A plain re-queue means
       // the note kept changing under the writer — i.e. the user is typing during the
@@ -656,7 +705,7 @@ export default class ShorthandPlugin extends Plugin {
         : "The meeting note was busy. Close competing file handles and run Enhance now again.");
     } else if (outcome.status === "failed") {
       this.fail(outcome.error);
-    } else if (outcome.status !== "not-ready" && outcome.status !== "in-flight") {
+    } else if (outcome.status === "timed-out") {
       this.fail(`Enhancement did not complete (${outcome.status}).`);
     }
   }
@@ -708,17 +757,36 @@ export default class ShorthandPlugin extends Plugin {
 }
 
 class ShorthandSettingTab extends PluginSettingTab {
+  #displayGeneration = 0;
+
   constructor(app: App, private readonly plugin: ShorthandPlugin) {
     super(app, plugin);
   }
 
   display(): void {
+    const displayGeneration = ++this.#displayGeneration;
     const { containerEl } = this;
     containerEl.empty();
     // No plugin-name heading at the top: Obsidian already titles this pane "Shorthand", and
     // the guidelines reserve headings for separating multiple sections.
     textSetting(containerEl, this.plugin, "Shorthand executable", "Path to shorthand.exe, or a command available on PATH.", "shorthandExecutable");
-    textSetting(containerEl, this.plugin, "Claude executable", "Optional path to claude.exe. Leave blank for automatic detection.", "claudeExecutable");
+    new Setting(containerEl)
+      .setName("Enhancement backend")
+      .setDesc("Choose whether note enhancement uses the Claude Agent SDK or a directly configured LLM provider.")
+      .addDropdown((dropdown) => dropdown
+        .addOption("claude-agent-sdk", "Claude Agent SDK")
+        .addOption("llm", "LLM provider")
+        .setValue(this.plugin.settings.backend)
+        .onChange(async (value) => {
+          if (value !== "claude-agent-sdk" && value !== "llm") return;
+          await this.plugin.saveSettings({ ...this.plugin.settings, backend: value });
+          this.display();
+        }));
+    if (this.plugin.settings.backend === "claude-agent-sdk") {
+      textSetting(containerEl, this.plugin, "Claude executable", "Optional path to claude.exe. Leave blank for automatic detection.", "claudeExecutable");
+    } else {
+      this.displayLlmProfileControls(containerEl, displayGeneration);
+    }
     textSetting(containerEl, this.plugin, "Transcript sidecar directory", "Vault-relative directory used for new transcript notes.", "sidecarDirectory");
     numberSetting(containerEl, this.plugin, "Minimum new characters", "Live-pass transcript threshold.", "minNewChars");
     numberSetting(containerEl, this.plugin, "Minimum interval (ms)", "Minimum time between completed live passes.", "minIntervalMs");
@@ -771,6 +839,222 @@ class ShorthandSettingTab extends PluginSettingTab {
       .setDesc(
         "Shorthand writes through its core atomic file writer, not Obsidian's vault API. Obsidian detects those writes with its file watcher. If a note has unsaved keystrokes in an editor buffer, that buffer can win on its next save and an AI update may be lost. This is the safe direction: user text is never discarded by Shorthand.",
       );
+  }
+
+  private displayLlmProfileControls(
+    containerEl: HTMLElement,
+    displayGeneration: number,
+  ): void {
+    const credentialsPath = llmCredentialsPath();
+    const credentialsFileExisted = existsSync(credentialsPath);
+    let draft: LlmProfileDraft = EMPTY_LLM_PROFILE_DRAFT;
+    let storedKey = "";
+    let ready = false;
+    let commitQueue: LlmProfileCommitQueue | undefined;
+    let clearKeyPointerDown = false;
+
+    new Setting(containerEl)
+      .setName("LLM provider profile")
+      .setHeading()
+      .setDesc("Provider requests use this profile only when the LLM backend is selected.");
+
+    let startOverButton: ButtonComponent;
+    const statusSetting = new Setting(containerEl)
+      .setName("Profile status")
+      .setDesc("Loading the provider profile…")
+      .addButton((button) => {
+        startOverButton = button
+          .setButtonText("Discard file")
+          .setWarning()
+          .onClick(() => { void startOver(); });
+        button.buttonEl.hide();
+      });
+
+    let providerInput: DropdownComponent;
+    const providerSetting = new Setting(containerEl)
+      .setName("Provider")
+      .setDesc("Select the API family used for enhancement requests.")
+      .addDropdown((dropdown) => {
+        providerInput = dropdown
+          .addOption("", "Select a provider")
+          .addOption("openai", "OpenAI")
+          .addOption("anthropic", "Anthropic")
+          .addOption("openai-compatible", "OpenAI-compatible")
+          .setDisabled(true)
+          .onChange((value) => {
+            if (value !== "" && value !== "openai" && value !== "anthropic" && value !== "openai-compatible") return;
+            draft = { ...draft, provider: value };
+            commitQueue?.acceptEdit(draft);
+            showDraftStatus();
+          });
+        dropdown.selectEl.addEventListener("blur", () => { void commitDraft(); });
+      });
+
+    let modelInput: TextComponent;
+    const modelSetting = new Setting(containerEl)
+      .setName("Model")
+      .setDesc("Enter the provider's exact model ID.")
+      .addText((text) => {
+        modelInput = text.setDisabled(true).onChange((value) => {
+          draft = { ...draft, model: value };
+          commitQueue?.acceptEdit(draft);
+          showDraftStatus();
+        });
+        text.inputEl.addEventListener("blur", () => { void commitDraft(); });
+      });
+
+    let baseUrlInput: TextComponent;
+    const baseUrlSetting = new Setting(containerEl)
+      .setName("Base URL")
+      .setDesc("Required for OpenAI-compatible providers; optional endpoint override for OpenAI and Anthropic.")
+      .addText((text) => {
+        baseUrlInput = text.setDisabled(true).onChange((value) => {
+          draft = { ...draft, base_url: value };
+          commitQueue?.acceptEdit(draft);
+          showDraftStatus();
+        });
+        text.inputEl.addEventListener("blur", () => { void commitDraft(); });
+      });
+
+    let apiKeyInput: TextComponent;
+    let clearKeyButton: ButtonComponent;
+    const apiKeySetting = new Setting(containerEl)
+      .setName("API key")
+      .addText((text) => {
+        apiKeyInput = text.setDisabled(true).onChange((value) => {
+          // The rendered field stays blank for a loaded secret. An empty edit therefore
+          // restores the carried key; otherwise deleting masked text would clear it by accident.
+          draft = { ...draft, api_key: value.length === 0 ? storedKey : value };
+          commitQueue?.acceptEdit(draft);
+          showDraftStatus();
+        });
+        text.inputEl.type = "password";
+        text.inputEl.addEventListener("blur", () => {
+          if (!clearKeyPointerDown) void commitDraft();
+        });
+      })
+      .addButton((button) => {
+        clearKeyButton = button
+          .setButtonText("Clear key")
+          .setDisabled(true)
+          .onClick(() => {
+            draft = { ...draft, api_key: "" };
+            apiKeyInput.setValue("");
+            commitQueue?.acceptEdit(draft);
+            clearKeyPointerDown = false;
+            showDraftStatus();
+            void commitDraft();
+          });
+        button.buttonEl.addEventListener("pointerdown", () => {
+          // Pointer-down precedes the password field's blur. Suppressing that blur prevents
+          // Clear key from first writing a partially typed rotation and then writing a clear.
+          clearKeyPointerDown = true;
+          window.setTimeout(() => { clearKeyPointerDown = false; }, 0);
+        });
+      });
+
+    const isCurrentDisplay = (): boolean => this.#displayGeneration === displayGeneration;
+
+    const setFieldsDisabled = (disabled: boolean): void => {
+      providerSetting.setDisabled(disabled);
+      modelSetting.setDisabled(disabled);
+      baseUrlSetting.setDisabled(disabled);
+      apiKeySetting.setDisabled(disabled);
+      clearKeyButton.setDisabled(disabled);
+    };
+
+    const setKeyDescription = (keyStatus: "known" | "unknown" = "known"): void => {
+      const keyState = keyStatus === "unknown"
+        ? "The stored key status is unknown because the profile could not be read."
+        : storedKey.length > 0 ? "A key is stored." : "No key is stored.";
+      apiKeySetting.setDesc(`${keyState} Leave this field blank to preserve the existing key, enter a value to rotate it, or use Clear key to remove it. The key is stored at ${credentialsPath}, deliberately outside the vault.`);
+    };
+
+    const showDraftStatus = (): void => {
+      if (!ready) return;
+      const missing = missingLlmProfileFields(draft);
+      statusSetting.setDesc(missing.length > 0
+        ? `Not saved. Complete: ${missing.join(", ")}.`
+        : "Complete. Changes stay in memory until the edited field loses focus.");
+    };
+
+    // This deliberately introduces commit-on-blur. The credentials file is an external,
+    // whole-profile document validated as a unit: keystroke writes would emit profiles core
+    // rejects wholesale and would put an API key on disk once for every character typed.
+    const commitDraft = async (): Promise<void> => {
+      if (!ready) return;
+      await commitQueue?.commit();
+    };
+
+    const startOver = async (): Promise<void> => {
+      startOverButton.setDisabled(true);
+      statusSetting.setDesc(`Discarding the malformed profile at ${credentialsPath}…`);
+      try {
+        await deleteLlmCredentials();
+        if (isCurrentDisplay()) this.display();
+      } catch (error) {
+        if (!isCurrentDisplay()) return;
+        statusSetting.setDesc(`The profile could not be discarded: ${errorMessage(error)}`);
+        startOverButton.setDisabled(false);
+      }
+    };
+
+    const renderMalformed = (message: string): void => {
+      ready = false;
+      setFieldsDisabled(true);
+      statusSetting.setDesc(`${message} Discard file deletes the existing profile, including any key that could still be recovered from it by hand.`);
+      startOverButton.buttonEl.show();
+      startOverButton.setDisabled(false);
+      setKeyDescription("unknown");
+    };
+
+    void readLlmCredentials(credentialsPath).then((result) => {
+      if (!isCurrentDisplay()) return;
+      const state = resolveLlmProfileReadState(result, credentialsFileExisted);
+      if (state.status === "malformed") {
+        renderMalformed(state.message);
+        return;
+      }
+
+      draft = state.draft;
+      storedKey = state.hasStoredKey ? draft.api_key : "";
+      commitQueue = new LlmProfileCommitQueue(draft, {
+        write: writeLlmCredentials,
+        onInvalid: (missing) => {
+          statusSetting.setDesc(`Not saved. Complete: ${missing.join(", ")}.`);
+        },
+        onSaving: () => {
+          statusSetting.setDesc(`Saving the complete profile to ${credentialsPath}…`);
+        },
+        onSaved: (credentials, isLatestRevision) => {
+          if (!isCurrentDisplay()) return;
+          storedKey = credentials.api_key ?? "";
+          if (isLatestRevision) apiKeyInput.setValue("");
+          setKeyDescription();
+          if (isLatestRevision) {
+            statusSetting.setDesc(`Profile saved to ${credentialsPath}.`);
+          } else {
+            showDraftStatus();
+          }
+        },
+        onSaveFailed: (error) => {
+          if (!isCurrentDisplay()) return;
+          statusSetting.setDesc(`The profile could not be saved: ${errorMessage(error)}`);
+        },
+      });
+      providerInput.setValue(draft.provider);
+      modelInput.setValue(draft.model);
+      baseUrlInput.setValue(draft.base_url);
+      apiKeyInput.setValue("");
+      ready = true;
+      setFieldsDisabled(false);
+      setKeyDescription();
+      statusSetting.setDesc(state.status === "missing"
+        ? "Complete the profile. It will be created only after a valid edit is committed."
+        : `Profile loaded from ${credentialsPath}.`);
+    }).catch((error: unknown) => {
+      if (isCurrentDisplay()) renderMalformed(`The LLM profile could not be loaded: ${errorMessage(error)}`);
+    });
   }
 }
 

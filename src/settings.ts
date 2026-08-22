@@ -1,6 +1,7 @@
 import { DEFAULT_CONFIG, MAX_GUIDANCE_CHARACTERS, parseTemplateSections, type Section } from "shorthand-core";
 
 export type ShorthandPluginSettings = Readonly<{
+  backend: "claude-agent-sdk" | "llm";
   shorthandExecutable: string;
   claudeExecutable: string;
   sidecarDirectory: string;
@@ -22,6 +23,7 @@ export type ShorthandPluginSettings = Readonly<{
 }>;
 
 export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
+  backend: "claude-agent-sdk",
   shorthandExecutable: DEFAULT_CONFIG.shorthandBinaryPath,
   claudeExecutable: "",
   sidecarDirectory: DEFAULT_CONFIG.sidecarDirectory.replaceAll("\\", "/"),
@@ -37,6 +39,7 @@ export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
 export function normalizePluginSettings(input: unknown): ShorthandPluginSettings {
   const value = isRecord(input) ? input : {};
   return {
+    backend: backendValue(value.backend, DEFAULT_PLUGIN_SETTINGS.backend),
     shorthandExecutable: nonEmptyString(value.shorthandExecutable, DEFAULT_PLUGIN_SETTINGS.shorthandExecutable),
     claudeExecutable: stringValue(value.claudeExecutable, DEFAULT_PLUGIN_SETTINGS.claudeExecutable),
     sidecarDirectory: vaultRelativeDirectory(value.sidecarDirectory, DEFAULT_PLUGIN_SETTINGS.sidecarDirectory),
@@ -124,6 +127,13 @@ function nonEmptyString(value: unknown, fallback: string): string {
 
 function stringValue(value: unknown, fallback: string): string {
   return typeof value === "string" ? value.trim() : fallback;
+}
+
+function backendValue(
+  value: unknown,
+  fallback: ShorthandPluginSettings["backend"],
+): ShorthandPluginSettings["backend"] {
+  return value === "claude-agent-sdk" || value === "llm" ? value : fallback;
 }
 
 /**
