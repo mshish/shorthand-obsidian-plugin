@@ -6,6 +6,7 @@ import {
   Plugin,
   PluginSettingTab,
   Setting,
+  requestUrl,
   type App,
   type TFile,
 } from "obsidian";
@@ -21,6 +22,9 @@ import {
   detectClaudeExecutable,
   detectShorthandExecutable,
   EnhanceRunner,
+  LlmAgentClient,
+  llmCredentialsPath,
+  readLlmCredentials,
   ShorthandControl,
   SidecarWriter,
   StreamClient,
@@ -55,6 +59,7 @@ import {
 } from "./src/state.js";
 import { ShorthandRecorder, shorthandProvenDown, type RecorderPhase } from "./src/recorder.js";
 import { formatElapsed } from "./src/elapsed.js";
+import { createRequestUrlFetch } from "./src/request-url-fetch.js";
 
 /**
  * Shorthand's follower needs a moment after spawn before Shorthand's events reach it, and the
@@ -244,7 +249,11 @@ export default class ShorthandPlugin extends Plugin {
       let enhancer: EnhanceRunner | undefined;
       let enhancementUnavailable: string | undefined;
       try {
-        enhancer = this.createEnhancer(notePath, vaultRoot);
+        enhancer = await this.createEnhancer(
+          notePath,
+          vaultRoot,
+          DEFAULT_CONFIG.enhancement.timeoutMs,
+        );
       } catch (error) {
         enhancementUnavailable = `${errorMessage(error)} Capture will continue with transcript only.`;
       }
@@ -470,7 +479,11 @@ export default class ShorthandPlugin extends Plugin {
         this.fail("The note's shorthand-transcript link resolves outside the vault.");
         return;
       }
-      const enhancer = this.createEnhancer(notePath, vaultRoot);
+      const enhancer = await this.createEnhancer(
+        notePath,
+        vaultRoot,
+        DEFAULT_CONFIG.enhancement.standaloneTimeoutMs,
+      );
       enhancer.appendTranscript(await readFile(sidecarPath, "utf8"));
       const outcome = await enhancer.enhanceNow("link");
       this.reportOutcome(outcome);
@@ -527,19 +540,38 @@ export default class ShorthandPlugin extends Plugin {
     this.fail(`Shorthand control failed: ${result.message}`);
   }
 
-  private createEnhancer(notePath: string, vaultRoot: string): EnhanceRunner {
+  private async createEnhancer(
+    notePath: string,
+    vaultRoot: string,
+    timeoutMs: number,
+  ): Promise<EnhanceRunner> {
+    const backend = this.settings.backend;
     const configuredClaude = this.settings.claudeExecutable;
     const guidance = this.settings.noteTakingGuidance;
-    if (configuredClaude.length > 0 && !existsSync(configuredClaude)) {
-      throw new Error(`claude.exe was not found at "${configuredClaude}". Update the path in Shorthand settings.`);
-    }
-    const claudeExecutable = detectClaudeExecutable(configuredClaude.length === 0 ? undefined : configuredClaude);
-    if (claudeExecutable === undefined && process.platform === "win32") {
-      throw new Error("claude.exe was not found. Install and log in to Claude CLI, or configure its full path in Shorthand settings.");
+    let claudeExecutable: string | undefined;
+    let agent: ClaudeAgentClient | LlmAgentClient;
+    if (backend === "claude-agent-sdk") {
+      if (configuredClaude.length > 0 && !existsSync(configuredClaude)) {
+        throw new Error(`claude.exe was not found at "${configuredClaude}". Update the path in Shorthand settings.`);
+      }
+      claudeExecutable = detectClaudeExecutable(configuredClaude.length === 0 ? undefined : configuredClaude);
+      if (claudeExecutable === undefined && process.platform === "win32") {
+        throw new Error("claude.exe was not found. Install and log in to Claude CLI, or configure its full path in Shorthand settings.");
+      }
+      agent = new ClaudeAgentClient();
+    } else {
+      const credentialsPath = llmCredentialsPath();
+      const credentials = await readLlmCredentials(credentialsPath);
+      if (!credentials.ok) throw new Error(credentials.message);
+      agent = new LlmAgentClient({
+        credentials: credentials.value,
+        credentialsPath,
+        fetch: createRequestUrlFetch(requestUrl),
+      });
     }
     return new EnhanceRunner({
       sink: new MarkdownNoteSink({ notePath, vaultRoot }),
-      agent: new ClaudeAgentClient(),
+      agent,
       minNewChars: this.settings.minNewChars,
       minIntervalMs: this.settings.minIntervalMs,
       // Conditional spread, like pathToClaudeCodeExecutable below: `exactOptionalPropertyTypes`
@@ -547,7 +579,10 @@ export default class ShorthandPlugin extends Plugin {
       // picks the guidance", not "run with no editorial instruction at all".
       ...(guidance.length === 0 ? {} : { guidance }),
       maxDurationMs: DEFAULT_CONFIG.enhancement.maxDurationMs,
-      timeoutMs: DEFAULT_CONFIG.enhancement.timeoutMs,
+      // This bound belongs to the runner, not the individual call: a capture reuses its
+      // live runner for the closing pass because that path has a retry ladder, while the
+      // standalone command gets the longer one-shot bound because it has no retry.
+      timeoutMs,
       maxTurns: DEFAULT_CONFIG.enhancement.maxTurns,
       ...(claudeExecutable === undefined ? {} : { pathToClaudeCodeExecutable: claudeExecutable }),
       onStatus: (status) => this.onEnhanceStatus(status),
@@ -633,6 +668,8 @@ export default class ShorthandPlugin extends Plugin {
       this.dispatch({ type: "enhancement-stopped", message: status.message });
       new Notice(status.message, 8_000);
     } else if (status.kind === "error") {
+      this.fail(status.message);
+    } else if (status.kind === "skipped") {
       this.fail(status.message);
     } else if (status.kind === "requeued" && status.retryAfterMs !== undefined) {
       // Only a target that asked for a backoff is actionable. A plain re-queue means
