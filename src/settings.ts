@@ -18,6 +18,14 @@ export type ShorthandPluginSettings = Readonly<{
    * core regardless and is not reachable from here.
    */
   noteTakingGuidance: string;
+  /**
+   * Logs every enhancement status, plus core's per-transition machine trace, to the
+   * console. Off by default because the trace is one line per microstep. It exists
+   * because the two self-healing outcomes — a plain re-queue and a timeout — are
+   * deliberately silent in the UI, so a capture that keeps re-queueing looks identical
+   * to one that is idle. Snapshotted per capture, so it applies to the next one.
+   */
+  debugLogging: boolean;
   /** One heading per line. Empty means core's `DEFAULT_CONFIG.templateSections`, for the same reason. */
   templateSectionText: string;
 }>;
@@ -32,6 +40,7 @@ export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
   enableLiveEnhancement: true,
   controlShorthandRecording: true,
   useShorthandPostProcessing: false,
+  debugLogging: false,
   noteTakingGuidance: "",
   templateSectionText: "",
 });
@@ -54,6 +63,9 @@ export function normalizePluginSettings(input: unknown): ShorthandPluginSettings
     useShorthandPostProcessing: typeof value.useShorthandPostProcessing === "boolean"
       ? value.useShorthandPostProcessing
       : DEFAULT_PLUGIN_SETTINGS.useShorthandPostProcessing,
+    debugLogging: typeof value.debugLogging === "boolean"
+      ? value.debugLogging
+      : DEFAULT_PLUGIN_SETTINGS.debugLogging,
     noteTakingGuidance: guidanceText(value.noteTakingGuidance, DEFAULT_PLUGIN_SETTINGS.noteTakingGuidance),
     templateSectionText: headingListText(value.templateSectionText, DEFAULT_PLUGIN_SETTINGS.templateSectionText),
   };

@@ -9,6 +9,15 @@ import {
 import { DEFAULT_CONFIG, MAX_GUIDANCE_CHARACTERS } from "shorthand-core";
 
 describe("plugin settings normalization", () => {
+  test("debugLogging defaults to false when absent or malformed, independently of the other toggles", () => {
+    // Both booleans in the fixture above are true, which cannot catch a cross-wire to a
+    // neighbouring toggle. These pin it apart from useShorthandPostProcessing.
+    expect(normalizePluginSettings({}).debugLogging).toBe(false);
+    expect(normalizePluginSettings({ debugLogging: "yes" }).debugLogging).toBe(false);
+    expect(normalizePluginSettings({ useShorthandPostProcessing: true }).debugLogging).toBe(false);
+    expect(normalizePluginSettings({ debugLogging: true }).useShorthandPostProcessing).toBe(false);
+  });
+
   test("normalizes valid persisted values", () => {
     expect(normalizePluginSettings({
       backend: "llm",
@@ -20,6 +29,7 @@ describe("plugin settings normalization", () => {
       enableLiveEnhancement: false,
       controlShorthandRecording: false,
       useShorthandPostProcessing: true,
+      debugLogging: true,
       noteTakingGuidance: "  Write terse bullets.  ",
       templateSectionText: " Agenda \n\n Decisions ",
     })).toEqual({
@@ -32,6 +42,7 @@ describe("plugin settings normalization", () => {
       enableLiveEnhancement: false,
       controlShorthandRecording: false,
       useShorthandPostProcessing: true,
+      debugLogging: true,
       noteTakingGuidance: "Write terse bullets.",
       templateSectionText: "Agenda \n\n Decisions",
     });

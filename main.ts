@@ -580,6 +580,9 @@ export default class ShorthandPlugin extends Plugin {
         fetch: createRequestUrlFetch(requestUrl),
       });
     }
+    // Snapshotted, not read live: core takes traceMachine once at construction, so reading
+    // the setting live for statuses would let the two streams disagree mid-capture.
+    const debugLogging = this.settings.debugLogging;
     return new EnhanceRunner({
       sink: new MarkdownNoteSink({ notePath, vaultRoot }),
       agent,
@@ -597,7 +600,11 @@ export default class ShorthandPlugin extends Plugin {
       timeoutMs,
       maxTurns: DEFAULT_CONFIG.enhancement.maxTurns,
       ...(claudeExecutable === undefined ? {} : { pathToClaudeCodeExecutable: claudeExecutable }),
-      onStatus: (status) => this.onEnhanceStatus(status),
+      // Both together, or neither: core routes its error log to `logger` only when no
+      // `onStatus` is supplied, and we always supply one — so without `traceMachine` a
+      // logger here would be silent. The trace is the whole point of the toggle.
+      ...(debugLogging ? { logger: console, traceMachine: true } : {}),
+      onStatus: (status) => this.onEnhanceStatus(status, debugLogging),
     });
   }
 
@@ -678,7 +685,9 @@ export default class ShorthandPlugin extends Plugin {
    * enhancement is off for the rest of the capture and the user is never told. The
    * default branch turns the next added kind into a compile error instead.
    */
-  private onEnhanceStatus(status: EnhanceStatus): void {
+  private onEnhanceStatus(status: EnhanceStatus, debugLogging = this.settings.debugLogging): void {
+    // Before the switch, so the two intentionally silent outcomes are still observable.
+    if (debugLogging) console.debug(`[shorthand:status] ${JSON.stringify(status)}`);
     switch (status.kind) {
       case "started":
         this.dispatch({ type: "enhancement-started" });
@@ -840,6 +849,12 @@ class ShorthandSettingTab extends PluginSettingTab {
       .addToggle((toggle) => toggle
         .setValue(this.plugin.settings.useShorthandPostProcessing)
         .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, useShorthandPostProcessing: value })));
+    new Setting(containerEl)
+      .setName("Debug logging")
+      .setDesc("Log every enhancement status and state transition to the developer console (Ctrl+Shift+I). Off by default because it is noisy. Turn it on when the note stops updating but capture looks healthy: a re-queue and a timeout both put the transcript back and retry, so they are deliberately silent in the UI and look identical to an idle capture from outside. Applies to the next capture, not one already running.")
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.debugLogging)
+        .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, debugLogging: value })));
 
     new Setting(containerEl)
       .setName("Note writing")
