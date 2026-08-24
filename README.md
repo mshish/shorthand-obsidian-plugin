@@ -348,8 +348,9 @@ skipped:
   resolution and leave the lockfile untouched even after the tag in `package.json` changes; if
   the `resolved` commit does not move, re-run the install naming the tag explicitly
   (`npm install "shorthand-core@github:mshish/shorthand-core#<tag>"`).
-- `test/plugin-bundle.test.ts` only builds `main.js` when it is absent, so delete it and
-  rebuild first. Otherwise the load test exercises a bundle built against the old core.
+- `test/plugin-bundle.test.ts` fails when `main.js` is missing or older than its sources, so
+  run `npm run build` after bumping the pin. It will not silently exercise a bundle built
+  against the old core.
 - A core change can break the bundle-*load* test long before it breaks a type, so `npm test` is
   not optional after a bump.
 

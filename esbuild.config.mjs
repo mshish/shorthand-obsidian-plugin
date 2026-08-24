@@ -29,8 +29,8 @@ const prod = process.argv[2] === "production";
  * automated here so a watch rebuild lands in the vault without a second command.
  *
  * The build still writes `main.js` at the repository root and copies from there rather than
- * pointing `outfile` at the vault: the bundle-load test resolves it from the root and rebuilds
- * it there when missing, releases attach that same file, and the recorded byte baseline has to
+ * pointing `outfile` at the vault: the bundle-load test resolves it from the root and fails if
+ * it is missing or stale, releases attach that same file, and the recorded byte baseline has to
  * keep meaning one file. Unset, nothing is copied and the build behaves as it always has.
  */
 const vaultPluginDirectory = process.env.OBSIDIAN_PLUGIN_DIR;

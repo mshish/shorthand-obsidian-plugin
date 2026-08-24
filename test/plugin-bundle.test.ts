@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -26,10 +25,47 @@ class FileSystemAdapter {}
 module.exports = { Plugin, PluginSettingTab, Modal, Notice, Setting, MarkdownView, FileSystemAdapter };
 `;
 
+/**
+ * Inputs that can change what the bundle contains: the entry point and its module graph, the
+ * build configuration itself, and the resolved dependency set. This is deliberately broader
+ * than esbuild's import graph — package-lock.json catches a core-pin bump, which changes the
+ * bundled code without touching a single file in src/.
+ *
+ * It is not exhaustive and cannot be: a dependency rebuilt in place under node_modules moves
+ * no file listed here. It covers every way this repo's own workflow changes the bundle.
+ */
+const BUNDLE_SOURCES = ["main.ts", "src", "package.json", "package-lock.json", "esbuild.config.mjs"];
+
+function newestSourceMtimeMs(target: string): number {
+  const stats = statSync(target);
+  if (!stats.isDirectory()) return stats.mtimeMs;
+  // Seed with the directory's own mtime, not 0. Deleting or renaming a file touches the
+  // directory but leaves every surviving child older than the bundle — so a reduction over
+  // children alone would call a bundle fresh when a module had just been removed from it.
+  return readdirSync(target)
+    .map((entry) => newestSourceMtimeMs(join(target, entry)))
+    .reduce((newest, candidate) => Math.max(newest, candidate), stats.mtimeMs);
+}
+
+/**
+ * A bundle that is absent, or older than its sources, is not the code under test.
+ *
+ * This throws in both cases rather than building, and that is the whole point: esbuild's
+ * deliver-to-vault plugin runs on build.onEnd, so any build this file triggers copies into a
+ * live Obsidian vault whenever OBSIDIAN_PLUGIN_DIR is set. A test suite must never deliver
+ * mid-edit code to a vault, so building stays an explicit act the developer performs.
+ */
 function ensureBundle(): void {
-  if (existsSync(BUNDLE)) return;
-  const built = spawnSync(process.execPath, ["esbuild.config.mjs", "production"], { stdio: "inherit" });
-  if (built.status !== 0) throw new Error("main.js is missing and `npm run build` failed.");
+  if (!existsSync(BUNDLE)) {
+    throw new Error("main.js does not exist. Run `npm run build` before `npm test`.");
+  }
+  const bundleMtimeMs = statSync(BUNDLE).mtimeMs;
+  const newestSource = BUNDLE_SOURCES
+    .map((source) => newestSourceMtimeMs(resolve(process.cwd(), source)))
+    .reduce((newest, candidate) => Math.max(newest, candidate), 0);
+  if (newestSource > bundleMtimeMs) {
+    throw new Error("main.js is older than its sources. Run `npm run build` before `npm test`.");
+  }
 }
 
 describe("the built plugin bundle", () => {
