@@ -98,6 +98,23 @@ describe("passIntervalDescription", () => {
       .toBe("Live passes run no more often than once every 1 minute 30 seconds. The value is in milliseconds.");
   });
 
+  test("the duration is faithful to the stored milliseconds, never rounded to a tidier one", () => {
+    // Divides evenly, so it reads as seconds.
+    expect(passIntervalDescription(30_000))
+      .toBe("Live passes run no more often than once every 30 seconds. The value is in milliseconds.");
+    // Does not divide evenly. "2 seconds" would name a value the user never entered, and
+    // data.json is hand-editable, so this is reachable.
+    expect(passIntervalDescription(1_500))
+      .toBe("Live passes run no more often than once every 1500 milliseconds. The value is in milliseconds.");
+    expect(passIntervalDescription(1_499))
+      .toBe("Live passes run no more often than once every 1499 milliseconds. The value is in milliseconds.");
+    expect(passIntervalDescription(90_500))
+      .toBe("Live passes run no more often than once every 90500 milliseconds. The value is in milliseconds.");
+    // The field's floor, which must stay singular.
+    expect(passIntervalDescription(1))
+      .toBe("Live passes run no more often than once every 1 millisecond. The value is in milliseconds.");
+  });
+
   test("zero is a legal stored value and gets its own sentence", () => {
     // minIntervalMs normalizes with a floor of 0, so this is reachable from the UI.
     expect(passIntervalDescription(0))
@@ -122,12 +139,15 @@ describe("baseUrlDescription", () => {
 describe("apiKeyDescription", () => {
   const semantics = "Blank keeps the stored key, a new value replaces it, and Clear key removes it.";
 
-  test("a key that exists, or might, explains what blank does to it", () => {
+  test("a stored key explains what blank does to it, because the field cannot show it", () => {
     expect(apiKeyDescription("stored")).toBe(`A key is stored. ${semantics}`);
-    expect(apiKeyDescription("unknown")).toBe(`The stored key cannot be read. ${semantics}`);
   });
 
-  test("with no key stored, the row does not offer three actions it does not have", () => {
+  test("the states that can take none of those three actions offer none of them", () => {
+    // Nothing stored: blank keeps nothing and Clear key removes nothing. Unreadable profile:
+    // renderMalformed disables the field and the Clear key button before setting this
+    // description, so all three are unavailable while the sentence is on screen.
     expect(apiKeyDescription("absent")).toBe("No key is stored.");
+    expect(apiKeyDescription("unknown")).toBe("The stored key cannot be read.");
   });
 });

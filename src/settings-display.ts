@@ -64,21 +64,30 @@ export function baseUrlDescription(provider: string): string {
 export type StoredKeyState = "stored" | "absent" | "unknown";
 
 export function apiKeyDescription(state: StoredKeyState): string {
-  // The blank/replace/clear tail answers "what happens if I leave this blank", which is a real
-  // question only while a key exists that the password field cannot show. With nothing stored,
-  // blank keeps nothing and Clear key removes nothing, so the tail would offer three actions
-  // the state does not have and contradict the sentence in front of it.
+  // The blank/replace/clear tail belongs to exactly one state. It answers "what happens if I
+  // leave this blank", which is a real question only where a key exists that the password field
+  // cannot show and all three actions can be taken. With nothing stored, blank keeps nothing and
+  // Clear key removes nothing. When the profile cannot be read, the caller disables the field
+  // and the Clear key button before this renders, so none of the three is available while the
+  // sentence is on screen — and Discard file, the one action that state does offer, is described
+  // on the row that owns the button.
   if (state === "absent") return "No key is stored.";
-  const stored = state === "stored" ? "A key is stored." : "The stored key cannot be read.";
-  return `${stored} Blank keeps the stored key, a new value replaces it, and Clear key removes it.`;
+  if (state === "unknown") return "The stored key cannot be read.";
+  return "A key is stored. Blank keeps the stored key, a new value replaces it, and Clear key removes it.";
 }
 
 /** Callers clamp to >= 1 first, so this never has to render a zero duration. */
 function formatDuration(milliseconds: number): string {
   // countOf, not a bare template. 1 is reachable — the field's floor is 1ms, not 1000 — and
   // "1 milliseconds" is the sort of thing a user reads as sloppiness in the whole plugin.
-  if (milliseconds < 1000) return countOf(milliseconds, "millisecond");
-  const totalSeconds = Math.round(milliseconds / 1000);
+  //
+  // Milliseconds are also the fallback for anything that is not a whole number of seconds.
+  // Seconds and minutes are only reached where the conversion is exact, so the sentence can
+  // never name a number the user did not enter: rounding 1500 to "2 seconds" reports a
+  // different value than the one in force, which is the opposite of what rule 4 is for. The
+  // round values people actually type still read as seconds and minutes.
+  if (milliseconds % 1000 !== 0) return countOf(milliseconds, "millisecond");
+  const totalSeconds = milliseconds / 1000;
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   if (minutes === 0) return countOf(seconds, "second");
