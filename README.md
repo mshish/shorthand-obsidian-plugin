@@ -138,12 +138,19 @@ Obsidian prefixes these with the plugin name in the palette, so they appear as
 - **Start capture on this note**
 - **Stop capture**
 - **Enhance now**
+- **Clean up this note**
 - **Toggle Shorthand recording**
 - **Cancel Shorthand recording**
 
 Capture starts only on the active Markdown note. If it has no ownership markers, the plugin offers
 to append a seeded marker scaffold. Malformed, duplicate, nested, or inverted markers are never
 repaired automatically.
+
+**Enhance now** and **Clean up this note** are the same pass over two different inputs, and
+each is offered only while a Markdown note is open. **Enhance now** needs a transcript — the
+running capture's, or the sidecar the note links to. **Clean up this note** deliberately
+supplies none, so it works on a note written or dictated by hand; it refuses a note that
+already has a transcript rather than silently ignoring it.
 
 The last two commands work with or without an active capture and drive Shorthand's own recorder
 directly. They do not start or stop a capture — but they are not inert either: **Cancel Shorthand

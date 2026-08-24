@@ -47,6 +47,10 @@ import {
   transcriptWikilink,
 } from "shorthand-core/markdown";
 import {
+  resolveEnhanceMode,
+  type EnhanceCommandId,
+} from "./src/enhance-mode.js";
+import {
   DEFAULT_PLUGIN_SETTINGS,
   defaultTemplateSectionText,
   normalizePluginSettings,
@@ -187,7 +191,20 @@ export default class ShorthandPlugin extends Plugin {
     this.addCommand({
       id: "enhance-now",
       name: "Enhance now",
-      callback: () => { void this.enhanceActiveNote(); },
+      checkCallback: (checking: boolean) => {
+        if (!this.hasActiveMarkdownFile()) return false;
+        if (!checking) void this.enhanceActiveNote();
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "clean-up-this-note",
+      name: "Clean up this note",
+      checkCallback: (checking: boolean) => {
+        if (!this.hasActiveMarkdownFile()) return false;
+        if (!checking) void this.cleanUpActiveNote();
+        return true;
+      },
     });
     // The user's manual override of Shorthand's recorder, independent of capture: a plain
     // toggle and an unconditional cancel, neither of which touches the capture itself.
@@ -474,6 +491,19 @@ export default class ShorthandPlugin extends Plugin {
   }
 
   async enhanceActiveNote(): Promise<void> {
+    await this.runEnhancement("enhance-now");
+  }
+
+  async cleanUpActiveNote(): Promise<void> {
+    await this.runEnhancement("clean-up-this-note");
+  }
+
+  /**
+   * Both enhancement commands, which differ only in where the text comes from. The choice
+   * itself is `resolveEnhanceMode` in src/, because nothing here can be imported under
+   * bun test; what is left here is the file and vault plumbing that has to touch Obsidian.
+   */
+  private async runEnhancement(command: EnhanceCommandId): Promise<void> {
     const file = this.activeMarkdownFile();
     if (file === undefined) return;
     const vaultRoot = this.vaultRoot();
@@ -481,34 +511,58 @@ export default class ShorthandPlugin extends Plugin {
     const notePath = resolve(vaultRoot, file.path);
     try {
       if (!await this.ensureScaffold(notePath)) return;
-      if (this.#capture?.notePath === notePath && this.#capture.enhancer !== undefined) {
-        const outcome = await this.#capture.enhancer.enhanceNow("link");
-        this.reportOutcome(outcome);
-        return;
+      // Two separate facts, deliberately. A capture survives a failed createEnhancer, so
+      // "is a capture running here" and "does it have a runner" are not the same question,
+      // and collapsing them would let a second enhancer start on a note a capture still owns.
+      const captureOnThisNote = this.#capture?.notePath === notePath;
+      const liveEnhancer = captureOnThisNote ? this.#capture?.enhancer : undefined;
+      const mode = resolveEnhanceMode({
+        command,
+        captureOnThisNote,
+        captureEnhancerReady: liveEnhancer !== undefined,
+        transcriptLink: transcriptWikilink(await readFile(notePath, "utf8")),
+        writeTranscriptNote: this.settings.writeTranscriptNote,
+      });
+      switch (mode.kind) {
+        case "unavailable":
+          this.fail(mode.message);
+          return;
+        case "live-capture":
+          // `liveEnhancer` is what made this mode reachable; re-checking is for the compiler.
+          if (liveEnhancer === undefined) return;
+          this.reportOutcome(await liveEnhancer.enhanceNow("link"));
+          return;
+        case "transcript": {
+          const sidecarPath = resolve(vaultRoot, addMarkdownExtension(mode.transcriptLink));
+          if (!isInside(vaultRoot, sidecarPath)) {
+            this.fail("The note's shorthand-transcript link resolves outside the vault.");
+            return;
+          }
+          const enhancer = await this.createEnhancer(
+            notePath,
+            vaultRoot,
+            DEFAULT_CONFIG.enhancement.standaloneTimeoutMs,
+          );
+          enhancer.appendTranscript(await readFile(sidecarPath, "utf8"));
+          this.reportOutcome(await enhancer.enhanceNow("link"));
+          return;
+        }
+        case "notes-only": {
+          const enhancer = await this.createEnhancer(
+            notePath,
+            vaultRoot,
+            DEFAULT_CONFIG.enhancement.standaloneTimeoutMs,
+          );
+          // No appendTranscript, and core's empty-transcript gate would decline forever
+          // without the waiver. The note's own prose reaches the model as `user_notes`.
+          this.reportOutcome(await enhancer.enhanceNow("link", { allowEmptyTranscript: true }));
+          return;
+        }
+        default: {
+          const unhandled: never = mode;
+          throw new Error(`Unhandled enhancement mode: ${JSON.stringify(unhandled)}`);
+        }
       }
-      const content = await readFile(notePath, "utf8");
-      const linked = transcriptWikilink(content);
-      if (linked === undefined) {
-        this.fail(
-          this.settings.writeTranscriptNote
-            ? "This note has no shorthand-transcript wikilink. Start capture once to create and link a sidecar."
-            : "This note has no shorthand-transcript wikilink, and \"Write transcript note\" is off. Turn it on in Shorthand settings, then start capture once to create and link a sidecar.",
-        );
-        return;
-      }
-      const sidecarPath = resolve(vaultRoot, addMarkdownExtension(linked));
-      if (!isInside(vaultRoot, sidecarPath)) {
-        this.fail("The note's shorthand-transcript link resolves outside the vault.");
-        return;
-      }
-      const enhancer = await this.createEnhancer(
-        notePath,
-        vaultRoot,
-        DEFAULT_CONFIG.enhancement.standaloneTimeoutMs,
-      );
-      enhancer.appendTranscript(await readFile(sidecarPath, "utf8"));
-      const outcome = await enhancer.enhanceNow("link");
-      this.reportOutcome(outcome);
     } catch (error) {
       this.fail(`Enhancement failed: ${errorMessage(error)}`);
     }
@@ -767,6 +821,16 @@ export default class ShorthandPlugin extends Plugin {
     if (file !== null && file !== undefined) return file;
     new Notice("Open a Markdown note before running Shorthand.");
     return undefined;
+  }
+
+  /**
+   * The `checkCallback` predicate for both enhancement commands. Silent, unlike
+   * `activeMarkdownFile`: Obsidian calls this while merely rendering the command palette,
+   * so a Notice here would fire at a user who never chose the command.
+   */
+  private hasActiveMarkdownFile(): boolean {
+    const file = this.app.workspace.getActiveViewOfType(MarkdownView)?.file;
+    return file !== null && file !== undefined;
   }
 
   private vaultRoot(): string | undefined {
