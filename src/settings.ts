@@ -123,6 +123,47 @@ export function defaultTemplateSectionText(): string {
   return DEFAULT_CONFIG.templateSections.map(({ heading }) => heading).join("\n");
 }
 
+export type PromptFieldMode = "default" | "custom";
+
+/**
+ * What one field of the prompt modal is showing right now. `mode` is never stored: it is
+ * derived from the stored string, because a second stored key could disagree with the text
+ * and there would be no way to tell which one was right.
+ *
+ * `seeded` is modal-session state and is likewise never stored. It records that this field has
+ * already been filled from the default once, so a later switch to Custom leaves the editor
+ * alone. Without it, "has the user cleared this box on purpose?" and "has this box never been
+ * filled?" are the same observation, and the second reading silently overwrites the first.
+ */
+export type PromptFieldState = Readonly<{
+  mode: PromptFieldMode;
+  editorText: string;
+  seeded: boolean;
+}>;
+
+/**
+ * Empty stored value means "use the default", so it derives the default mode.
+ *
+ * A stored custom value counts as already seeded: the box holds the user's own text, and
+ * nothing should ever overwrite it.
+ */
+export function initialPromptFieldState(stored: string): PromptFieldState {
+  const trimmed = stored.trim();
+  return trimmed.length === 0
+    ? { mode: "default", editorText: "", seeded: false }
+    : { mode: "custom", editorText: stored, seeded: true };
+}
+
+/**
+ * What gets written to `data.json`. The default mode always stores "", never a copy of the
+ * default's text — even though `editorText` may still hold that text from a seeded edit the
+ * user then backed out of. Storing the copy would freeze the user at whatever core's guidance
+ * said that day instead of letting them keep inheriting improvements to it.
+ */
+export function storedPromptFieldValue(state: PromptFieldState): string {
+  return state.mode === "default" ? "" : state.editorText;
+}
+
 function vaultRelativeDirectory(value: unknown, fallback: string): string {
   if (typeof value !== "string") return fallback;
   const normalized = value.trim().replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/+$/, "");

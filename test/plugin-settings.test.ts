@@ -2,9 +2,12 @@ import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_PLUGIN_SETTINGS,
   defaultTemplateSectionText,
+  initialPromptFieldState,
   normalizePluginSettings,
   resolveTemplateSections,
+  storedPromptFieldValue,
   validatePromptSettings,
+  type PromptFieldState,
 } from "../src/settings.js";
 import { DEFAULT_CONFIG, MAX_GUIDANCE_CHARACTERS } from "shorthand-core";
 
@@ -236,5 +239,28 @@ describe("prompt modal validation", () => {
       expect(result.error).toContain("Agenda");
       expect(result.error).toContain("more than once");
     }
+  });
+});
+
+describe("prompt field mode derivation", () => {
+  test("an empty stored value derives the default mode, unseeded", () => {
+    expect(initialPromptFieldState("")).toEqual({ mode: "default", editorText: "", seeded: false });
+    expect(initialPromptFieldState("   \n  ")).toEqual({ mode: "default", editorText: "", seeded: false });
+  });
+
+  test("a stored value derives the custom mode, counts as seeded, and round-trips its text", () => {
+    expect(initialPromptFieldState("Be terse.")).toEqual({ mode: "custom", editorText: "Be terse.", seeded: true });
+    expect(storedPromptFieldValue(initialPromptFieldState("Be terse."))).toBe("Be terse.");
+  });
+
+  // The load-bearing property. Storing "" rather than a copy of the default is what keeps a
+  // user inheriting improvements to core's guidance; storing the default's text freezes them
+  // at whatever it said the day they opened the modal. A control that looks correct on screen
+  // and stores the text anyway is the exact failure this test exists to catch.
+  test("the default mode stores an empty string, never the default's text", () => {
+    const defaultText = "You maintain the AI-owned section block of a meeting note.";
+    const state: PromptFieldState = { mode: "default", editorText: defaultText, seeded: true };
+    expect(storedPromptFieldValue(state)).toBe("");
+    expect(storedPromptFieldValue(state)).not.toBe(defaultText);
   });
 });
