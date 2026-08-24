@@ -104,8 +104,7 @@ situations:
    and nothing on screen says which unit it is.
 2. **The stored value is not what the field shows.** `normalizePluginSettings` is the trust
    boundary for `data.json` and rewrites what it is given — a rejected folder path falls back
-   to the default, an empty executable becomes `shorthand`. The field shows what was typed;
-   the description shows what is in force.
+   to the default. The field shows what was typed; the description shows what is in force.
 
 When neither applies, rule 2 wins and the row gets no description.
 

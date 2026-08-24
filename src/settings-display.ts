@@ -22,7 +22,7 @@ export function shorthandExecutableDescription(stored: string): string {
   const trimmed = stored.trim();
   if (trimmed.length === 0) return "Shorthand is found automatically.";
   if (/[\\/]/.test(trimmed)) return "";
-  return "This resolves relative to Obsidian's folder, not your Shorthand install — clear the field to detect it automatically.";
+  return "A bare name resolves relative to Obsidian's working folder, not PATH — clear the field to detect Shorthand automatically.";
 }
 
 /** Empty means core detects the CLI itself, and the path it finds is shown nowhere. */

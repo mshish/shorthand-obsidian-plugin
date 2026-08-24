@@ -21,9 +21,9 @@ describe("shorthandExecutableDescription", () => {
       .toBe("Shorthand is found automatically.");
   });
 
-  test("a bare command name steers back to blank: it resolves relative to Obsidian's folder, not PATH", () => {
+  test("a bare command name steers back to blank: it resolves relative to Obsidian's working folder, not PATH", () => {
     expect(shorthandExecutableDescription("shorthand"))
-      .toBe("This resolves relative to Obsidian's folder, not your Shorthand install — clear the field to detect it automatically.");
+      .toBe("A bare name resolves relative to Obsidian's working folder, not PATH — clear the field to detect Shorthand automatically.");
   });
 
   test("a path describes nothing: the field already shows it", () => {
