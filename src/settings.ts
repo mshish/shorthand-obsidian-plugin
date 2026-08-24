@@ -164,6 +164,25 @@ export function storedPromptFieldValue(state: PromptFieldState): string {
   return state.mode === "default" ? "" : state.editorText;
 }
 
+/**
+ * Seeds on the first switch to custom and never again.
+ *
+ * The guard is `seeded`, not "is the box empty". Those differ in exactly one case, and it is a
+ * case users hit: clear the box to write from scratch, flip to "Default" to re-read the
+ * original, flip back — and an emptiness test would refill the box with the default, throwing
+ * away the blank canvas the user deliberately made. Flipping across to compare is the one thing
+ * this control exists for, so it must be free.
+ */
+export function choosePromptFieldMode(
+  state: PromptFieldState,
+  mode: PromptFieldMode,
+  effectiveDefault: string,
+): PromptFieldState {
+  if (mode === "default") return { ...state, mode: "default" };
+  if (state.seeded) return { ...state, mode: "custom" };
+  return { mode: "custom", editorText: effectiveDefault, seeded: true };
+}
+
 function vaultRelativeDirectory(value: unknown, fallback: string): string {
   if (typeof value !== "string") return fallback;
   const normalized = value.trim().replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/+$/, "");

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_PLUGIN_SETTINGS,
+  choosePromptFieldMode,
   defaultTemplateSectionText,
   initialPromptFieldState,
   normalizePluginSettings,
@@ -262,5 +263,39 @@ describe("prompt field mode derivation", () => {
     const state: PromptFieldState = { mode: "default", editorText: defaultText, seeded: true };
     expect(storedPromptFieldValue(state)).toBe("");
     expect(storedPromptFieldValue(state)).not.toBe(defaultText);
+  });
+
+  test("the first switch to custom seeds the editor from the effective default", () => {
+    const seeded = choosePromptFieldMode(initialPromptFieldState(""), "custom", "Write plainly.");
+    expect(seeded).toEqual({ mode: "custom", editorText: "Write plainly.", seeded: true });
+  });
+
+  // The case an "is the box empty" guard gets wrong. Clearing the box is a deliberate act;
+  // flipping to the default to re-read it and back must not undo that.
+  test("a deliberately cleared editor is not re-seeded on a later switch to custom", () => {
+    const seeded = choosePromptFieldMode(initialPromptFieldState(""), "custom", "Write plainly.");
+    const cleared: PromptFieldState = { ...seeded, editorText: "" };
+    const backedOut = choosePromptFieldMode(cleared, "default", "Write plainly.");
+    const returned = choosePromptFieldMode(backedOut, "custom", "Write plainly.");
+    expect(returned.editorText).toBe("");
+    expect(storedPromptFieldValue(returned)).toBe("");
+  });
+
+  test("switching back to custom keeps the user's edit instead of re-seeding over it", () => {
+    const seeded = choosePromptFieldMode(initialPromptFieldState(""), "custom", "Write plainly.");
+    const edited: PromptFieldState = { ...seeded, editorText: "Write plainly. Name owners." };
+    const backedOut = choosePromptFieldMode(edited, "default", "Write plainly.");
+    const returned = choosePromptFieldMode(backedOut, "custom", "Write plainly.");
+    expect(returned.editorText).toBe("Write plainly. Name owners.");
+  });
+
+  // Seeding is the risk in this design: it puts the default's text in an editable field, and
+  // saving from there stores a frozen copy. That is correct once the user has chosen to
+  // customise — but only while "Default" is still a one-click route back to "".
+  test("choosing the default after a seeded edit stores an empty string", () => {
+    const seeded = choosePromptFieldMode(initialPromptFieldState(""), "custom", "Write plainly.");
+    const backedOut = choosePromptFieldMode(seeded, "default", "Write plainly.");
+    expect(storedPromptFieldValue(backedOut)).toBe("");
+    expect(storedPromptFieldValue(backedOut)).not.toBe("Write plainly.");
   });
 });
