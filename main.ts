@@ -931,12 +931,12 @@ class ShorthandSettingTab extends PluginSettingTab {
         .setValue(this.plugin.settings.debugLogging)
         .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, debugLogging: value })));
 
+    // setHeading() rather than a raw <h3>: the guidelines call for it, and it inherits
+    // Obsidian's own settings typography instead of hardcoding a heading level.
     new Setting(containerEl)
       .setName("Note writing")
       .setHeading()
-      .setDesc(
-        "How the AI is told to write, and which sections a new note starts with. Both are optional: left empty, Shorthand follows its own defaults, so they keep improving with each release instead of freezing at whatever the text was the day you edited it. A custom prompt cannot break note writing — the output schema and Shorthand's safety rules are enforced regardless of what you write.",
-      );
+      .setDesc("Shorthand's defaults change with each release. Anything you customize stays as you wrote it.");
     // Which of the two are overridden, so the pane answers "am I on the defaults?" without
     // opening the window. This is read at render time, which is why the modal re-renders the
     // pane on save — otherwise the row would keep reporting the state from before the edit.
@@ -947,20 +947,11 @@ class ShorthandSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Note-taking prompt and starting sections")
       .setDesc(overridden.length === 0
-        ? "Both follow Shorthand's defaults. Opens in its own window: Obsidian's settings rows hold single-line fields, and both of these are multi-line."
-        : `Custom ${overridden.join(" and ")} in use. Opens in its own window.`)
+        ? "Both follow Shorthand's defaults."
+        : `Custom ${overridden.join(" and ")} in use.`)
       .addButton((button) => button
         .setButtonText("Edit…")
         .onClick(() => new NotePromptModal(this.app, this.plugin, () => this.display()).open()));
-
-    // setHeading() rather than a raw <h3>: the guidelines call for it, and it inherits
-    // Obsidian's own settings typography instead of hardcoding a heading level.
-    new Setting(containerEl)
-      .setName("Direct-file write limitation")
-      .setHeading()
-      .setDesc(
-        "Shorthand writes through its core atomic file writer, not Obsidian's vault API. Obsidian detects those writes with its file watcher. If a note has unsaved keystrokes in an editor buffer, that buffer can win on its next save and an AI update may be lost. This is the safe direction: user text is never discarded by Shorthand.",
-      );
   }
 
   private displayLlmProfileControls(
