@@ -10,6 +10,138 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-24-plugin-polish-design.md`
 
+---
+
+## Start here — state, and how this gets executed
+
+Written for a session with no memory of how this plan came to exist. Read this section before
+anything else.
+
+### Where things stand
+
+Nothing in this plan has been implemented. Every commit on `obsidian-shorthand` `main` since
+`42eae9e` is documentation — this plan and its spec — and none are pushed:
+
+```
+docs: add the execution process to the plan   <- this section
+docs: fix the four defects from Codex's fourth plan review    c2c526b
+docs: fix the eight defects from Codex's third plan review    27afd58
+docs: fix the eight defects from Codex's second plan review   a6f7e7f
+docs: fix the nine defects Codex found in the implementation plan  46cb478
+docs: add the implementation plan for the plugin polish work  44f07a9
+docs: spec the pre-publication plugin polish work             42eae9e
+```
+
+`shorthand-core` is untouched and still at `0.10.0`. The plugin still pins
+`github:mshish/shorthand-core#0.10.0`. Task 1 is the first line of code anyone writes.
+
+An untracked `.serena/` sits in both working trees. **It is not yours.** Never `git add -A`,
+`git add .`, or `git commit -a`; every `git add` in this plan names explicit paths. A bare
+`git status --porcelain` is therefore never empty here — scope status checks to the paths you
+care about.
+
+### How this plan was built, and what that means for trusting it
+
+Four agents drafted the sections in parallel against the real code; a fifth spliced them. The
+result was then reviewed by Codex four times, which found **29 defects**, all fixed. Two things
+follow:
+
+1. **The line numbers and quoted code have been verified**, at commit `42eae9e`. Earlier tasks
+   still shift later ones, so anchor edits on the quoted text, not the number. Each task
+   restates the text it expects to find.
+2. **Rounds 2 and 3 were dominated by consequences of the previous round's fixes.** Task 0
+   changes shared test infrastructure, and its knock-on effects surfaced across three separate
+   review rounds. If you change anything shared, sweep every call site at once rather than
+   fixing the instances you happen to notice.
+
+Do not re-review the plan from scratch before starting. Do not treat it as infallible either —
+if a task's quoted code does not match the file, stop and say so rather than improvising.
+
+### Execution process
+
+**Subagent-driven.** One fresh subagent per task, using `superpowers:subagent-driven-development`.
+Each subagent gets that task's section plus the Global Constraints below — not the whole file.
+
+**Codex reviews each increment before the next begins.** This is a requirement of the work, not
+an optional extra:
+
+```
+implement the increment's tasks → run its gate → Codex review → fix findings → next increment
+```
+
+Invoke Codex through the `mcp__codex-cli__codex` tool with `sandbox: "read-only"` and
+`reasoningEffort: "high"`, pointed at the repository the increment touched.
+
+> **Set `model: "gpt-5.6-sol"` explicitly.** The tool's default is `gpt-5.3-codex`, which this
+> account cannot use — it fails with *"model is not supported when using Codex with a ChatGPT
+> account"*. `gpt-5.1-codex-max` fails the same way. `gpt-5.6-sol` is what
+> `~/.codex/config.toml` is configured for and is the one known to work.
+
+Ask Codex for defects with file and line references, and tell it to say "clean" rather than pad
+a report. Verify what it reports against the code before acting — across four rounds its
+findings were accurate, but it also produced false positives about this environment (it claimed
+POSIX commands would not run, when Git Bash is available, and that skills were missing when it
+simply could not see the catalog).
+
+**Copy work additionally runs `no-ai-slop`** — Task 40 Step 7 over the style guide, Task 42 over
+the full set of setting strings before any of them land.
+
+### Increment order, and the one that is hard to unwind
+
+Task numbers are non-contiguous by design — each section was drafted in its own range so the
+splice could not collide. There are 28 tasks.
+
+| Increment | Tasks | Repo | What |
+| --- | --- | --- | --- |
+| 0 | 0 | plugin | Make the bundle test reject a stale `main.js` |
+| 1 | 1–2 | **core** | `enhanceNow` gains `allowEmptyTranscript`; **push and tag `0.11.0`** |
+| 2 | 3–5 | plugin | Bump the pin (first commit), add "Clean up this note" |
+| 3 | 20–25 | plugin | Delete "Use Shorthand post-processing" entirely |
+| 4 | 40–41 | plugin | Write `docs/settings-copy-style.md`, point `AGENTS.md` at it |
+| 5 | 42–49 | plugin | Rewrite every setting name and description; move detail to README |
+| 6 | 60–65 | plugin | Advanced section, prompt editor, guideline fixes |
+
+**Increment 1 ends in a pushed git tag.** Everything before it is local and freely amendable;
+that tag is not. Core must be pushed and tagged before increment 2 can bump the pin, and the
+bump must be increment 2's first commit so every later commit builds from a clean checkout.
+
+Increment 0 is independent of core and can be done first regardless — it makes every later
+"the gate passed" claim mean something.
+
+### Decisions already made — do not relitigate
+
+These were settled with the human, several of them against an earlier draft of the spec. The
+spec records the reasoning; the short version:
+
+- **Advanced settings are a plain visible section at the bottom, not a toggle.** Obsidian core
+  does it this way, and the `visible` predicate that would hide them needs app version 1.13.0
+  against a `minAppVersion` of 1.5.0.
+- **"Transcript folder" stays in Basic**, directly under "Write transcript note" and still
+  conditional. This overrides the spec's original Basic/Advanced table.
+- **"Use Shorthand post-processing" is deleted, not reworded.** It also removes the
+  snapshot-at-capture-start rule, which is the real prize.
+- **`"toggle-post-process"` stays in core's `ControlSignal` union.** Removing an exported union
+  member is a breaking retype for no gain.
+- **The prompt editor's modes are "Default" and "Custom"**, not "Use default"/"Customize" —
+  rule 6 of the style guide bans generic verbs in naming labels. The `Edit…` button keeps its
+  verb; buttons invoke, so an imperative is correct there.
+- **Doc links ship pointing at README sections** even though the repo is private and they 404
+  for others until publication.
+- **Publication itself is out of scope.** The human has a separate plan for it.
+
+### Three pre-existing bugs this work surfaces
+
+Not invented by the plan — found while writing it, and each is fixed by a specific task:
+
+- `main.ts:844` tells users to run **"Enhance active note"**. No such command exists; it is
+  **"Enhance now"**. (Task 45)
+- `shorthand-core/docs/ENHANCEMENT-LIMITS.md:38` claims `enhanceNow()` "skips the two threshold
+  gates". It does not, and never has. (Task 1)
+- `test/plugin-bundle.test.ts:30` only builds when `main.js` is absent, so the test written to
+  catch a broken bundle passes against a stale one. (Task 0)
+
+---
+
 ## Global Constraints
 
 Every task's requirements implicitly include this section.
