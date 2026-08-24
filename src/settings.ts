@@ -12,11 +12,8 @@ export type ShorthandPluginSettings = Readonly<{
   useShorthandPostProcessing: boolean;
   /**
    * Whether capture creates and maintains a linked transcript sidecar note holding the raw
-   * transcript on disk. Off by default: enhancement is fed from the in-memory transcript
-   * during a live capture regardless of this setting, so a fresh install writes nothing to the
-   * vault beyond the meeting note itself. Turning this on also makes "Enhance active note"
-   * able to re-drive enhancement from a past capture after Obsidian restarts, since that
-   * command has no in-memory transcript to fall back on and reads the sidecar file instead.
+   * transcript on disk. Off by default, so a fresh install writes nothing to the vault beyond
+   * the meeting note itself.
    */
   writeTranscriptNote: boolean;
   /**
