@@ -4,7 +4,7 @@
 
 **Goal:** Make the Obsidian plugin read as a product before publication — settings copy a user can act on, an enhancement command that works without a transcript, and a prompt editor that shows what it is replacing.
 
-**Architecture:** Six increments across two repositories. `shorthand-core` gains one additive option on `EnhanceRunner.enhanceNow` so a caller can force a pass with no new transcript; everything else lands in `obsidian-shorthand`. Rules go in `src/` where `bun test` can reach them, because `main.ts` cannot be imported under test; `main.ts` keeps only Obsidian wiring.
+**Architecture:** Seven increments (0 through 6) across two repositories. `shorthand-core` gains one additive option on `EnhanceRunner.enhanceNow` so a caller can force a pass with no new transcript; everything else lands in `obsidian-shorthand`. Rules go in `src/` where `bun test` can reach them, because `main.ts` cannot be imported under test; `main.ts` keeps only Obsidian wiring.
 
 **Tech Stack:** TypeScript (strict, no `any`), Obsidian plugin API 1.5.7 typings against `minAppVersion` 1.5.0, `bun:test`, esbuild, xstate 5 (core's enhancement runner).
 
@@ -283,15 +283,21 @@ cd /d/tools/obsidian-shorthand && grep -rn "when it is absent\|rebuilds it there
 
 Expected: no output.
 
-- [ ] **Step 7: Run the rest of the gate**
+- [ ] **Step 7: Run the full gate, in order**
 
-Run:
+Step 6 edited `esbuild.config.mjs`, and this task just added that file to `BUNDLE_SOURCES` —
+so the bundle Step 5 built is now stale by the very rule you wrote. A typecheck alone would
+miss it and the commit would go out with a bundle that its own test would reject. Rebuild:
 
 ```sh
-cd /d/tools/obsidian-shorthand && npx tsc --noEmit
+cd /d/tools/obsidian-shorthand && npx tsc --noEmit && npm run build && npm test
 ```
 
-Expected: no output, exit 0.
+Expected: PASS. If the bundle test fails with "main.js is older than its sources", the build
+did not run — read the chain, do not re-run `npm test` on its own.
+
+This is also the first live demonstration that the new check works on a real edit rather than
+a synthetic `touch`.
 
 - [ ] **Step 8: Commit**
 
@@ -624,7 +630,7 @@ note" command is the reason it exists.
 - [ ] **Step 7: Commit**
 
 ```sh
-cd D:/tools/shorthand-repos/shorthand-core && git add src/agent/runner.ts test/enhance-runner.test.ts docs/CONTRACT.md docs/ENHANCEMENT-LIMITS.md package.json && git commit -m "feat: let a caller waive the empty-transcript gate on a link pass
+cd D:/tools/shorthand-repos/shorthand-core && git add src/agent/runner.ts test/enhance-runner.test.ts docs/CONTRACT.md docs/ENHANCEMENT-LIMITS.md package.json && git commit -m "feat!: let a caller waive the empty-transcript gate on a link pass
 
 A note written by hand has no transcript and never will, so the gate declines it
 forever. The gate itself is right and stays: it is what stops a capture paying for
@@ -633,11 +639,26 @@ a closing pass with nothing new to say. Callers that know better opt out per cal
 The gate was never in ENHANCEMENT-LIMITS.md, which made the 'honours the first
 three' line beside the table wrong before this change. Both are fixed here.
 
-Obsidian's 'Clean up this note' is the first consumer."
+Obsidian's 'Clean up this note' is the first consumer.
+
+BREAKING CHANGE: EnhanceRunner.enhanceNow is retyped. It gains an optional
+second parameter, options?: Readonly<{ allowEmptyTranscript?: boolean }>. Every
+existing call site still compiles; the marker is here because core's AGENTS.md
+requires it for any retyped export, and because the 0.x minor slot is the
+breaking slot."
 ```
 
-All four files go in one commit because core's `AGENTS.md` requires the limits
-table and the contract to move with the behaviour they describe. Do not split
+**Why `feat!:` and the footer, when nothing actually breaks for callers.** Adding
+an optional parameter is backward compatible, so the instinct is a plain `feat:`.
+But core's `AGENTS.md` says breaking changes "get a `!` and a `BREAKING CHANGE:`
+footer naming every removed or **retyped** export" — retyping is the trigger, not
+caller breakage — and the same rule is why this release takes the minor slot
+rather than a patch. The footer says plainly that call sites are unaffected, so
+nobody reads the marker as worse news than it is.
+
+All five files go in one commit because core's `AGENTS.md` requires the limits
+table and the contract to move with the behaviour they describe, and because the
+version bump must not be separable from the change it versions. Do not split
 them.
 
 ---
@@ -839,15 +860,44 @@ describe("enhancement mode selection", () => {
     expect(resolveEnhanceMode({
       command: "enhance-now",
       captureOnThisNote: true,
+      captureEnhancerReady: true,
       transcriptLink: "Transcripts/2026-08-24-1200",
       writeTranscriptNote: true,
     })).toEqual({ kind: "live-capture" });
+  });
+
+  // A capture survives a failed createEnhancer (main.ts:267–276), so this state is reachable.
+  // Both commands must refuse it. Falling through would run a standalone enhancer against a
+  // note the live capture is still writing, and nothing downstream arbitrates between them.
+  test("a capture whose enhancer failed refuses Enhance now rather than starting a second one", () => {
+    const mode = resolveEnhanceMode({
+      command: "enhance-now",
+      captureOnThisNote: true,
+      captureEnhancerReady: false,
+      transcriptLink: "Transcripts/2026-08-24-1200",
+      writeTranscriptNote: true,
+    });
+    expect(mode.kind).toBe("unavailable");
+    expect(mode).toHaveProperty("message", expect.stringContaining("Stop the capture"));
+  });
+
+  test("a capture whose enhancer failed still refuses Clean up this note", () => {
+    const mode = resolveEnhanceMode({
+      command: "clean-up-this-note",
+      captureOnThisNote: true,
+      captureEnhancerReady: false,
+      transcriptLink: undefined,
+      writeTranscriptNote: false,
+    });
+    expect(mode.kind).toBe("unavailable");
+    expect(mode).not.toEqual({ kind: "notes-only" });
   });
 
   test("without a capture, a linked transcript is the source", () => {
     expect(resolveEnhanceMode({
       command: "enhance-now",
       captureOnThisNote: false,
+      captureEnhancerReady: false,
       transcriptLink: "Transcripts/2026-08-24-1200",
       writeTranscriptNote: true,
     })).toEqual({ kind: "transcript", transcriptLink: "Transcripts/2026-08-24-1200" });
@@ -857,6 +907,7 @@ describe("enhancement mode selection", () => {
     const mode = resolveEnhanceMode({
       command: "enhance-now",
       captureOnThisNote: false,
+      captureEnhancerReady: false,
       transcriptLink: undefined,
       writeTranscriptNote: true,
     });
@@ -870,6 +921,7 @@ describe("enhancement mode selection", () => {
     const mode = resolveEnhanceMode({
       command: "enhance-now",
       captureOnThisNote: false,
+      captureEnhancerReady: false,
       transcriptLink: undefined,
       writeTranscriptNote: false,
     });
@@ -882,6 +934,7 @@ describe("enhancement mode selection", () => {
     expect(resolveEnhanceMode({
       command: "clean-up-this-note",
       captureOnThisNote: false,
+      captureEnhancerReady: false,
       transcriptLink: undefined,
       writeTranscriptNote: true,
     })).toEqual({ kind: "notes-only" });
@@ -893,6 +946,7 @@ describe("enhancement mode selection", () => {
     expect(resolveEnhanceMode({
       command: "clean-up-this-note",
       captureOnThisNote: false,
+      captureEnhancerReady: false,
       transcriptLink: undefined,
       writeTranscriptNote: false,
     })).toEqual({ kind: "notes-only" });
@@ -903,6 +957,7 @@ describe("enhancement mode selection", () => {
     const mode = resolveEnhanceMode({
       command: "clean-up-this-note",
       captureOnThisNote: false,
+      captureEnhancerReady: false,
       transcriptLink: "Transcripts/2026-08-24-1200",
       writeTranscriptNote: true,
     });
@@ -914,6 +969,7 @@ describe("enhancement mode selection", () => {
     const mode = resolveEnhanceMode({
       command: "clean-up-this-note",
       captureOnThisNote: true,
+      captureEnhancerReady: true,
       transcriptLink: undefined,
       writeTranscriptNote: true,
     });
@@ -950,8 +1006,16 @@ export type EnhanceCommandId = "enhance-now" | "clean-up-this-note";
 
 export type EnhanceRequest = Readonly<{
   command: EnhanceCommandId;
-  /** A capture is running on *this* note and built an enhancer for it. */
+  /**
+   * A capture is running on *this* note. Deliberately separate from `captureEnhancerReady`:
+   * `startCaptureOnActiveNote` keeps a capture alive when `createEnhancer` throws, recording
+   * the reason in `enhancementUnavailable` (main.ts:267–276). Deriving this from
+   * `capture.enhancer !== undefined` would read that capture as absent and let a second,
+   * standalone enhancer start writing the note the live capture already owns.
+   */
   captureOnThisNote: boolean;
+  /** Whether that capture actually has a runner. False when enhancer construction failed. */
+  captureEnhancerReady: boolean;
   /** The vault-relative `shorthand-transcript` target, or undefined when the note has none. */
   transcriptLink: string | undefined;
   writeTranscriptNote: boolean;
@@ -983,7 +1047,16 @@ export function resolveEnhanceMode(request: EnhanceRequest): EnhanceMode {
     }
     return { kind: "notes-only" };
   }
-  if (request.captureOnThisNote) return { kind: "live-capture" };
+  if (request.captureOnThisNote) {
+    if (request.captureEnhancerReady) return { kind: "live-capture" };
+    // A capture with no runner. Refusing is the only safe answer: falling through would start
+    // a second enhancer against a note the capture is still writing, and the two would race.
+    // The user's route out is to stop the capture, which is what the message says.
+    return {
+      kind: "unavailable",
+      message: "Shorthand is capturing this note but could not start enhancement. Stop the capture, then run this command again.",
+    };
+  }
   if (request.transcriptLink !== undefined) {
     return { kind: "transcript", transcriptLink: request.transcriptLink };
   }
@@ -1126,10 +1199,15 @@ import {
     const notePath = resolve(vaultRoot, file.path);
     try {
       if (!await this.ensureScaffold(notePath)) return;
-      const liveEnhancer = this.#capture?.notePath === notePath ? this.#capture.enhancer : undefined;
+      // Two separate facts, deliberately. A capture survives a failed createEnhancer, so
+      // "is a capture running here" and "does it have a runner" are not the same question,
+      // and collapsing them would let a second enhancer start on a note a capture still owns.
+      const captureOnThisNote = this.#capture?.notePath === notePath;
+      const liveEnhancer = captureOnThisNote ? this.#capture?.enhancer : undefined;
       const mode = resolveEnhanceMode({
         command,
-        captureOnThisNote: liveEnhancer !== undefined,
+        captureOnThisNote,
+        captureEnhancerReady: liveEnhancer !== undefined,
         transcriptLink: transcriptWikilink(await readFile(notePath, "utf8")),
         writeTranscriptNote: this.settings.writeTranscriptNote,
       });
@@ -1313,7 +1391,7 @@ plainly rather than inventing one.
 **5. Do not touch `shorthand-core`.** Core declares `"toggle-post-process"` in its exported
 `ControlSignal` union and never uses it. That member **stays** — removing an exported union member
 is a breaking retype for no gain, and the spec puts it out of scope. The plugin simply stops
-selecting it. Core is pinned at `github:mshish/shorthand-core#0.10.0` and a local edit in the core
+selecting it. Core is pinned at `github:mshish/shorthand-core#0.11.0` (moved there by Task 3) and a local edit in the core
 checkout is invisible here anyway.
 
 **6. No data migration.** A `data.json` that still holds `useShorthandPostProcessing` simply stops
@@ -1332,7 +1410,7 @@ npx tsc --noEmit      # tsconfig includes main.ts, src/**/*.ts AND test/**/*.ts
 npm run build         # runs `tsc --noEmit` then `node esbuild.config.mjs production`
 ```
 
-Tasks 20–24 gate on `npm test` and `npx tsc --noEmit`. Task 25 runs all three.
+Tasks 20–24 gate on `npx tsc --noEmit` and a targeted `npm test -- test/plugin-settings.test.ts`, which skips the bundle test and so needs no build. Task 25 runs the full gate: `npx tsc --noEmit && npm run build && npm test`.
 
 ---
 
@@ -1370,8 +1448,10 @@ with `"toggle-transcription"` and `"toggle-post-process"` appears nowhere in the
   cd /d/tools/obsidian-shorthand && grep -n "recordingSignalFor\|recordingSignal()\|toggle-post-process" main.ts
   ```
 
-  Expect exactly five hits: lines 197, 299, 538, 539, 1307, 1308 (`recordingSignal()` at 538 is the
-  declaration, 539 its body). If you see a sixth, stop and read it before deleting anything.
+  Expect exactly six hits: lines 197, 299, 538, 539, 1307 and 1308. Two of those pairs are one
+  construct each — `recordingSignal()` at 538 is the declaration and 539 its body; the same holds
+  for `recordingSignalFor` at 1307/1308. If you see a seventh, stop and read it before deleting
+  anything.
 
 - [ ] **Step 2: Run test to verify it fails** — *inverted for a deletion.* Establish that the
   before-state is clean, because the only signal this task can produce is "the deletion introduced
@@ -1935,17 +2015,18 @@ This is separate from Tasks 20–22 because it is the only comment work outside 
   cd /d/tools/obsidian-shorthand && grep -rn "post-processing\|post processing" src test README.md
   ```
 
-  Expect exactly three hits: `src/state.ts:8`, `test/plugin-state.test.ts:33`, and README lines 159
-  and 210 (Task 25). Nothing in `src/settings.ts` or `src/recorder.ts`.
+  Expect exactly four hits: `src/state.ts:8`, `test/plugin-state.test.ts:33`, and README lines 159
+  and 210. The two README hits belong to Task 25, not this task — leave them. Nothing should
+  appear in `src/settings.ts` or `src/recorder.ts`.
 
 - [ ] **Step 2: Run test to verify it fails** — inverted; confirm the suite is green before you
   touch a test file, so a later failure can only be yours:
 
   ```bash
-  cd /d/tools/obsidian-shorthand && npm test -- test/plugin-settings.test.ts
+  cd /d/tools/obsidian-shorthand && npm test -- test/plugin-state.test.ts
   ```
 
-  Expect green.
+  Expect green. This task is about `plugin-state.test.ts`, so that is the file to baseline.
 
 - [ ] **Step 3: Write minimal implementation** — two comment edits.
 
@@ -2139,7 +2220,7 @@ true, and it is now the only claim made about that window."
 
 - `grep -rn "useShorthandPostProcessing" main.ts src` returns nothing.
 - `grep -rn "toggle-post-process" main.ts src test README.md` returns nothing.
-- `npm test`, `npx tsc --noEmit` and `npm run build` all pass, with `main.js` rebuilt from the
+- `npx tsc --noEmit`, `npm run build` and `npm test` all pass in that order, with `main.js` rebuilt from the
   committed tree.
 - `test/plugin-settings.test.ts` contains the trust-boundary test proving a stored
   `useShorthandPostProcessing` is ignored, and two cross-wiring tests written against
@@ -2189,7 +2270,7 @@ where `bun test` reaches it, and leaves `main.ts` holding only the wiring. This 
 `src/settings.ts` and `src/elapsed.ts` already do, and it is the rule `AGENTS.md` § "The
 settings surface" states.
 
-**The plugin gate is `npm test`, `npx tsc --noEmit`, `npm run build`.** All three, every time
+**The plugin gate is `npx tsc --noEmit`, then `npm run build`, then `npm test`.** All three in that order, every time
 a task says "run the gate". `OBSIDIAN_PLUGIN_DIR` may be set in this environment, in which case
 every build copies into a live vault — leave the vault holding a build from committed code.
 
@@ -2487,14 +2568,18 @@ the string this section actually ships, so the guide and the code agree from day
 ### Task 42: Slop-check the whole copy set before any of it lands
 
 **Files:**
-- Create then delete: a scratch file outside the repository, e.g.
-  `D:/tools/obsidian-shorthand/.copy-draft.md` (add nothing to `.gitignore`; delete it in
-  Step 4)
+- Create then delete: a scratch file **outside the repository**, e.g. `D:/tools/.copy-draft.md`.
+  Not inside the working tree: it would show as untracked in every `git status --porcelain`
+  check the later tasks run, and those checks are how you know the tree is clean.
+- Modify: `docs/superpowers/plans/2026-08-24-plugin-polish.md` — this plan, if the slop pass
+  changes any string (see Step 5)
 
 **Interfaces:**
 - Consumes: every final string written out in Tasks 44–48 of this plan.
 - Produces: the vetted strings that Tasks 44–48 paste. If this task changes a string, change it
-  **in this plan file too**, so the plan and the code do not diverge.
+  **in this plan file too**, so the plan and the code do not diverge — and then commit that
+  change (Step 5). The plan is tracked; editing it and walking away leaves a dirty tree that
+  every later `git status --porcelain` gate will trip over.
 
 Running `no-ai-slop` once over the full set beats running it per-string: the patterns it catches
 best — the same sentence shape repeated across ten rows, a tricolon in every third description,
@@ -2514,7 +2599,36 @@ best — the same sentence shape repeated across ten rows, a tricolon in every t
   vetted text rather than the draft. This is the step that keeps the plan honest; skipping it
   means the code and the plan disagree and the next reader trusts the wrong one.
 
-- [ ] **Step 4: Delete the scratch file.** No commit — nothing in the repository changed.
+- [ ] **Step 4: Delete the scratch file.** It lives outside the working tree, so the repository
+  is unaffected either way — but leave no litter.
+
+- [ ] **Step 5: Commit the plan, if and only if the slop pass changed a string.**
+
+Check first:
+
+```sh
+cd /d/tools/obsidian-shorthand && git status --porcelain
+```
+
+Empty output means the slop pass accepted every string as written. Nothing to commit; go on to
+Task 43.
+
+If it lists `docs/superpowers/plans/2026-08-24-plugin-polish.md`, you rewrote at least one
+string in the plan, and that edit has to land now. Leaving it uncommitted makes every later
+clean-tree check report a dirty repository, and the natural reaction — sweeping it into the
+next code commit — buries a copy decision inside a functional change.
+
+```sh
+cd /d/tools/obsidian-shorthand
+git add docs/superpowers/plans/2026-08-24-plugin-polish.md
+git commit -m "docs: apply the slop pass to the settings copy in the plan
+
+Tasks 44-48 paste these strings verbatim, so the plan is where this copy
+lives until it lands. Revising a string here and not in the plan would put
+the two out of step for the rest of the increment.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+```
 
 ---
 
@@ -2675,7 +2789,7 @@ best — the same sentence shape repeated across ten rows, a tricolon in every t
   });
   ```
 
-- [ ] **Step 2: Run `npm test` and watch it fail on the missing module.** The failure must be
+- [ ] **Step 2: Run `npm test -- test/settings-display.test.ts` and watch it fail on the missing module.** Targeted, not the full suite: this task creates a new file under `src/`, which makes the built bundle stale, and a full run would fail on that instead. The failure must be
   `Cannot find module '../src/settings-display.js'`, not an assertion failure. Anything else
   means the test file itself is wrong.
 
@@ -2774,7 +2888,7 @@ best — the same sentence shape repeated across ten rows, a tricolon in every t
   }
   ```
 
-- [ ] **Step 4: Run `npm test` and confirm the new suite is green**, then `npx tsc --noEmit`.
+- [ ] **Step 4: Run `npm test -- test/settings-display.test.ts` and confirm the new suite is green**, then `npx tsc --noEmit`. Targeted again, for the same reason; the full gate runs at the end of Increment 5.
   `tsconfig` includes `src/`, so the typecheck covers the new file without any config change.
 
 - [ ] **Step 5: Commit.** `feat: add settings-display, the tested home for computed setting
@@ -2922,7 +3036,7 @@ and keeping an overload for none would be a branch nobody exercises.
   | `minNewChars` | Minimum new characters | *unchanged* | "Live-pass transcript threshold." | "A live pass waits until 180 new characters of transcript have arrived." |
   | `minIntervalMs` | Minimum interval (ms) | **Minimum interval** | "Minimum time between completed live passes." | "Live passes run no more often than once every 25 seconds. The value is in milliseconds." |
 
-- [ ] **Step 6: Run the full gate** — `npm test`, `npx tsc --noEmit`, `npm run build`. The
+- [ ] **Step 6: Run the full gate** — `npx tsc --noEmit && npm run build && npm test`. Build before test, or the bundle test fails on staleness rather than on your change. The
   bundle-load test is the one that matters here: a signature change that compiles can still
   break the module's top level.
 
@@ -2991,7 +3105,7 @@ Line numbers are pre-increment-3. Match on the `setName` string.
   to read `"Transcript notes"`, change the assertion to match, and re-run:
 
   ```sh
-  cd /d/tools/obsidian-shorthand && npm test && grep -rn "Write transcript note" src/ test/ main.ts
+  cd /d/tools/obsidian-shorthand && npm test -- test/enhance-mode.test.ts && grep -rn "Write transcript note" src/ test/ main.ts
   ```
 
   Expected: tests pass, and the `grep` returns nothing. Any remaining hit is a stale reference.
@@ -3496,9 +3610,9 @@ before Step 3.
   stale bundle:
 
   ```sh
+  npx tsc --noEmit
   rm -f main.js
   npm run build
-  npx tsc --noEmit
   npm test
   ```
 
@@ -3612,8 +3726,8 @@ Run all four, every time, before every commit:
 
 ```sh
 npx tsc --noEmit
-npm test
 npm run build
+npm test
 ```
 
 `npm run build` runs `tsc --noEmit` again and then esbuild. `npm test` runs `bun test`, which

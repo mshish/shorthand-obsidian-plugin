@@ -314,14 +314,22 @@ therefore stays.
 
 Advanced holds six rows, not seven.
 
-**Prompt editor.** `NotePromptModal` gains a two-state control per field: "Use
-default" and "Customize".
+**Prompt editor.** `NotePromptModal` gains a two-state control per field:
+**Default** and **Custom**.
 
-- **Use default** renders the effective default read-only, so it is always
-  legible.
-- **Customize** reveals the editable textarea, seeded from the default the first
-  time it is chosen.
-- Switching back to "Use default" stores `""`.
+- **Default** renders the effective default read-only, so it is always legible.
+- **Custom** reveals the editable textarea, seeded from the default the first
+  time it is chosen — and only the first time. Clearing the box on purpose,
+  flipping to Default to re-read the original, and flipping back must not refill
+  it; comparing the two is the whole point of the control.
+- Switching back to **Default** stores `""`.
+
+*(Correction. This spec first named the options "Use default" and "Customize".
+Rule 6 of the style guide the same work produces bans generic verbs in naming
+labels, and a mode option is a naming label — so the spec contradicted its own
+output. "Default" and "Custom" satisfy the rule and read better. The `Edit…`
+button keeps its verb: a button invokes, so an imperative is the correct part of
+speech, and the guide records that carve-out explicitly.)*
 
 The radio state is derived from whether the stored string is empty, so no second
 key is stored. Storing `""` rather than a copy of the default is what preserves
