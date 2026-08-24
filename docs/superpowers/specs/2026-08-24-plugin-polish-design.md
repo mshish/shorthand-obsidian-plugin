@@ -98,6 +98,32 @@ Where sources conflicted, the guide records which was followed and why.
 Each increment is implemented by a sub-agent and reviewed by Codex before the
 next begins. Increment 1 lands in `shorthand-core`; the rest land here.
 
+### 0. Make the verification gate trustworthy
+
+Added during planning, ahead of everything else, because every increment below
+ends with "run the gate and confirm it passes" — and one part of the gate does
+not currently inspect the code under test.
+
+`test/plugin-bundle.test.ts` exists because the plugin once failed to load in
+Obsidian with every check green. But its `ensureBundle()` reads
+`if (existsSync(BUNDLE)) return;` — it builds **only when `main.js` is absent**.
+`main.js` is gitignored yet present in any working checkout, so on an ordinary
+run the test loads whatever bundle is on disk, which may have been built from
+entirely different source. The test written to catch "green checks, broken
+bundle" can itself pass against a bundle that does not correspond to the code
+under test.
+
+The fix throws rather than rebuilds. Rebuilding is the obvious move and the
+wrong one: `esbuild.config.mjs`'s `deliver-to-vault` plugin fires on
+`build.onEnd`, so a rebuild triggered from `npm test` copies into a live
+Obsidian vault whenever `OBSIDIAN_PLUGIN_DIR` is set — delivering uncommitted,
+mid-edit code and breaking the repo's rule that the vault holds a build from
+committed code. Failing loudly keeps building an explicit act.
+
+This also documents a hazard the repo's `AGENTS.md` states only for builds:
+with that variable set, **`npm test` can write into a live vault**, because the
+suite spawns a build.
+
 ### 1. Core: a notes-only enhancement pass
 
 `runner.ts:582` returns `not-ready` when a `link` pass has an empty transcript
@@ -111,17 +137,32 @@ gains a way to override it.
 enhanceNow("link", { allowEmptyTranscript: true })
 ```
 
-The flag threads through the `ENHANCE` event into `#acceptPass` and is checked
-alongside the existing condition. Nothing else in the state machine changes.
-`buildPassPrompt` already carries `userNotes` as a first-class field, so the
-prompt is untouched.
+Threading the flag is four edits, not one. Planning found the spec's first
+draft had this wrong: `#acceptPass` (line 400) only builds the `PassRequest`;
+the gate lives downstream in `#runPass`. So the flag must be added to the
+`ENHANCE` event type (line 107), carried by `#acceptPass` onto `PassRequest`,
+passed explicitly at all three `#acceptPass` call sites (`acceptTick` and
+`acceptLiveTick` pass `false`), and finally checked in `#runPass`. `tsc` is the
+only thing that catches a missed call site — `bun test` transpiles without
+typechecking.
+
+Nothing else in the state machine changes. `buildPassPrompt` already carries
+`userNotes` as a first-class field, so the prompt is untouched.
 
 The change is additive, so every existing call site still compiles.
 
 **Also in this commit**, per `AGENTS.md`: `docs/CONTRACT.md` gains the new
-surface, and the `ENHANCEMENT-LIMITS.md` row for the empty-transcript decline
-records that it is now conditional. Then the four-command gate, push, and an
-annotated tag on the minor slot.
+surface, and `ENHANCEMENT-LIMITS.md` gains a row for the empty-transcript
+decline. Note the row does not exist to be updated — it was never written. Its
+absence has left a standing error at `ENHANCEMENT-LIMITS.md:38`, which claims
+"`enhanceNow()` skips the two threshold gates and honours the first three."
+That is false today: `enhanceNow` does not skip the character gate, because
+`runner.ts:582` declines a link pass with an empty transcript. Both the missing
+row and the wrong sentence are fixed here. This is exactly the failure core's
+`AGENTS.md` predicts when it says the limits table is hand-maintained and a
+stale row misleads the next agent rather than failing a test.
+
+Then the four-command gate, push, and an annotated tag on the minor slot.
 
 ### 2. Plugin: bump the pin, add "Clean up this note"
 
@@ -146,6 +187,23 @@ shared path is extracted. Per `AGENTS.md`, the *decision* — which mode a note
 qualifies for — becomes a testable function in `src/`, and `main.ts` keeps only
 the wiring. Nothing in `main.ts` can be imported under `bun test`, so a rule
 left there is a rule with no test.
+
+**`checkCallback` lands here, not in increment 6.** Both enhancement commands
+require an active Markdown file, and Obsidian prescribes `checkCallback` for
+commands that only run under certain conditions. Adding the new command is the
+natural moment to convert its sibling. It requires splitting a side-effect-free
+`activeMarkdownFileOrNull()` off `activeMarkdownFile()`, because Obsidian calls
+a check with `checking: true` on every palette render and the existing accessor
+fires a `Notice`.
+
+The behaviour change is user-visible and intended. Obsidian's own typings state
+it: "Returning false or undefined causes the command to be hidden from the
+command palette." With no note open these commands disappear, where today they
+are listed, run, and then complain.
+
+**`start-capture-this-note` is converted too**, in increment 6. It has the
+identical precondition, and leaving one of three commands inconsistent would
+read as an oversight rather than a decision.
 
 ### 3. Remove Shorthand post-processing
 
@@ -236,15 +294,25 @@ floor eventually reaches 1.13.0.
 | --- | --- |
 | Enhancement backend | Shorthand executable |
 | Write transcript note | Claude executable |
-| Control Shorthand recording | Transcript folder |
-| Note-taking prompt and sections | Minimum new characters |
-| | Minimum interval |
-| | Live enhancement |
+| Transcript folder *(conditional)* | Minimum new characters |
+| Control Shorthand recording | Minimum interval |
+| Note-taking prompt and sections | Live enhancement |
 | | Debug logging |
 
 "Control Shorthand recording" stays basic because turning it off changes the
 daily workflow. The LLM provider block is already conditional on the backend
 choice, which is its own disclosure, and it stays where it is.
+
+**"Transcript folder" stays in Basic**, directly beneath "Write transcript note"
+and still conditional on it. An earlier draft of this table put it in Advanced;
+planning showed why that is wrong. The row only renders when the toggle is on,
+so moving it to Advanced would place it roughly a screen below the control that
+reveals it — flipping the toggle would look like it did nothing. The pairing
+reads as one unit and is textbook progressive disclosure. The `this.display()`
+re-render at `main.ts:849`, which exists solely to show and hide that row,
+therefore stays.
+
+Advanced holds six rows, not seven.
 
 **Prompt editor.** `NotePromptModal` gains a two-state control per field: "Use
 default" and "Customize".
@@ -270,10 +338,14 @@ genuine one-click route back.
 **Two pre-existing violations**, fixed while in this code:
 
 - `main.ts:1252` sets `area.style.width` directly. The plugin guidelines forbid
-  hardcoded styling; this becomes a CSS class.
-- Commands use plain `callback` where Obsidian prescribes `checkCallback` for
-  commands that only run under certain conditions. Both enhancement commands
-  need an active Markdown file.
+  hardcoded styling; this becomes a CSS class. **A stylesheet alone is not
+  enough**: `esbuild.config.mjs:48` copies only `["main.js", "manifest.json"]`
+  into the vault, so a new `styles.css` would pass every gate and silently never
+  be applied. It must be added to that list, and a test pins the list so the
+  next file to be added does not repeat the mistake.
+- `start-capture-this-note` still uses a plain `callback`. The two enhancement
+  commands are converted in increment 2; this is the third, converted here so
+  all commands with the same precondition express it the same way.
 
 ## Verification
 
