@@ -9,7 +9,6 @@ export type ShorthandPluginSettings = Readonly<{
   minIntervalMs: number;
   enableLiveEnhancement: boolean;
   controlShorthandRecording: boolean;
-  useShorthandPostProcessing: boolean;
   /**
    * Whether capture creates and maintains a linked transcript sidecar note holding the raw
    * transcript on disk. Off by default, so a fresh install writes nothing to the vault beyond
@@ -45,7 +44,6 @@ export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
   minIntervalMs: DEFAULT_CONFIG.thresholds.enhancementIntervalMs,
   enableLiveEnhancement: true,
   controlShorthandRecording: true,
-  useShorthandPostProcessing: false,
   writeTranscriptNote: false,
   debugLogging: false,
   noteTakingGuidance: "",
@@ -67,9 +65,6 @@ export function normalizePluginSettings(input: unknown): ShorthandPluginSettings
     controlShorthandRecording: typeof value.controlShorthandRecording === "boolean"
       ? value.controlShorthandRecording
       : DEFAULT_PLUGIN_SETTINGS.controlShorthandRecording,
-    useShorthandPostProcessing: typeof value.useShorthandPostProcessing === "boolean"
-      ? value.useShorthandPostProcessing
-      : DEFAULT_PLUGIN_SETTINGS.useShorthandPostProcessing,
     writeTranscriptNote: typeof value.writeTranscriptNote === "boolean"
       ? value.writeTranscriptNote
       : DEFAULT_PLUGIN_SETTINGS.writeTranscriptNote,

@@ -10,12 +10,13 @@ import { DEFAULT_CONFIG, MAX_GUIDANCE_CHARACTERS } from "shorthand-core";
 
 describe("plugin settings normalization", () => {
   test("debugLogging defaults to false when absent or malformed, independently of the other toggles", () => {
-    // Both booleans in the fixture above are true, which cannot catch a cross-wire to a
-    // neighbouring toggle. These pin it apart from useShorthandPostProcessing.
+    // Asserting only debugLogging's own key cannot catch a guard that reads a neighbouring
+    // boolean's value. controlShorthandRecording is the useful neighbour because it defaults
+    // the other way, so a cross-wire to it surfaces even when it is left at its default.
     expect(normalizePluginSettings({}).debugLogging).toBe(false);
     expect(normalizePluginSettings({ debugLogging: "yes" }).debugLogging).toBe(false);
-    expect(normalizePluginSettings({ useShorthandPostProcessing: true }).debugLogging).toBe(false);
-    expect(normalizePluginSettings({ debugLogging: true }).useShorthandPostProcessing).toBe(false);
+    expect(normalizePluginSettings({ controlShorthandRecording: true }).debugLogging).toBe(false);
+    expect(normalizePluginSettings({ debugLogging: false }).controlShorthandRecording).toBe(true);
   });
 
   test("writeTranscriptNote defaults to false when absent or malformed, independently of the other toggles", () => {
@@ -43,7 +44,6 @@ describe("plugin settings normalization", () => {
       minIntervalMs: 0,
       enableLiveEnhancement: false,
       controlShorthandRecording: false,
-      useShorthandPostProcessing: true,
       writeTranscriptNote: true,
       debugLogging: true,
       noteTakingGuidance: "  Write terse bullets.  ",
@@ -57,7 +57,6 @@ describe("plugin settings normalization", () => {
       minIntervalMs: 0,
       enableLiveEnhancement: false,
       controlShorthandRecording: false,
-      useShorthandPostProcessing: true,
       writeTranscriptNote: true,
       debugLogging: true,
       noteTakingGuidance: "Write terse bullets.",
@@ -81,21 +80,17 @@ describe("plugin settings normalization", () => {
     }
   });
 
-  test("defaults the Shorthand control toggles", () => {
-    expect(normalizePluginSettings({})).toMatchObject({
-      controlShorthandRecording: true,
-      useShorthandPostProcessing: false,
-    });
+  test("defaults the Shorthand control toggle", () => {
+    expect(normalizePluginSettings({})).toMatchObject({ controlShorthandRecording: true });
     expect(DEFAULT_PLUGIN_SETTINGS.controlShorthandRecording).toBe(true);
-    expect(DEFAULT_PLUGIN_SETTINGS.useShorthandPostProcessing).toBe(false);
   });
 
-  test("falls back for non-boolean Shorthand control toggles", () => {
+  test("falls back for non-boolean Shorthand toggles", () => {
     for (const garbage of ["true", 1, null, {}, []]) {
-      expect(normalizePluginSettings({ controlShorthandRecording: garbage, useShorthandPostProcessing: garbage }))
+      expect(normalizePluginSettings({ controlShorthandRecording: garbage, debugLogging: garbage }))
         .toMatchObject({
           controlShorthandRecording: DEFAULT_PLUGIN_SETTINGS.controlShorthandRecording,
-          useShorthandPostProcessing: DEFAULT_PLUGIN_SETTINGS.useShorthandPostProcessing,
+          debugLogging: DEFAULT_PLUGIN_SETTINGS.debugLogging,
         });
     }
   });
@@ -103,17 +98,30 @@ describe("plugin settings normalization", () => {
   // Every value here is non-default AND differs from the other key's value, which is what
   // makes a cross-wired guard die in both directions. Asserting a key's *default* proves
   // nothing: reading the wrong key and falling through to the default are indistinguishable
-  // in that case, which is exactly how the earlier version of this test survived having
-  // `controlShorthandRecording` read `value.useShorthandPostProcessing`.
-  test("keeps each Shorthand control toggle on its own key", () => {
-    expect(normalizePluginSettings({ controlShorthandRecording: false, useShorthandPostProcessing: true }))
-      .toMatchObject({ controlShorthandRecording: false, useShorthandPostProcessing: true });
+  // in that case, which is exactly how an earlier version of this test survived
+  // `controlShorthandRecording` reading a neighbouring key's value.
+  test("keeps each boolean toggle on its own key", () => {
+    expect(normalizePluginSettings({ controlShorthandRecording: false, debugLogging: true }))
+      .toMatchObject({ controlShorthandRecording: false, debugLogging: true });
     // And with garbage on one side, so a guard that reads the *other* key's type test is
     // caught too: here the surviving value is non-default on both sides in turn.
-    expect(normalizePluginSettings({ controlShorthandRecording: false, useShorthandPostProcessing: "yes" }))
-      .toMatchObject({ controlShorthandRecording: false, useShorthandPostProcessing: false });
-    expect(normalizePluginSettings({ controlShorthandRecording: 0, useShorthandPostProcessing: true }))
-      .toMatchObject({ controlShorthandRecording: true, useShorthandPostProcessing: true });
+    expect(normalizePluginSettings({ controlShorthandRecording: false, debugLogging: "yes" }))
+      .toMatchObject({ controlShorthandRecording: false, debugLogging: false });
+    expect(normalizePluginSettings({ controlShorthandRecording: 0, debugLogging: true }))
+      .toMatchObject({ controlShorthandRecording: true, debugLogging: true });
+  });
+
+  // normalizePluginSettings is the trust boundary for data.json, and every install that
+  // predates this removal still has useShorthandPostProcessing on disk. The key must be
+  // ignored rather than carried through: a stale key that survived normalization would be
+  // written straight back out on the next save and never drop. There is no migration —
+  // this test is what stands in for one.
+  test("a data.json still holding the removed post-processing key normalizes without it", () => {
+    const stored = { controlShorthandRecording: false, useShorthandPostProcessing: true, debugLogging: true };
+    const normalized = normalizePluginSettings(stored);
+    expect(normalized).not.toHaveProperty("useShorthandPostProcessing");
+    expect(normalized).toMatchObject({ controlShorthandRecording: false, debugLogging: true });
+    expect(normalized).toEqual(normalizePluginSettings({ controlShorthandRecording: false, debugLogging: true }));
   });
 
   test("rejects absolute and traversing sidecar directories", () => {
