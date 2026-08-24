@@ -9,9 +9,11 @@ Stateless Claude Agent SDK passes use the new transcript plus your own notes to 
 structured summary in the meeting note; sections may be added, rewritten, reordered, or removed
 as the meeting develops. Turn on **Transcript notes** in settings to also keep a linked
 transcript sidecar note with the raw transcript on disk — off by default, since the meeting
-note's summary is usually all that's needed. Enhancement never needs the sidecar. Every pass is
-fed from the transcript held in memory, and the setting governs only whether *new* captures
-create one. A note that already links a transcript keeps working with **Enhance now** either way.
+note's summary is usually all that's needed. A running capture never needs the sidecar: its passes
+are fed from the transcript held in memory, and the setting governs only whether *new* captures
+also write that transcript to disk. Afterwards is where the sidecar earns its keep — **Enhance
+now** on a note with no capture running reads the transcript back from the sidecar the note links,
+and a note that already links one keeps working whether the setting is on or off.
 
 This repository is the **Obsidian plugin only** — a thin desktop lifecycle and UI wrapper. All
 capture, transcript reconciliation, enhancement and file writing live in the headless core,
