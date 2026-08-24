@@ -22,3 +22,6 @@ data.json.bak
 
 # Local git worktrees (SDD scratch)
 .worktrees/
+
+# SDD scratch (ledger, briefs, review packages)
+.superpowers/
