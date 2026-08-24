@@ -65,9 +65,11 @@ Microsoft's [Win32 UX guide](https://learn.microsoft.com/en-us/windows/win32/uxg
 
 ## Rule 3 — Describe the consequence, not the mechanism.
 
-[Material's](https://m1.material.io/patterns/settings.html) worked pair: DO `Enable NFC /
-Allow data exchange when the phone touches another device`; DON'T `NFC / Use Near Field
-Communication to read and exchange tags`.
+[Material's](https://m1.material.io/patterns/settings.html) worked pair keeps the label `NFC`
+on both sides and changes only the secondary text: DO `Allow data exchange when the phone
+touches another device`; DON'T `Use Near Field Communication to read and exchange tags`. The
+label is identical in both, so the pair isolates one variable, the description, and shows the
+same row rewritten from what the feature is into what it does for you.
 
 - **Don't** — **Enhancement backend**, "Choose whether note enhancement uses the Claude Agent
   SDK or a directly configured LLM provider." That is the dropdown read back as a sentence.
@@ -114,9 +116,9 @@ When neither applies, rule 2 wins and the row gets no description.
   transcript notes."
 - **Do** — **Transcript folder**, "New transcript notes go in Meetings/Transcripts."
 
-Every string of this shape is built by a pure function in
-[`src/settings-display.ts`](../src/settings-display.ts), never inline in `main.ts`, because
-`main.ts` cannot be imported under `bun test`.
+Put every string of this shape in a pure function in
+[`src/settings-display.ts`](../src/settings-display.ts). Never build one inline in `main.ts`,
+because `main.ts` cannot be imported under `bun test` and the string would go untested.
 
 <a id="rule-5"></a>
 
@@ -163,7 +165,7 @@ A description may use any of these words when it is the accurate verb.
 - **Do** — "No provider chosen".
 - **Don't** — a mode option reading "Use default". Same position, same problem: the verb adds
   nothing and "Default" alone is unambiguous next to "Custom".
-- **Do** — the prompt modal's two mode options, **Default** and **Custom**.
+- **Do** — name the prompt modal's two mode options **Default** and **Custom**.
 - **Allowed** — the prompt row's **Edit…** button. An action button, not a naming label. The
   ellipsis follows the platform convention for an action that opens a further window.
 
@@ -203,9 +205,11 @@ is to prefer "Advanced" over "Advanced settings".
 
 ## Rule 9 — Second person, present tense, active voice. No "we".
 
-Microsoft, on the text that elaborates a control: "write the supplemental text in second
-person." Obsidian's [style guide](https://obsidian.md/help/style-guide) asks for the
-imperative in instructions: "Prefer 'Set up' over 'Setting up'".
+This one is a repository convention, not a quotation. The closest published guidance is
+Microsoft's, and it does not reach this far: "write the supplemental text in second person"
+is scoped to explanations that follow a command link, not to settings descriptions. Obsidian's
+style guide governs help documentation rather than plugin UI. So the rule stands on its own
+and is labelled as such, the same way the command-naming rule is.
 
 - **Do** — "Turn this on if a note stops updating during capture."
 - **Don't** — "It will be created only after a valid edit is committed." Passive, future, and
