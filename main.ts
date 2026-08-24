@@ -889,7 +889,11 @@ class ShorthandSettingTab extends PluginSettingTab {
     containerEl.empty();
     // No plugin-name heading at the top: Obsidian already titles this pane "Shorthand", and
     // the guidelines reserve headings for separating multiple sections.
-    textSetting(containerEl, this.plugin, "Shorthand executable", shorthandExecutableDescription, "shorthandExecutable");
+    this.displayBasic(containerEl, displayGeneration);
+    this.displayAdvanced(containerEl);
+  }
+
+  private displayBasic(containerEl: HTMLElement, displayGeneration: number): void {
     new Setting(containerEl)
       .setName("Enhancement backend")
       .setDesc("The Claude Agent SDK backend can look things up elsewhere in your vault; an LLM provider cannot.")
@@ -902,9 +906,10 @@ class ShorthandSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings({ ...this.plugin.settings, backend: value });
           this.display();
         }));
-    if (this.plugin.settings.backend === "claude-agent-sdk") {
-      textSetting(containerEl, this.plugin, "Claude executable", claudeExecutableDescription, "claudeExecutable");
-    } else {
+    // The if/else this came from was split when "Claude executable" moved to Advanced. With
+    // `backend` a two-member union this pair is exactly equivalent to that if/else; add a
+    // third backend and it stops being — the LLM block would then render for it too.
+    if (this.plugin.settings.backend === "llm") {
       this.displayLlmProfileControls(containerEl, displayGeneration);
     }
     new Setting(containerEl)
@@ -919,14 +924,6 @@ class ShorthandSettingTab extends PluginSettingTab {
     if (this.plugin.settings.writeTranscriptNote) {
       textSetting(containerEl, this.plugin, "Transcript folder", transcriptFolderDescription, "sidecarDirectory");
     }
-    numberSetting(containerEl, this.plugin, "Minimum new characters", newCharacterThresholdDescription, "minNewChars");
-    numberSetting(containerEl, this.plugin, "Minimum interval", passIntervalDescription, "minIntervalMs");
-    new Setting(containerEl)
-      .setName("Live enhancement")
-      .setDesc("The note is rewritten while the meeting runs, instead of only when you stop or run Enhance now.")
-      .addToggle((toggle) => toggle
-        .setValue(this.plugin.settings.enableLiveEnhancement)
-        .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, enableLiveEnhancement: value })));
     new Setting(containerEl)
       .setName("Control Shorthand recording")
       .setDesc(createFragment((desc) => {
@@ -943,12 +940,6 @@ class ShorthandSettingTab extends PluginSettingTab {
       .addToggle((toggle) => toggle
         .setValue(this.plugin.settings.controlShorthandRecording)
         .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, controlShorthandRecording: value })));
-    new Setting(containerEl)
-      .setName("Debug logging")
-      .setDesc("Logs enhancement activity to the developer console. Turn this on if a note stops updating during capture.")
-      .addToggle((toggle) => toggle
-        .setValue(this.plugin.settings.debugLogging)
-        .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, debugLogging: value })));
 
     // setHeading() rather than a raw <h3>: the guidelines call for it, and it inherits
     // Obsidian's own settings typography instead of hardcoding a heading level.
@@ -971,6 +962,40 @@ class ShorthandSettingTab extends PluginSettingTab {
       .addButton((button) => button
         .setButtonText("Edit…")
         .onClick(() => new NotePromptModal(this.app, this.plugin, () => this.display()).open()));
+  }
+
+  /**
+   * Always visible, at the bottom, no expander. This is what Obsidian core's own General,
+   * Editor, and Files and links tabs do.
+   *
+   * It is not a fallback for something better: the `visible` predicate that would hide these
+   * rows behind a condition belongs to the declarative settings API, which requires app
+   * version 1.13.0, and `manifest.json` declares `minAppVersion: 1.5.0`. `SettingGroup`
+   * (1.11.0) is out for the same reason, and the pre-1.13 imperative API has no documented
+   * collapsible primitive. Raising the floor to reach any of them means dropping users.
+   */
+  private displayAdvanced(containerEl: HTMLElement): void {
+    new Setting(containerEl).setName("Advanced").setHeading();
+    textSetting(containerEl, this.plugin, "Shorthand executable", shorthandExecutableDescription, "shorthandExecutable");
+    // The other half of the split if/else in displayBasic. Optional — blank means automatic
+    // detection — which is why it can sit this far from the dropdown that reveals it.
+    if (this.plugin.settings.backend === "claude-agent-sdk") {
+      textSetting(containerEl, this.plugin, "Claude executable", claudeExecutableDescription, "claudeExecutable");
+    }
+    numberSetting(containerEl, this.plugin, "Minimum new characters", newCharacterThresholdDescription, "minNewChars");
+    numberSetting(containerEl, this.plugin, "Minimum interval", passIntervalDescription, "minIntervalMs");
+    new Setting(containerEl)
+      .setName("Live enhancement")
+      .setDesc("The note is rewritten while the meeting runs, instead of only when you stop or run Enhance now.")
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.enableLiveEnhancement)
+        .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, enableLiveEnhancement: value })));
+    new Setting(containerEl)
+      .setName("Debug logging")
+      .setDesc("Logs enhancement activity to the developer console. Turn this on if a note stops updating during capture.")
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.debugLogging)
+        .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, debugLogging: value })));
   }
 
   private displayLlmProfileControls(
