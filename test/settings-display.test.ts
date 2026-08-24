@@ -122,9 +122,12 @@ describe("baseUrlDescription", () => {
 describe("apiKeyDescription", () => {
   const semantics = "Blank keeps the stored key, a new value replaces it, and Clear key removes it.";
 
-  test("reports which of the three states the file is in", () => {
+  test("a key that exists, or might, explains what blank does to it", () => {
     expect(apiKeyDescription("stored")).toBe(`A key is stored. ${semantics}`);
-    expect(apiKeyDescription("absent")).toBe(`No key is stored. ${semantics}`);
     expect(apiKeyDescription("unknown")).toBe(`The stored key cannot be read. ${semantics}`);
+  });
+
+  test("with no key stored, the row does not offer three actions it does not have", () => {
+    expect(apiKeyDescription("absent")).toBe("No key is stored.");
   });
 });

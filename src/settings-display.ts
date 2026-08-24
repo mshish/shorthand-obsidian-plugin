@@ -64,11 +64,12 @@ export function baseUrlDescription(provider: string): string {
 export type StoredKeyState = "stored" | "absent" | "unknown";
 
 export function apiKeyDescription(state: StoredKeyState): string {
-  const stored = state === "stored"
-    ? "A key is stored."
-    : state === "absent"
-      ? "No key is stored."
-      : "The stored key cannot be read.";
+  // The blank/replace/clear tail answers "what happens if I leave this blank", which is a real
+  // question only while a key exists that the password field cannot show. With nothing stored,
+  // blank keeps nothing and Clear key removes nothing, so the tail would offer three actions
+  // the state does not have and contradict the sentence in front of it.
+  if (state === "absent") return "No key is stored.";
+  const stored = state === "stored" ? "A key is stored." : "The stored key cannot be read.";
   return `${stored} Blank keeps the stored key, a new value replaces it, and Clear key removes it.`;
 }
 
