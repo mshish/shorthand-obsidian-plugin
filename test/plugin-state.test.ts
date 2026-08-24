@@ -30,8 +30,8 @@ describe("plugin status state machine", () => {
       .toEqual({ mode: "capturing", captureActive: true, stopping: false });
   });
 
-  // Stopping is not instant: it can spend a control timeout plus a whole post-processing
-  // drain waiting for Shorthand's `final`, and the status bar used to read "capturing"
+  // Stopping is not instant: it can spend a control timeout plus the whole drain budget
+  // waiting for Shorthand's `final`, and the status bar used to read "capturing"
   // throughout, which looks like a hang.
   test("a stop request is visible before the capture has finished stopping", () => {
     const capturing = reducePluginState(INITIAL_PLUGIN_STATE, { type: "capture-started" });
