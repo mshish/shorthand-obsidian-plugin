@@ -66,6 +66,7 @@ import {
   passIntervalDescription,
   shorthandExecutableDescription,
   transcriptFolderDescription,
+  type StoredKeyState,
 } from "./src/settings-display.js";
 import {
   INITIAL_PLUGIN_STATE,
@@ -977,7 +978,7 @@ class ShorthandSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("LLM provider profile")
       .setHeading()
-      .setDesc("Provider requests use this profile only when the LLM backend is selected.");
+      .setDesc("The API key is stored outside your vault, so it never syncs.");
 
     let startOverButton: ButtonComponent;
     const statusSetting = new Setting(containerEl)
@@ -994,10 +995,9 @@ class ShorthandSettingTab extends PluginSettingTab {
     let providerInput: DropdownComponent;
     const providerSetting = new Setting(containerEl)
       .setName("Provider")
-      .setDesc("Select the API family used for enhancement requests.")
       .addDropdown((dropdown) => {
         providerInput = dropdown
-          .addOption("", "Select a provider")
+          .addOption("", "No provider chosen")
           .addOption("openai", "OpenAI")
           .addOption("anthropic", "Anthropic")
           .addOption("openai-compatible", "OpenAI-compatible")
@@ -1014,7 +1014,7 @@ class ShorthandSettingTab extends PluginSettingTab {
     let modelInput: TextComponent;
     const modelSetting = new Setting(containerEl)
       .setName("Model")
-      .setDesc("Enter the provider's exact model ID.")
+      .setDesc("Model IDs are exact strings, not display names.")
       .addText((text) => {
         modelInput = text.setDisabled(true).onChange((value) => {
           draft = { ...draft, model: value };
@@ -1027,7 +1027,7 @@ class ShorthandSettingTab extends PluginSettingTab {
     let baseUrlInput: TextComponent;
     const baseUrlSetting = new Setting(containerEl)
       .setName("Base URL")
-      .setDesc("Required for OpenAI-compatible providers; optional endpoint override for OpenAI and Anthropic.")
+      .setDesc(baseUrlDescription(draft.provider))
       .addText((text) => {
         baseUrlInput = text.setDisabled(true).onChange((value) => {
           draft = { ...draft, base_url: value };
@@ -1085,18 +1085,19 @@ class ShorthandSettingTab extends PluginSettingTab {
     };
 
     const setKeyDescription = (keyStatus: "known" | "unknown" = "known"): void => {
-      const keyState = keyStatus === "unknown"
-        ? "The stored key status is unknown because the profile could not be read."
-        : storedKey.length > 0 ? "A key is stored." : "No key is stored.";
-      apiKeySetting.setDesc(`${keyState} Leave this field blank to preserve the existing key, enter a value to rotate it, or use Clear key to remove it. The key is stored at ${credentialsPath}, deliberately outside the vault.`);
+      const state: StoredKeyState = keyStatus === "unknown"
+        ? "unknown"
+        : storedKey.length > 0 ? "stored" : "absent";
+      apiKeySetting.setDesc(apiKeyDescription(state));
     };
 
     const showDraftStatus = (): void => {
       if (!ready) return;
+      baseUrlSetting.setDesc(baseUrlDescription(draft.provider));
       const missing = missingLlmProfileFields(draft);
       statusSetting.setDesc(missing.length > 0
-        ? `Not saved. Complete: ${missing.join(", ")}.`
-        : "Complete. Changes stay in memory until the edited field loses focus.");
+        ? `Not saved yet. Still needed: ${missing.join(", ")}.`
+        : "Saved when you leave the field you are editing.");
     };
 
     // This deliberately introduces commit-on-blur. The credentials file is an external,
@@ -1142,10 +1143,11 @@ class ShorthandSettingTab extends PluginSettingTab {
       commitQueue = new LlmProfileCommitQueue(draft, {
         write: writeLlmCredentials,
         onInvalid: (missing) => {
-          statusSetting.setDesc(`Not saved. Complete: ${missing.join(", ")}.`);
+          // Same wording as showDraftStatus: one condition must not have two sentences.
+          statusSetting.setDesc(`Not saved yet. Still needed: ${missing.join(", ")}.`);
         },
         onSaving: () => {
-          statusSetting.setDesc(`Saving the complete profile to ${credentialsPath}…`);
+          statusSetting.setDesc(`Saving to ${credentialsPath}…`);
         },
         onSaved: (credentials, isLatestRevision) => {
           if (!isCurrentDisplay()) return;
@@ -1168,13 +1170,16 @@ class ShorthandSettingTab extends PluginSettingTab {
       baseUrlInput.setValue(draft.base_url);
       apiKeyInput.setValue("");
       ready = true;
+      // setValue() does not fire onChange, so nothing above recomputed the provider-dependent
+      // copy. Without this, a loaded openai-compatible profile shows Base URL as optional.
+      showDraftStatus();
       setFieldsDisabled(false);
       setKeyDescription();
       statusSetting.setDesc(state.status === "missing"
-        ? "Complete the profile. It will be created only after a valid edit is committed."
+        ? "The profile is written once every required field has a value."
         : `Profile loaded from ${credentialsPath}.`);
     }).catch((error: unknown) => {
-      if (isCurrentDisplay()) renderMalformed(`The LLM profile could not be loaded: ${errorMessage(error)}`);
+      if (isCurrentDisplay()) renderMalformed(`The provider profile could not be loaded: ${errorMessage(error)}`);
     });
   }
 }
