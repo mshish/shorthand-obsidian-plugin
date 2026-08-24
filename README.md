@@ -74,7 +74,7 @@ model may fail validation more often, in which case the existing note sections a
 
 ### From a release (no toolchain required)
 
-Download `main.js` and `manifest.json` from the [latest release](../../releases/latest) into:
+Download `main.js`, `manifest.json` and `styles.css` from the [latest release](../../releases/latest) into:
 
 ```text
 <vault>/.obsidian/plugins/shorthand/
@@ -104,7 +104,7 @@ npm run dev     # esbuild watch; rebuilds main.js in place on every save
 ```
 
 **Clone outside the vault.** Point `OBSIDIAN_PLUGIN_DIR` at the vault's plugin folder and every
-build — including each watch rebuild — copies `main.js` and `manifest.json` there. This keeps
+build — including each watch rebuild — copies `main.js`, `manifest.json` and `styles.css` there. This keeps
 `node_modules/` and `.git/` out of a synced vault:
 
 ```sh
@@ -323,7 +323,7 @@ source of truth, overriding the manifest on a mismatch.
 npm version 0.2.0    # runs version-bump.mjs: manifest.json + versions.json + package.json
 git push origin main
 git tag 0.2.0 && git push origin 0.2.0
-npm run build        # attach main.js and manifest.json to the release by hand
+npm run build        # attach main.js, manifest.json and styles.css to the release by hand
 ```
 
 These tags are lightweight, unlike `shorthand-core`'s annotated ones. That is deliberate, not

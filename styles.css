@@ -1,0 +1,12 @@
+/* Obsidian's plugin guidelines forbid hardcoded styling — `el.style.width = "100%"` in a
+   plugin overrides whatever the user's theme and font-size settings decided. Values that need
+   a number come from Obsidian's own CSS variables so they track the active theme. */
+
+/* Both states of a prompt field: the editable textarea and the read-only view of the
+   effective default. They share the class so the field does not change width when the user
+   switches between them. */
+.shorthand-prompt-textarea {
+  width: 100%;
+  margin-bottom: var(--size-4-2);
+  resize: vertical;
+}

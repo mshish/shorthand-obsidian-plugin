@@ -25,8 +25,9 @@ const prod = process.argv[2] === "production";
 /**
  * Obsidian loads a plugin only from `<vault>/.obsidian/plugins/<id>/`, so a repository kept
  * outside the vault has to deliver its build there. That is the outside-the-vault workflow
- * obsidian-sample-plugin's README documents — copy `main.js` and `manifest.json` across —
- * automated here so a watch rebuild lands in the vault without a second command.
+ * obsidian-sample-plugin's README documents — copy `main.js`, `manifest.json` and
+ * `styles.css` across — automated here so a watch rebuild lands in the vault without a
+ * second command.
  *
  * The build still writes `main.js` at the repository root and copies from there rather than
  * pointing `outfile` at the vault: the bundle-load test resolves it from the root and fails if
@@ -45,10 +46,10 @@ const deliverToVault = {
       // something that loads instead of a half-written bundle.
       if (result.errors.length > 0) return;
       await mkdir(target, { recursive: true });
-      for (const file of ["main.js", "manifest.json"]) {
+      for (const file of ["main.js", "manifest.json", "styles.css"]) {
         await copyFile(file, resolve(target, file));
       }
-      console.log(`delivered main.js and manifest.json to ${target}`);
+      console.log(`delivered main.js, manifest.json and styles.css to ${target}`);
     });
   },
 };
