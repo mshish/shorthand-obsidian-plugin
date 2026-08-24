@@ -182,10 +182,19 @@ export default class ShorthandPlugin extends Plugin {
     // Command names carry no plugin prefix and are sentence case, per Obsidian's plugin
     // guidelines: the command palette already renders these as "Shorthand: Start capture
     // on this note". Spelling it out here produced "Shorthand: Shorthand: start capture…".
+    // checkCallback, not callback: Obsidian hides a command whose check returns false, which
+    // is its prescribed way to express "needs an open Markdown note". Matches the two
+    // enhancement commands. The check runs on every palette render, so it must not fire a
+    // Notice — hence hasActiveMarkdownFile rather than activeMarkdownFile.
     this.addCommand({
       id: "start-capture-this-note",
       name: "Start capture on this note",
-      callback: () => { void this.startCaptureOnActiveNote(); },
+      checkCallback: (checking: boolean) => {
+        if (!this.hasActiveMarkdownFile()) return false;
+        if (checking) return true;
+        void this.startCaptureOnActiveNote();
+        return true;
+      },
     });
     this.addCommand({
       id: "stop-capture",
