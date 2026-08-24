@@ -2923,7 +2923,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
   describe("baseUrlDescription", () => {
     test("required for openai-compatible, because the name identifies no endpoint", () => {
       expect(baseUrlDescription("openai-compatible"))
-        .toBe("Required: the provider name alone does not identify an endpoint.");
+        .toBe("Required. The provider name alone does not identify an endpoint.");
     });
 
     test("optional for the named providers, and while none is chosen", () => {
@@ -3011,7 +3011,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
   export function baseUrlDescription(provider: string): string {
     return provider === "openai-compatible"
-      ? "Required: the provider name alone does not identify an endpoint."
+      ? "Required. The provider name alone does not identify an endpoint."
       : "Optional. Leave it blank unless you route through a gateway or proxy.";
   }
 
@@ -3584,11 +3584,12 @@ verifying it must switch the backend first. Task 49 says so.
       new Setting(containerEl)
         .setName("Note writing")
         .setHeading()
-        .setDesc("Left empty, both follow Shorthand's own defaults and keep improving with each release.");
+        .setDesc("Shorthand's defaults change with each release. Anything you customize stays as you wrote it.");
   ```
 
   Rule 8: the heading is already sentence case and contains no "settings", so it stands. The
-  description drops from three sentences to one.
+  description drops from three sentences to two, and it no longer opens on a "both" whose
+  antecedent is the row underneath rather than the heading it sits on.
 
   **Displaced detail, triaged.** "A custom prompt cannot break note writing — the output schema
   and Shorthand's safety rules are enforced regardless of what you write" is user-observable and
@@ -3681,7 +3682,7 @@ say so in the commit body.
   that's needed."):
 
   ```markdown
-  Enhancement never needs the sidecar — every pass is fed from the transcript held in memory —
+  Enhancement never needs the sidecar. Every pass is fed from the transcript held in memory,
   and the setting governs only whether *new* captures create one. A note that already links a
   transcript keeps working with **Enhance now** either way.
   ```
@@ -3696,8 +3697,8 @@ say so in the commit body.
 
   ```markdown
   By default, **Start capture** and **Stop capture** also drive Shorthand's recorder, so a capture no
-  longer needs a separate press of Shorthand's global hotkey. **Control Shorthand recording**
-  (default on) is the setting that turns that off.
+  longer needs a separate press of Shorthand's global hotkey. Turn **Control Shorthand
+  recording** off to leave the recorder alone.
   ```
 
   Leave everything from "Shorthand's CLI offers no `--start`/`--stop`" onward untouched. That
@@ -3716,8 +3717,8 @@ say so in the commit body.
 - [ ] **Step 5: Add two bullets to § Known limitations**, after the existing wall-clock bullet:
 
   ```markdown
-  - **Debug logging** is snapshotted when a capture starts, so turning it on part-way through a
-    capture affects the next one rather than the one already running.
+  - **Debug logging** is read once, when a capture starts. Turning it on part-way through
+    affects the next capture rather than the one already running.
   ```
 
   This is the Debug logging description's overflow from Task 45 Step 5. It is the trap a user
@@ -3734,9 +3735,8 @@ say so in the commit body.
   Shorthand bullet:
 
   ```markdown
-    The plugin's **Shorthand executable** setting holds the bare command `shorthand` by default,
-    which resolves through your PATH; clearing the field restores that default rather than
-    leaving it empty.
+    **Shorthand executable** defaults to the bare command `shorthand`, which resolves through
+    your PATH. Clearing the field restores that default rather than leaving it empty.
   ```
 
   This is the only fact from the old copy set with no other home. It is user-observable — clear
@@ -3803,7 +3803,7 @@ before Step 3.
      **Provider** has no description at all and its unset option reads "No provider chosen".
      **Model** reads "Model IDs are exact strings, not display names."
   6. **Base URL** — choose OpenAI-compatible and confirm the description switches to
-     "Required: the provider name alone does not identify an endpoint."; choose Anthropic and
+     "Required. The provider name alone does not identify an endpoint."; choose Anthropic and
      confirm it switches back to the optional sentence. This is the only cross-field dynamic
      description in the pane and the one most likely to be wired wrong.
   7. **API key** — confirm the two-sentence description, and that the first sentence tracks
@@ -3828,7 +3828,7 @@ before Step 3.
   15. **No "Use Shorthand post-processing" row anywhere.** If one is present, increment 3 did not
       land and everything above is built on the wrong base.
   16. **Debug logging** — two sentences.
-  17. **Note writing** heading — one sentence under it.
+  17. **Note writing** heading — two sentences under it, naming the cost of overriding.
   18. **Note-taking prompt and starting sections** — reads "Both follow Shorthand's defaults."
       Open **Edit…**, set a custom prompt, save. The row must re-render to "Custom prompt in
       use." Set custom sections too; it must read "Custom prompt and starting sections in use."
