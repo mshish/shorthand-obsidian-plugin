@@ -881,7 +881,7 @@ describe("enhancement mode selection", () => {
     expect(mode).toHaveProperty("message", expect.stringContaining("Stop the capture"));
   });
 
-  test("a capture whose enhancer failed still refuses Clean up this note", () => {
+  test("a capture whose enhancer failed refuses Clean up this note without a dead-end pointer", () => {
     const mode = resolveEnhanceMode({
       command: "clean-up-this-note",
       captureOnThisNote: true,
@@ -891,6 +891,21 @@ describe("enhancement mode selection", () => {
     });
     expect(mode.kind).toBe("unavailable");
     expect(mode).not.toEqual({ kind: "notes-only" });
+    // Must not send the user to a command that refuses for the same reason.
+    expect(mode).toHaveProperty("message", expect.stringContaining("Stop the capture"));
+    expect(mode).toHaveProperty("message", expect.not.stringContaining("Enhance now"));
+  });
+
+  test("a healthy capture still points Clean up this note at Enhance now", () => {
+    const mode = resolveEnhanceMode({
+      command: "clean-up-this-note",
+      captureOnThisNote: true,
+      captureEnhancerReady: true,
+      transcriptLink: undefined,
+      writeTranscriptNote: false,
+    });
+    expect(mode.kind).toBe("unavailable");
+    expect(mode).toHaveProperty("message", expect.stringContaining("Enhance now"));
   });
 
   test("without a capture, a linked transcript is the source", () => {
@@ -1034,9 +1049,14 @@ export function resolveEnhanceMode(request: EnhanceRequest): EnhanceMode {
     // Both refusals name the other command instead of quietly doing something else: a
     // notes-only pass over a note that has a transcript would drop text the user recorded.
     if (request.captureOnThisNote) {
+      // Two refusals, not one. Pointing the user at "Enhance now" when this capture has no
+      // runner sends them to a command that refuses for the same reason — a dead end dressed
+      // up as guidance. Name the action that actually unblocks them.
       return {
         kind: "unavailable",
-        message: "Shorthand is capturing this note. Run \"Enhance now\" to fold in the transcript so far.",
+        message: request.captureEnhancerReady
+          ? "Shorthand is capturing this note. Run \"Enhance now\" to fold in the transcript so far."
+          : "Shorthand is capturing this note but could not start enhancement. Stop the capture, then run this command again.",
       };
     }
     if (request.transcriptLink !== undefined) {
@@ -2607,13 +2627,17 @@ best — the same sentence shape repeated across ten rows, a tricolon in every t
 Check first:
 
 ```sh
-cd /d/tools/obsidian-shorthand && git status --porcelain
+cd /d/tools/obsidian-shorthand && git status --porcelain -- docs/superpowers/plans/2026-08-24-plugin-polish.md
 ```
+
+Scoped to the one path on purpose. A bare `git status --porcelain` is never empty in this
+checkout — an untracked `.serena/` is always present and is not yours — so an unscoped check
+would read as "dirty" every time and teach you to ignore it.
 
 Empty output means the slop pass accepted every string as written. Nothing to commit; go on to
 Task 43.
 
-If it lists `docs/superpowers/plans/2026-08-24-plugin-polish.md`, you rewrote at least one
+If it prints the plan path, you rewrote at least one
 string in the plan, and that edit has to land now. Leaving it uncommitted makes every later
 clean-tree check report a dirty repository, and the natural reaction — sweeping it into the
 next code commit — buries a copy decision inside a functional change.
@@ -2888,7 +2912,15 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
   }
   ```
 
-- [ ] **Step 4: Run `npm test -- test/settings-display.test.ts` and confirm the new suite is green**, then `npx tsc --noEmit`. Targeted again, for the same reason; the full gate runs at the end of Increment 5.
+- [ ] **Step 4: Run `npm test -- test/settings-display.test.ts` and confirm the new suite is green**, then `npx tsc --noEmit`.
+
+- [ ] **Step 4b: Rebuild before committing.** The targeted run above skipped the bundle test, but this task created a file under `src/`, so `main.js` is now stale by Task 0's rule. Committing here would leave a commit whose own suite fails:
+
+  ```sh
+  cd /d/tools/obsidian-shorthand && npx tsc --noEmit && npm run build && npm test
+  ```
+
+  Expected: PASS. Targeted runs are for the red/green loop; the full gate still runs before every commit.
   `tsconfig` includes `src/`, so the typecheck covers the new file without any config change.
 
 - [ ] **Step 5: Commit.** `feat: add settings-display, the tested home for computed setting
@@ -3105,7 +3137,7 @@ Line numbers are pre-increment-3. Match on the `setName` string.
   to read `"Transcript notes"`, change the assertion to match, and re-run:
 
   ```sh
-  cd /d/tools/obsidian-shorthand && npm test -- test/enhance-mode.test.ts && grep -rn "Write transcript note" src/ test/ main.ts
+  cd /d/tools/obsidian-shorthand && npm test -- test/plugin-enhance-mode.test.ts && grep -rn "Write transcript note" src/ test/ main.ts
   ```
 
   Expected: tests pass, and the `grep` returns nothing. Any remaining hit is a stale reference.
