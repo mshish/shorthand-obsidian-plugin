@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { resolveEnhanceMode } from "../src/enhance-mode.js";
+import { enhanceCommandName, resolveEnhanceMode } from "../src/enhance-mode.js";
 
 describe("enhancement mode selection", () => {
   test("a live capture on this note outranks the sidecar that capture is writing", () => {
@@ -136,5 +136,14 @@ describe("enhancement mode selection", () => {
     });
     expect(mode.kind).toBe("unavailable");
     expect(mode).toHaveProperty("message", expect.stringContaining("Enhance now"));
+  });
+});
+
+describe("enhanceCommandName", () => {
+  // A retry Notice that names the wrong command sends the user into resolveEnhanceMode's own
+  // refusal (see the "notes-only" tests above) — a dead end dressed up as guidance.
+  test("names the command palette entry that produced the route being reported on", () => {
+    expect(enhanceCommandName("enhance-now")).toBe("Enhance now");
+    expect(enhanceCommandName("clean-up-this-note")).toBe("Clean up this note");
   });
 });

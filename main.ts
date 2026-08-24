@@ -47,6 +47,7 @@ import {
   transcriptWikilink,
 } from "shorthand-core/markdown";
 import {
+  enhanceCommandName,
   resolveEnhanceMode,
   type EnhanceCommandId,
 } from "./src/enhance-mode.js";
@@ -530,7 +531,7 @@ export default class ShorthandPlugin extends Plugin {
         case "live-capture":
           // `liveEnhancer` is what made this mode reachable; re-checking is for the compiler.
           if (liveEnhancer === undefined) return;
-          this.reportOutcome(await liveEnhancer.enhanceNow("link"));
+          this.reportOutcome(await liveEnhancer.enhanceNow("link"), command);
           return;
         case "transcript": {
           const sidecarPath = resolve(vaultRoot, addMarkdownExtension(mode.transcriptLink));
@@ -544,7 +545,7 @@ export default class ShorthandPlugin extends Plugin {
             DEFAULT_CONFIG.enhancement.standaloneTimeoutMs,
           );
           enhancer.appendTranscript(await readFile(sidecarPath, "utf8"));
-          this.reportOutcome(await enhancer.enhanceNow("link"));
+          this.reportOutcome(await enhancer.enhanceNow("link"), command);
           return;
         }
         case "notes-only": {
@@ -555,7 +556,7 @@ export default class ShorthandPlugin extends Plugin {
           );
           // No appendTranscript, and core's empty-transcript gate would decline forever
           // without the waiver. The note's own prose reaches the model as `user_notes`.
-          this.reportOutcome(await enhancer.enhanceNow("link", { allowEmptyTranscript: true }));
+          this.reportOutcome(await enhancer.enhanceNow("link", { allowEmptyTranscript: true }), command);
           return;
         }
         default: {
@@ -704,7 +705,10 @@ export default class ShorthandPlugin extends Plugin {
       await runtime.sidecar?.close();
       await runtime.enhancer?.waitForIdle();
       if (reason === "stopped" && runtime.enhancer !== undefined) {
-        this.reportOutcome(await runtime.enhancer.enhanceNow("link"));
+        // Not issued from either command: this is capture's own finishing pass. "Enhance now"
+        // is still the right retry, since it is the command that resumes work on a note this
+        // capture already owns.
+        this.reportOutcome(await runtime.enhancer.enhanceNow("link"), "enhance-now");
       }
       new Notice("Shorthand capture stopped.");
     } catch (error) {
@@ -785,7 +789,15 @@ export default class ShorthandPlugin extends Plugin {
     }
   }
 
-  private reportOutcome(outcome: PassOutcome): void {
+  /**
+   * `command` names the retry the requeued-with-backoff message points at. The three
+   * `runEnhancement` call sites pass through the command that produced their route; the
+   * automatic post-capture pass at `finishRuntime` names "enhance-now" itself, since it
+   * belongs to no user command. Passing the wrong one would send a "notes-only" user (who can
+   * only have run "Clean up this note") to "Enhance now", which then refuses for lack of a
+   * transcript link — a dead end dressed up as guidance.
+   */
+  private reportOutcome(outcome: PassOutcome, command: EnhanceCommandId): void {
     if (outcome.status === "completed") {
       this.dispatch({ type: "enhancement-finished" });
       new Notice(outcome.written ? "Shorthand updated the AI block." : "The AI block was already up to date.");
@@ -796,7 +808,7 @@ export default class ShorthandPlugin extends Plugin {
     } else if (outcome.status === "requeued") {
       this.fail(outcome.retryAfterMs === undefined
         ? `Enhancement was safely re-queued (${outcome.reason}).`
-        : "The meeting note was busy. Close competing file handles and run Enhance now again.");
+        : `The meeting note was busy. Close competing file handles and run ${enhanceCommandName(command)} again.`);
     } else if (outcome.status === "failed") {
       this.fail(outcome.error);
     } else if (outcome.status === "timed-out") {

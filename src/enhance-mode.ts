@@ -26,6 +26,20 @@ export type EnhanceRequest = Readonly<{
   writeTranscriptNote: boolean;
 }>;
 
+const ENHANCE_COMMAND_NAMES: Readonly<Record<EnhanceCommandId, string>> = {
+  "enhance-now": "Enhance now",
+  "clean-up-this-note": "Clean up this note",
+};
+
+/**
+ * The command palette name for an `EnhanceCommandId`, exactly as `main.ts` registers it.
+ * A `Record`, not a ternary, so a third command id is a compile error here rather than a
+ * silently wrong name — the same reason `onEnhanceStatus` in `main.ts` switches on `never`.
+ */
+export function enhanceCommandName(command: EnhanceCommandId): string {
+  return ENHANCE_COMMAND_NAMES[command];
+}
+
 export type EnhanceMode =
   /** Reuse the capture's own runner: its buffered transcript is newer than any sidecar on disk. */
   | Readonly<{ kind: "live-capture" }>
