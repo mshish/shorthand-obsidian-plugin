@@ -95,9 +95,13 @@ layout that custom markup silently drops.
 
 - Named exports; `Readonly<{...}>` for settings shapes
 - Strict TypeScript, no `any`
-- User-facing copy in `setDesc` is direct and specific about consequences —
-  match the register of the existing settings descriptions rather than writing
-  generic help text
+- User-facing copy in the settings tab follows
+  [docs/settings-copy-style.md](docs/settings-copy-style.md) — nine rules, each
+  with the primary source it comes from. Read it before writing a `setName` or
+  a `setDesc`
+- Do not match the register of the neighbouring rows. That instruction is what
+  this rule replaced, and it is how the descriptions grew to five sentences: a
+  rule that only ever ratchets one way
 - Comments explain *why* and name the failure they prevent; never restate the
   code, and never describe behaviour the code does not implement
 
