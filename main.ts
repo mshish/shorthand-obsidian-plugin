@@ -872,7 +872,7 @@ class ShorthandSettingTab extends PluginSettingTab {
     textSetting(containerEl, this.plugin, "Shorthand executable", shorthandExecutableDescription, "shorthandExecutable");
     new Setting(containerEl)
       .setName("Enhancement backend")
-      .setDesc("Choose whether note enhancement uses the Claude Agent SDK or a directly configured LLM provider.")
+      .setDesc("The Claude Agent SDK backend can look things up elsewhere in your vault; an LLM provider cannot.")
       .addDropdown((dropdown) => dropdown
         .addOption("claude-agent-sdk", "Claude Agent SDK")
         .addOption("llm", "LLM provider")
@@ -888,8 +888,8 @@ class ShorthandSettingTab extends PluginSettingTab {
       this.displayLlmProfileControls(containerEl, displayGeneration);
     }
     new Setting(containerEl)
-      .setName("Write transcript note")
-      .setDesc("Create a linked transcript sidecar note during capture, holding the raw transcript on disk (location set by \"Transcript sidecar directory\" below). Off by default: capture and live enhancement never require it — enhancement is always fed from the transcript in memory. This only controls whether new captures create a sidecar; a note that already has a transcript link keeps working with \"Enhance active note\" either way.")
+      .setName("Transcript notes")
+      .setDesc("Each capture also saves the raw transcript in its own linked note.")
       .addToggle((toggle) => toggle
         .setValue(this.plugin.settings.writeTranscriptNote)
         .onChange(async (value) => {
@@ -902,20 +902,30 @@ class ShorthandSettingTab extends PluginSettingTab {
     numberSetting(containerEl, this.plugin, "Minimum new characters", newCharacterThresholdDescription, "minNewChars");
     numberSetting(containerEl, this.plugin, "Minimum interval", passIntervalDescription, "minIntervalMs");
     new Setting(containerEl)
-      .setName("Enable live enhancement")
-      .setDesc("Run tick passes while capture is active. Stop and Enhance now still use a link-tier pass.")
+      .setName("Live enhancement")
+      .setDesc("The note is rewritten while the meeting runs, instead of only when you stop or run Enhance now.")
       .addToggle((toggle) => toggle
         .setValue(this.plugin.settings.enableLiveEnhancement)
         .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, enableLiveEnhancement: value })));
     new Setting(containerEl)
       .setName("Control Shorthand recording")
-      .setDesc("Start capture and Stop capture also drive Shorthand's recorder, so a capture needs no separate press of Shorthand's hotkey. Starting a capture cancels any recording already in progress — that recording's corrected transcript is discarded — and then starts a fresh one. Stopping a capture sends the recording toggle only when a recording is believed to be running, and never once Shorthand is known to be gone. Closing Obsidian cancels the recording in progress, and so does losing the transcript stream — the only case where no cancel is sent is when nothing this capture saw shows Shorthand was ever reached, since signalling a Shorthand that is not running would launch it. The consequence of that bias: quitting Shorthand in the middle of a capture normally does relaunch it, because the cancel is sent whenever there is any chance a recording is still running.")
+      .setDesc(createFragment((desc) => {
+        desc.appendText(
+          "Starting and stopping a capture also starts and stops Shorthand, so you don't need its hotkey. "
+          + "Quitting Shorthand mid-capture normally relaunches it — see ",
+        );
+        desc.createEl("a", {
+          text: "Driving Shorthand's recorder",
+          href: "https://github.com/mshish/obsidian-shorthand#driving-shorthands-recorder",
+        });
+        desc.appendText(".");
+      }))
       .addToggle((toggle) => toggle
         .setValue(this.plugin.settings.controlShorthandRecording)
         .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, controlShorthandRecording: value })));
     new Setting(containerEl)
       .setName("Debug logging")
-      .setDesc("Log every enhancement status and state transition to the developer console (Ctrl+Shift+I). Off by default because it is noisy. Turn it on when the note stops updating but capture looks healthy: a re-queue and a timeout both put the transcript back and retry, so they are deliberately silent in the UI and look identical to an idle capture from outside. Applies to the next capture, not one already running.")
+      .setDesc("Logs enhancement activity to the developer console. Turn this on if a note stops updating during capture.")
       .addToggle((toggle) => toggle
         .setValue(this.plugin.settings.debugLogging)
         .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, debugLogging: value })));

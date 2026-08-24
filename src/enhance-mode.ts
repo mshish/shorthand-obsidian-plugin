@@ -74,6 +74,6 @@ export function resolveEnhanceMode(request: EnhanceRequest): EnhanceMode {
     kind: "unavailable",
     message: request.writeTranscriptNote
       ? "This note has no shorthand-transcript wikilink. Start capture once to create and link a sidecar, or run \"Clean up this note\" to enhance the note as written."
-      : "This note has no shorthand-transcript wikilink, and \"Write transcript note\" is off. Turn it on in Shorthand settings and start capture once, or run \"Clean up this note\" to enhance the note as written.",
+      : "This note has no shorthand-transcript wikilink, and \"Transcript notes\" is off. Turn it on in Shorthand settings and start capture once, or run \"Clean up this note\" to enhance the note as written.",
   };
 }

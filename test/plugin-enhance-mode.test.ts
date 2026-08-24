@@ -87,7 +87,7 @@ describe("enhancement mode selection", () => {
       writeTranscriptNote: false,
     });
     expect(mode.kind).toBe("unavailable");
-    expect(mode).toHaveProperty("message", expect.stringContaining("Write transcript note"));
+    expect(mode).toHaveProperty("message", expect.stringContaining("Transcript notes"));
     expect(mode).toHaveProperty("message", expect.stringContaining("Clean up this note"));
   });
 
@@ -101,7 +101,7 @@ describe("enhancement mode selection", () => {
     })).toEqual({ kind: "notes-only" });
   });
 
-  // "Write transcript note" governs what a future capture writes. It says nothing about
+  // "Transcript notes" governs what a future capture writes. It says nothing about
   // whether this note can be cleaned up right now, so it must not reach this decision.
   test("Clean up this note ignores the transcript-note setting entirely", () => {
     expect(resolveEnhanceMode({
