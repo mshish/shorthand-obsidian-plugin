@@ -92,16 +92,6 @@ const ATTACH_GRACE_MS = 2_000;
  */
 const BEGIN_GRACE_MS = 1_500;
 
-/**
- * Shorthand's post-processing runs an LLM pass between the recording ending and the `final`
- * event, and that pass now happens entirely inside the drain window — before this plugin
- * drove the recorder, the toggle was pressed by hand and most of that time had already
- * elapsed by the time Stop capture ran. A post-processed `final` that misses the window
- * is force-killed and lost, so the budget is raised rather than documented as a limit:
- * the timeout only ever costs time on a capture that already failed to finalize.
- */
-const POST_PROCESS_DRAIN_TIMEOUT_MS = 45_000;
-
 type CaptureRuntime = {
   notePath: string;
   /** `undefined` when `writeTranscriptNote` is off: no sidecar file exists for this capture. */
@@ -292,14 +282,12 @@ export default class ShorthandPlugin extends Plugin {
         enhancementUnavailable = `${errorMessage(error)} Capture will continue with transcript only.`;
       }
       const command = this.shorthandCommand();
-      const postProcessing = this.settings.useShorthandPostProcessing;
-      const drainTimeoutMs = postProcessing ? POST_PROCESS_DRAIN_TIMEOUT_MS : DEFAULT_CONFIG.drainTimeoutMs;
       const client = new StreamClient({
         command,
         args: DEFAULT_CONFIG.followStreamArgs,
         maxReconnectAttempts: DEFAULT_CONFIG.reconnect.maxAttempts,
         backoffMs: DEFAULT_CONFIG.reconnect.backoffMs,
-        drainTimeoutMs,
+        drainTimeoutMs: DEFAULT_CONFIG.drainTimeoutMs,
       });
       const settled = new Promise<ExitDiagnosis>((resolveSettled) => client.once("settled", resolveSettled));
       const control = new ShorthandControl({ command });
@@ -314,7 +302,7 @@ export default class ShorthandPlugin extends Plugin {
           report: (phase, result) => this.reportControl(phase, result),
           // The recorder's wait for the terminal record replaces the follower's own drain
           // rather than preceding it, so it gets the same budget.
-          finalizeTimeoutMs: drainTimeoutMs,
+          finalizeTimeoutMs: DEFAULT_CONFIG.drainTimeoutMs,
           attachGraceMs: ATTACH_GRACE_MS,
           beginGraceMs: BEGIN_GRACE_MS,
         })
@@ -433,8 +421,8 @@ export default class ShorthandPlugin extends Plugin {
     // stop at its next checkpoint, and it is the only thing that can recall its own spawn.
     runtime.recorder?.requestStop();
     runtime.enhancer?.stopLiveTicks();
-    // Stopping can spend a control timeout plus a whole post-processing drain. Without
-    // this the status bar read "capturing" for all of it.
+    // Stopping can spend a control timeout plus the whole drain budget. Without this the
+    // status bar read "capturing" for all of it.
     this.dispatch({ type: "capture-stopping" });
     // The recorder owns the finalize signal *and* the wait for the record that proves it
     // landed. Tearing the follower down before that record arrives is what silently loses
