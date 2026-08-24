@@ -510,7 +510,6 @@ export default class ShorthandPlugin extends Plugin {
     if (vaultRoot === undefined) return;
     const notePath = resolve(vaultRoot, file.path);
     try {
-      if (!await this.ensureScaffold(notePath)) return;
       // Two separate facts, deliberately. A capture survives a failed createEnhancer, so
       // "is a capture running here" and "does it have a runner" are not the same question,
       // and collapsing them would let a second enhancer start on a note a capture still owns.
@@ -523,10 +522,16 @@ export default class ShorthandPlugin extends Plugin {
         transcriptLink: transcriptWikilink(await readFile(notePath, "utf8")),
         writeTranscriptNote: this.settings.writeTranscriptNote,
       });
+      // Resolved before scaffolding, and returned here on refusal, so that a command which
+      // declines never has side effects to show for it: ensureScaffold can pop a confirmation
+      // modal and write marker text into the note, and a refusal that did that first would have
+      // silently changed the note on its way to telling the user it changed nothing.
+      if (mode.kind === "unavailable") {
+        this.fail(mode.message);
+        return;
+      }
+      if (!await this.ensureScaffold(notePath)) return;
       switch (mode.kind) {
-        case "unavailable":
-          this.fail(mode.message);
-          return;
         case "live-capture":
           // `liveEnhancer` is what made this mode reachable; re-checking is for the compiler.
           if (liveEnhancer === undefined) return;
