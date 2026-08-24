@@ -53,10 +53,14 @@ import {
 } from "./src/enhance-mode.js";
 import {
   DEFAULT_PLUGIN_SETTINGS,
+  choosePromptFieldMode,
   defaultTemplateSectionText,
+  initialPromptFieldState,
   normalizePluginSettings,
   resolveTemplateSections,
+  storedPromptFieldValue,
   validatePromptSettings,
+  type PromptFieldState,
   type ShorthandPluginSettings,
 } from "./src/settings.js";
 import {
@@ -1263,6 +1267,13 @@ class ScaffoldModal extends Modal {
 }
 
 /**
+ * What the modal needs back from one field: the value to store, and a way to put the cursor
+ * in it when validation rejects it. A bare textarea element cannot answer the first, because
+ * "Default" stores "" no matter what text the textarea is holding.
+ */
+type PromptFieldHandle = Readonly<{ value: () => string; focus: () => void }>;
+
+/**
  * Both multi-line settings live in a modal rather than in the settings tab.
  *
  * Obsidian's declarative settings API has a first-class textarea control and its docs say to
@@ -1270,7 +1281,8 @@ class ScaffoldModal extends Modal {
  * adopting it would mean dropping every user below 1.13.0 to add one setting. For the
  * imperative `display()` API this plugin does use, the documented answer to multi-line input
  * is a form modal. `Setting.addTextArea` exists but is the undocumented path, so the fields
- * here are raw textareas built the way ScaffoldModal builds its own buttons.
+ * here are raw textareas built the way ScaffoldModal builds its own buttons, and the mode
+ * control is a `Setting` dropdown because Obsidian's imperative API has no radio group.
  */
 class NotePromptModal extends Modal {
   #settled = false;
@@ -1312,35 +1324,80 @@ class NotePromptModal extends Modal {
     this.contentEl.empty();
   }
 
-  /** Label, explanation, the effective default as placeholder, current value, and a reset. */
-  private field(name: string, description: string, placeholder: string, value: string): HTMLTextAreaElement {
-    this.contentEl.createEl("h4", { text: name });
-    this.contentEl.createEl("p", { text: description, cls: "setting-item-description" });
-    // The default goes in the placeholder rather than into the field itself. Prefilling it
-    // would store a frozen copy the moment the user pressed Save, which is the exact thing
-    // empty-means-default exists to avoid — but they still need to read what they are replacing.
-    const area = this.contentEl.createEl("textarea", {
-      placeholder,
-      attr: { rows: 10, spellcheck: "false" },
-    });
-    area.style.width = "100%";
-    area.value = value;
-    const reset = this.contentEl.createEl("button", { text: "Reset to default" });
-    reset.onclick = () => { area.value = ""; };
-    return area;
+  /**
+   * One field: label, explanation, a Default / Custom control, and the body that
+   * control switches between. The mode is derived from the stored string by
+   * `initialPromptFieldState`, so there is no second key that could disagree with the text.
+   */
+  private field(
+    name: string,
+    description: string,
+    effectiveDefault: string,
+    stored: string,
+  ): PromptFieldHandle {
+    let state = initialPromptFieldState(stored);
+    let editor: HTMLTextAreaElement | undefined;
+    const setting = new Setting(this.contentEl).setName(name).setDesc(description);
+    const body = this.contentEl.createDiv();
+
+    const render = (): void => {
+      body.empty();
+      editor = undefined;
+      if (state.mode === "default") {
+        // Read-only rather than hidden: the point of this control is that the text a user is
+        // inheriting is legible without first agreeing to replace it. A placeholder was not,
+        // because it vanished on the first keystroke.
+        body.createEl("textarea", {
+          text: effectiveDefault,
+          cls: "shorthand-prompt-textarea",
+          // aria-label because these textareas are siblings of the Setting rather than children
+          // of a <label>, so a screen reader has nothing to announce them by. Obsidian's own
+          // components carry this for you; hand-rolled elements do not, which is the trade this
+          // modal accepts to get a multi-line field at all.
+          attr: { readonly: "true", rows: 10, spellcheck: "false", "aria-label": `${name} (Shorthand's default, read-only)` },
+        });
+        return;
+      }
+      const area = body.createEl("textarea", {
+        cls: "shorthand-prompt-textarea",
+        attr: { rows: 10, spellcheck: "false", "aria-label": name },
+      });
+      area.value = state.editorText;
+      // Mirrored into the state on every keystroke so `storedPromptFieldValue` stays the only
+      // thing that decides what is written. Reading `area.value` at save time instead would
+      // route around it and could store the seeded default after a switch back to Default.
+      area.addEventListener("input", () => { state = { ...state, editorText: area.value }; });
+      editor = area;
+      area.focus();
+    };
+
+    setting.addDropdown((dropdown) => dropdown
+      .addOption("default", "Default")
+      .addOption("custom", "Custom")
+      .setValue(state.mode)
+      .onChange((value) => {
+        state = choosePromptFieldMode(state, value === "custom" ? "custom" : "default", effectiveDefault);
+        render();
+      }));
+    render();
+
+    return {
+      value: () => storedPromptFieldValue(state),
+      focus: () => { editor?.focus(); },
+    };
   }
 
   private async save(
-    guidance: HTMLTextAreaElement,
-    sections: HTMLTextAreaElement,
+    guidance: PromptFieldHandle,
+    sections: PromptFieldHandle,
     error: HTMLElement,
   ): Promise<void> {
     // Guards a second click landing while the first save is still awaiting saveData(), the
     // same job #settled does in ScaffoldModal.
     if (this.#settled) return;
     const validated = validatePromptSettings({
-      noteTakingGuidance: guidance.value,
-      templateSectionText: sections.value,
+      noteTakingGuidance: guidance.value(),
+      templateSectionText: sections.value(),
     });
     if (!validated.ok) {
       // Invalid input is never saved and the window stays open, focused on the field that

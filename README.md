@@ -241,8 +241,11 @@ single-line fields and both of these are multi-line.
 **Empty means "follow the default", and that is worth leaving alone.** An empty value is stored
 as empty rather than as a copy of the current default, so a setting you never touch keeps
 inheriting later improvements to it instead of freezing at whatever the text was the day you
-installed. The defaults are shown as placeholder text in each field, and **Reset to default**
-clears a field back to empty.
+installed. Each field is a dropdown of **Default** or **Custom**. Default shows Shorthand's
+current guidance read-only, so it stays legible without being replaced. Switching to Custom
+seeds the field with that same text the first time, so you edit the real guidance rather than
+an empty box; switching back to Default is a one-click route back to the empty, inheriting
+value, and does not discard whatever you typed if you switch to Custom again.
 
 **A custom prompt cannot break note writing.** The section format is enforced by a JSON schema
 the model is held to, not by prose in the prompt, and it is not reachable from these settings.
