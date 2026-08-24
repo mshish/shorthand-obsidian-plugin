@@ -7,9 +7,11 @@ is still running.
 
 Stateless Claude Agent SDK passes use the new transcript plus your own notes to maintain a
 structured summary in the meeting note; sections may be added, rewritten, reordered, or removed
-as the meeting develops. Turn on **Write transcript note** in settings to also keep a linked
+as the meeting develops. Turn on **Transcript notes** in settings to also keep a linked
 transcript sidecar note with the raw transcript on disk — off by default, since the meeting
-note's summary is usually all that's needed.
+note's summary is usually all that's needed. Enhancement never needs the sidecar. Every pass is
+fed from the transcript held in memory, and the setting governs only whether *new* captures
+create one. A note that already links a transcript keeps working with **Enhance now** either way.
 
 This repository is the **Obsidian plugin only** — a thin desktop lifecycle and UI wrapper. All
 capture, transcript reconciliation, enhancement and file writing live in the headless core,
@@ -21,7 +23,9 @@ on by package name and a pinned tag. The core repo also holds the design notes
 
 - Shorthand must be running with **Follow Live Transcript Output** enabled under **Advanced
   settings**. If Shorthand is stopped or that setting is disabled, `--follow-stream` exits with code 2
-  and Shorthand reports both remedies.
+  and Shorthand reports both remedies. **Shorthand executable** defaults to the bare command
+  `shorthand`, which resolves through your PATH. Clearing the field restores that default rather
+  than leaving it empty.
 - For the default Claude Agent SDK enhancement backend, the `claude` CLI must be installed and
   logged in. On Windows the standard `C:\Users\<you>\.local\bin\claude.exe` location is detected;
   another location can be configured in the plugin's settings tab. The LLM provider backend does
@@ -284,9 +288,11 @@ file writer, never through Obsidian's vault API.
   window is not configurable from this plugin's settings. There is no pass-count or USD budget
   setting: under Claude subscription authentication `total_cost_usd` is commonly `0`, so a USD
   cap would never trip, and a raw pass count can't tell a long meeting from a runaway loop — a
-  wall-clock window is the one backstop that works regardless of auth mode. The interval setting
+  wall-clock window is the one backstop that works regardless of auth mode. **Minimum interval**
   (`minIntervalMs`) is what actually bounds pass rate.
-- A stream disconnect cannot replay missed Shorthand events. When **Write transcript note** is on,
+- **Debug logging** is read once, when a capture starts. Turning it on part-way through
+  affects the next capture rather than the one already running.
+- A stream disconnect cannot replay missed Shorthand events. When **Transcript notes** is on,
   reconnects add a visible transcript-gap warning to the sidecar.
 
 ## Verification — run this before every push
