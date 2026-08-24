@@ -205,16 +205,17 @@ function stringValue(value: unknown, fallback: string): string {
 }
 
 /**
- * Every `data.json` written before this fix holds `DEFAULT_CONFIG.shorthandBinaryPath` — not
- * because anyone chose it, but because it was `DEFAULT_PLUGIN_SETTINGS.shorthandExecutable`
- * and Obsidian persists the whole settings object. `resolve("shorthand")` points at a file
- * that doesn't exist, so nothing that works today stops working; treating it as unset lets
- * `shorthandCommand()`'s `|| undefined` finally reach core's own detection. Compared against
- * the imported constant, not a string literal, so this stops firing the day core's own
- * default becomes a real path.
+ * `"shorthand"` here is a fixed sentinel, not `DEFAULT_CONFIG.shorthandBinaryPath`: it is the
+ * value `DEFAULT_PLUGIN_SETTINGS.shorthandExecutable` held before this fix, and Obsidian
+ * persisted it into every `data.json` an earlier plugin version wrote. Leaving it in place
+ * would keep `resolve("shorthand")` in force for every upgrading user, pointing at a file no
+ * install has, with no route back to `shorthandCommand()`'s detection. Tying the comparison to
+ * core's current constant instead would stop protecting those users the day core's own default
+ * changes to a real path, while their stored value stays "shorthand" — so the sentinel is
+ * fixed on purpose.
  */
 function migrateLegacyShorthandExecutable(value: string): string {
-  return value === DEFAULT_CONFIG.shorthandBinaryPath ? "" : value;
+  return value === "shorthand" ? "" : value;
 }
 
 function backendValue(

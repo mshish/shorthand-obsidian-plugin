@@ -197,13 +197,23 @@ describe("shorthandExecutable normalization", () => {
     expect(normalizePluginSettings({ shorthandExecutable: "   " }).shorthandExecutable).toBe("");
   });
 
-  // Every data.json written before this fix holds DEFAULT_CONFIG.shorthandBinaryPath, the
-  // pre-fix shipped default — not a value anyone chose. Compared against the imported
-  // constant, not the string literal "shorthand", so this stops firing the day core's own
-  // default becomes a real path rather than a bare command name.
+  // Every data.json written before this fix holds the literal "shorthand" — the pre-fix
+  // shipped default, which Obsidian persisted into the file, not a value anyone chose.
+  // Pinned to the literal, not DEFAULT_CONFIG.shorthandBinaryPath: comparing against core's
+  // constant would stop protecting an upgrading user's stored "shorthand" the day core's own
+  // default changes to a real path, because their data.json doesn't move with it.
   test('a stored legacy default ("shorthand") migrates to blank', () => {
-    expect(normalizePluginSettings({ shorthandExecutable: DEFAULT_CONFIG.shorthandBinaryPath }).shorthandExecutable)
+    expect(normalizePluginSettings({ shorthandExecutable: "shorthand" }).shorthandExecutable)
       .toBe("");
+  });
+
+  // The migration is narrow on purpose: it clears the one specific string the old default
+  // wrote, not "any bare command name". A user who deliberately types a different bare name
+  // keeps it — the bare-name description (settings-display.ts) is what steers them back to
+  // blank, not silent normalization.
+  test("a different bare command name is preserved untouched", () => {
+    expect(normalizePluginSettings({ shorthandExecutable: "shorthand-cli" }).shorthandExecutable)
+      .toBe("shorthand-cli");
   });
 
   test("an explicit path is preserved untouched", () => {
