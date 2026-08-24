@@ -14,6 +14,15 @@
 
 Every task's requirements implicitly include this section.
 
+### Which shell to run the commands in
+
+**Run every `sh` block in this plan under Git Bash, not PowerShell or cmd.** The blocks use
+POSIX syntax throughout — `&&` chaining, `grep`, `tail`, `touch`, `rm -f`, and `$VAR` — and
+several will fail or, worse, half-succeed under PowerShell.
+
+Paths appear in two forms and both are correct under Git Bash: `/d/tools/obsidian-shorthand`
+and `D:/tools/obsidian-shorthand`. Do not "normalize" them to backslashes.
+
 ### Repositories and ordering
 
 - `shorthand-core` lives at `D:/tools/shorthand-repos/shorthand-core`. `obsidian-shorthand` lives at `D:/tools/obsidian-shorthand`. They are separate git repositories.
@@ -111,8 +120,18 @@ triggered by `npm test` copies into a live Obsidian vault when `OBSIDIAN_PLUGIN_
 delivering uncommitted, mid-edit code and violating the repo's rule that the vault is left
 holding a build from committed code. Failing loudly keeps the build an explicit act.
 
+**This removes the build from the test path entirely, including the missing-bundle case.**
+The old code built when `main.js` was absent, which is the one branch that ever ran — and it
+carried exactly the same vault-write hazard. Leaving it in place would fix the staleness hole
+while keeping the delivery hole, so both go.
+
+**The consequence, stated plainly:** on a fresh clone, `npm test` now fails until you run
+`npm run build` once. That is the intended trade. A test suite that silently writes into a
+live vault is worse than one that asks you to build first, and every task in this plan runs
+the build anyway.
+
 **Files:**
-- Modify: `D:/tools/obsidian-shorthand/test/plugin-bundle.test.ts:29-33`
+- Modify: `D:/tools/obsidian-shorthand/test/plugin-bundle.test.ts:2` (delete the `spawnSync` import), `:5` (widen the `node:fs` import), `:29-33` (`ensureBundle`)
 
 **Interfaces:**
 - Consumes: nothing.
@@ -134,8 +153,16 @@ stale, and nothing complains. That passing run is the bug.
 Replace lines 29-33 of `test/plugin-bundle.test.ts` with:
 
 ```ts
-/** Sources whose changes must invalidate the bundle. Mirrors esbuild's entry graph. */
-const BUNDLE_SOURCES = ["main.ts", "src", "package.json"];
+/**
+ * Inputs that can change what the bundle contains: the entry point and its module graph, the
+ * build configuration itself, and the resolved dependency set. This is deliberately broader
+ * than esbuild's import graph — package-lock.json catches a core-pin bump, which changes the
+ * bundled code without touching a single file in src/.
+ *
+ * It is not exhaustive and cannot be: a dependency rebuilt in place under node_modules moves
+ * no file listed here. It covers every way this repo's own workflow changes the bundle.
+ */
+const BUNDLE_SOURCES = ["main.ts", "src", "package.json", "package-lock.json", "esbuild.config.mjs"];
 
 function newestSourceMtimeMs(target: string): number {
   const stats = statSync(target);
@@ -146,16 +173,16 @@ function newestSourceMtimeMs(target: string): number {
 }
 
 /**
- * A bundle older than its sources is not the code under test. Throwing rather than rebuilding
- * is deliberate: esbuild's deliver-to-vault plugin runs on every build, so a rebuild triggered
- * from `npm test` would copy mid-edit code into a live vault whenever OBSIDIAN_PLUGIN_DIR is
- * set. Building stays an explicit act.
+ * A bundle that is absent, or older than its sources, is not the code under test.
+ *
+ * This throws in both cases rather than building, and that is the whole point: esbuild's
+ * deliver-to-vault plugin runs on build.onEnd, so any build this file triggers copies into a
+ * live Obsidian vault whenever OBSIDIAN_PLUGIN_DIR is set. A test suite must never deliver
+ * mid-edit code to a vault, so building stays an explicit act the developer performs.
  */
 function ensureBundle(): void {
   if (!existsSync(BUNDLE)) {
-    const built = spawnSync(process.execPath, ["esbuild.config.mjs", "production"], { stdio: "inherit" });
-    if (built.status !== 0) throw new Error("main.js is missing and `npm run build` failed.");
-    return;
+    throw new Error("main.js does not exist. Run `npm run build` before `npm test`.");
   }
   const bundleMtimeMs = statSync(BUNDLE).mtimeMs;
   const newestSource = BUNDLE_SOURCES
@@ -167,13 +194,25 @@ function ensureBundle(): void {
 }
 ```
 
-- [ ] **Step 3: Widen the `node:fs` import**
+- [ ] **Step 3: Fix the imports**
+
+Two edits at the top of the file.
 
 Line 5 currently reads `import { existsSync } from "node:fs";`. Replace it with:
 
 ```ts
 import { existsSync, readdirSync, statSync } from "node:fs";
 ```
+
+Line 2 currently reads `import { spawnSync } from "node:child_process";`. **Delete it.**
+`spawnSync` was only used by the build branch you just removed, and it is now the sole
+remaining reference to `node:child_process` in this file. Confirm before deleting:
+
+```sh
+cd /d/tools/obsidian-shorthand && grep -n "spawnSync\|child_process" test/plugin-bundle.test.ts
+```
+
+Expected after the delete: no output.
 
 `join` and `resolve` are already imported from `node:path` on line 7. Do not add them again.
 
@@ -284,6 +323,14 @@ builds from a clean checkout.
 - Test: `D:/tools/shorthand-repos/shorthand-core/test/enhance-runner.test.ts` — insert after line 661
 - Modify: `D:/tools/shorthand-repos/shorthand-core/docs/CONTRACT.md` — insert after line 67
 - Modify: `D:/tools/shorthand-repos/shorthand-core/docs/ENHANCEMENT-LIMITS.md` — table row after line 36, prose at lines 38–39
+- Modify: `D:/tools/shorthand-repos/shorthand-core/package.json:3` — `"version": "0.10.0"` → `"version": "0.11.0"`
+
+**The version bump is not optional and is easy to miss.** Task 2 tags `0.11.0`
+and Task 3 verifies that the installed package *reports* `0.11.0`. A git tag
+does not change what `package.json` says, so skipping this makes Task 3's
+verification fail against a perfectly good release — and the natural
+misdiagnosis is "the install is broken", which sends you round the
+`npm cache clean` loop for a problem that is not there.
 
 **Interfaces:**
 - Consumes: nothing from an earlier task.
@@ -535,7 +582,7 @@ note" command is the reason it exists.
 - [ ] **Step 7: Commit**
 
 ```sh
-cd D:/tools/shorthand-repos/shorthand-core && git add src/agent/runner.ts test/enhance-runner.test.ts docs/CONTRACT.md docs/ENHANCEMENT-LIMITS.md && git commit -m "feat: let a caller waive the empty-transcript gate on a link pass
+cd D:/tools/shorthand-repos/shorthand-core && git add src/agent/runner.ts test/enhance-runner.test.ts docs/CONTRACT.md docs/ENHANCEMENT-LIMITS.md package.json && git commit -m "feat: let a caller waive the empty-transcript gate on a link pass
 
 A note written by hand has no transcript and never will, so the gate declines it
 forever. The gate itself is right and stays: it is what stops a capture paying for
@@ -665,15 +712,29 @@ both the lockfile and `node_modules` on the old commit while reporting success.
 - [ ] **Step 4: Verify the lockfile and `node_modules` actually moved**
 
 ```sh
-cd D:/tools/obsidian-shorthand && node -p "require('./package-lock.json').packages['node_modules/shorthand-core'].resolved" && node -p "require('./node_modules/shorthand-core/package.json').version" && node -p "typeof require('./node_modules/shorthand-core/dist/index.js')"
+cd D:/tools/obsidian-shorthand && node -p "require('./package-lock.json').packages['node_modules/shorthand-core'].resolved" && node -p "require('./node_modules/shorthand-core/package.json').version" && grep -n "allowEmptyTranscript" node_modules/shorthand-core/src/agent/runner.ts
 ```
 
-The `resolved` commit **must differ** from the one recorded in Step 1, and the
-version must read `0.11.0`. If `resolved` still ends in `1110af34…`, the install
-did nothing: delete `node_modules/shorthand-core`, run
-`npm cache clean --force`, and repeat Step 3. **Do not proceed on a green
-typecheck alone** — `main.ts` does not yet call the new overload, so `tsc` would
-be green against the old version too.
+Three checks, and all three must pass:
+
+1. The `resolved` commit **must differ** from the one recorded in Step 1. If it
+   still ends in `1110af34…`, the install did nothing: delete
+   `node_modules/shorthand-core`, run `npm cache clean --force`, and repeat
+   Step 3.
+2. The version must read `0.11.0`. This only works because Task 1 bumped
+   `package.json` in core; a tag alone does not change the version a package
+   reports.
+3. The `grep` must find `allowEmptyTranscript` in the installed copy. **This is
+   the check that actually proves the new code arrived** — the other two can
+   both pass against a mis-tagged commit.
+
+Do **not** verify by requiring a built artifact. Core has no `dist/index.js`:
+its `exports` map points `"."` straight at `./src/index.ts`, and `npm run build`
+emits only `dist/shorthand-notes.mjs` for the CLI bin. A `require` of any other
+`dist/` path always throws, whether or not the install worked.
+
+**Do not proceed on a green typecheck alone** — `main.ts` does not yet call the
+new overload, so `tsc` would be green against the old version too.
 
 - [ ] **Step 5: Rebuild from scratch and run the gate**
 
@@ -2038,8 +2099,11 @@ true, and it is now the only claim made about that window."
 - `test/plugin-settings.test.ts` contains the trust-boundary test proving a stored
   `useShorthandPostProcessing` is ignored, and two cross-wiring tests written against
   `controlShorthandRecording` and `debugLogging`.
-- `shorthand-core` is untouched, and `package.json` still pins
-  `github:mshish/shorthand-core#0.10.0`.
+- `shorthand-core` is untouched **by this section**. Its pin is already at
+  `github:mshish/shorthand-core#0.11.0`, moved there by Task 3 — do not move it
+  again, and do not move it back. (An earlier draft of this section was written
+  to stand alone and asserted the pin was still `0.10.0`. That was true only
+  before Section A was ordered ahead of it.)
 - A manual pass in a real vault: open the plugin's settings tab and confirm the row between
   **Control Shorthand recording** and **Debug logging** is gone; run a capture and confirm Stop
   still finalizes. The settings pane is `main.ts`, so no automated check covers it.
@@ -2844,6 +2908,27 @@ Line numbers are pre-increment-3. Match on the `setName` string.
   new name also pairs with **Transcript folder** directly below it, which is the row it
   reveals.
 
+  **This rename reaches outside `main.ts`, and missing that is the defect this note exists to
+  prevent.** Task 4 put the old label inside a user-facing error string in `src/`, and pinned
+  it with a test. Renaming the row without following through leaves an error message telling
+  users to find a setting that no longer exists under that name.
+
+  Fix both now, in this step. First find them:
+
+  ```sh
+  cd /d/tools/obsidian-shorthand && grep -rn "Write transcript note" src/ test/ main.ts
+  ```
+
+  Expected: the error string built by `resolveEnhanceMode` in `src/`, and the
+  `expect.stringContaining("Write transcript note")` assertion in its test. Change the string
+  to read `"Transcript notes"`, change the assertion to match, and re-run:
+
+  ```sh
+  cd /d/tools/obsidian-shorthand && npm test && grep -rn "Write transcript note" src/ test/ main.ts
+  ```
+
+  Expected: tests pass, and the `grep` returns nothing. Any remaining hit is a stale reference.
+
   **Displaced detail, triaged.** The old description carried three facts:
   - "capture and live enhancement never require it — enhancement is always fed from the
     transcript in memory" — user-observable (it explains why the default is off). → `README.md`,
@@ -3034,6 +3119,30 @@ verifying it must switch the backend first. Task 49 says so.
   Note the ordering constraint: `showDraftStatus` is declared after `baseUrlSetting` in the
   current file, so the closure reference is already valid. Confirm that before editing — if
   increment 6 has moved anything, fix the declaration order rather than duplicating the call.
+
+  **Third edit, and without it the feature is half-broken on the path users actually hit.**
+  Hanging the description off `showDraftStatus` alone covers the case where the user *changes*
+  the provider, but not the case where a profile is *loaded* with one already set. The async
+  load path assigns `draft = state.draft` (`main.ts:1088`), pushes each value into its control
+  (`main.ts:1114–1117`), and sets `ready = true` (`main.ts:1118`) — and never calls
+  `showDraftStatus`. Obsidian's `setValue()` does not fire `onChange`, so nothing recomputes
+  the description.
+
+  The visible bug: open settings with a saved OpenAI-compatible profile, and Base URL reads the
+  generic description until you touch the provider dropdown — telling the user a required field
+  is optional.
+
+  Add the call immediately after `ready = true`:
+
+  ```ts
+        ready = true;
+        // setValue() does not fire onChange, so nothing above recomputed the provider-dependent
+        // copy. Without this, a loaded openai-compatible profile shows Base URL as optional.
+        showDraftStatus();
+  ```
+
+  Verify by hand: save an OpenAI-compatible profile, close settings, reopen, and read Base URL
+  before touching anything. It must already say the field is required.
 
 - [ ] **Step 5: Rewrite `setKeyDescription` to use the tested helper.**
 
@@ -3503,9 +3612,9 @@ one of the three commands inconsistent — and a later reader would have read th
 oversight rather than a decision. All three now use `checkCallback`.
 
 **Scope note — Task 65 no longer converts the enhancement commands.** Task 5 already does,
-including introducing `activeMarkdownFileOrNull()`. Task 65 covers `start-capture-this-note`
+including introducing `hasActiveMarkdownFile()`. Task 65 covers `start-capture-this-note`
 alone and consumes the accessor Task 5 produced. If you are executing Task 65 and
-`activeMarkdownFileOrNull` does not exist, Task 5 has not landed — stop and say so.
+`hasActiveMarkdownFile` does not exist, Task 5 has not landed — stop and say so.
 
 ---
 
@@ -3538,13 +3647,13 @@ Append to `test/plugin-settings.test.ts`:
 
 ```ts
 describe("prompt field mode derivation", () => {
-  test("an empty stored value derives the default mode", () => {
-    expect(initialPromptFieldState("")).toEqual({ mode: "default", editorText: "" });
-    expect(initialPromptFieldState("   \n  ")).toEqual({ mode: "default", editorText: "" });
+  test("an empty stored value derives the default mode, unseeded", () => {
+    expect(initialPromptFieldState("")).toEqual({ mode: "default", editorText: "", seeded: false });
+    expect(initialPromptFieldState("   \n  ")).toEqual({ mode: "default", editorText: "", seeded: false });
   });
 
-  test("a stored value derives the custom mode and round-trips its text", () => {
-    expect(initialPromptFieldState("Be terse.")).toEqual({ mode: "custom", editorText: "Be terse." });
+  test("a stored value derives the custom mode, counts as seeded, and round-trips its text", () => {
+    expect(initialPromptFieldState("Be terse.")).toEqual({ mode: "custom", editorText: "Be terse.", seeded: true });
     expect(storedPromptFieldValue(initialPromptFieldState("Be terse."))).toBe("Be terse.");
   });
 
@@ -3554,7 +3663,7 @@ describe("prompt field mode derivation", () => {
   // and stores the text anyway is the exact failure this test exists to catch.
   test("the default mode stores an empty string, never the default's text", () => {
     const defaultText = "You maintain the AI-owned section block of a meeting note.";
-    const state: PromptFieldState = { mode: "default", editorText: defaultText };
+    const state: PromptFieldState = { mode: "default", editorText: defaultText, seeded: true };
     expect(storedPromptFieldValue(state)).toBe("");
     expect(storedPromptFieldValue(state)).not.toBe(defaultText);
   });
@@ -3598,15 +3707,29 @@ export type PromptFieldMode = "default" | "custom";
  * What one field of the prompt modal is showing right now. `mode` is never stored: it is
  * derived from the stored string, because a second stored key could disagree with the text
  * and there would be no way to tell which one was right.
+ *
+ * `seeded` is modal-session state and is likewise never stored. It records that this field has
+ * already been filled from the default once, so a later switch to Customize leaves the editor
+ * alone. Without it, "has the user cleared this box on purpose?" and "has this box never been
+ * filled?" are the same observation, and the second reading silently overwrites the first.
  */
-export type PromptFieldState = Readonly<{ mode: PromptFieldMode; editorText: string }>;
+export type PromptFieldState = Readonly<{
+  mode: PromptFieldMode;
+  editorText: string;
+  seeded: boolean;
+}>;
 
-/** Empty stored value means "use the default", so it derives the default mode. */
+/**
+ * Empty stored value means "use the default", so it derives the default mode.
+ *
+ * A stored custom value counts as already seeded: the box holds the user's own text, and
+ * nothing should ever overwrite it.
+ */
 export function initialPromptFieldState(stored: string): PromptFieldState {
   const trimmed = stored.trim();
   return trimmed.length === 0
-    ? { mode: "default", editorText: "" }
-    : { mode: "custom", editorText: stored };
+    ? { mode: "default", editorText: "", seeded: false }
+    : { mode: "custom", editorText: stored, seeded: true };
 }
 
 /**
@@ -3666,7 +3789,18 @@ Append these three tests inside the `prompt field mode derivation` describe bloc
 ```ts
   test("the first switch to custom seeds the editor from the effective default", () => {
     const seeded = choosePromptFieldMode(initialPromptFieldState(""), "custom", "Write plainly.");
-    expect(seeded).toEqual({ mode: "custom", editorText: "Write plainly." });
+    expect(seeded).toEqual({ mode: "custom", editorText: "Write plainly.", seeded: true });
+  });
+
+  // The case an "is the box empty" guard gets wrong. Clearing the box is a deliberate act;
+  // flipping to the default to re-read it and back must not undo that.
+  test("a deliberately cleared editor is not re-seeded on a later switch to custom", () => {
+    const seeded = choosePromptFieldMode(initialPromptFieldState(""), "custom", "Write plainly.");
+    const cleared: PromptFieldState = { ...seeded, editorText: "" };
+    const backedOut = choosePromptFieldMode(cleared, "default", "Write plainly.");
+    const returned = choosePromptFieldMode(backedOut, "custom", "Write plainly.");
+    expect(returned.editorText).toBe("");
+    expect(storedPromptFieldValue(returned)).toBe("");
   });
 
   test("switching back to custom keeps the user's edit instead of re-seeding over it", () => {
@@ -3706,20 +3840,22 @@ Insert into `src/settings.ts` after `storedPromptFieldValue`:
 
 ```ts
 /**
- * Seeds on the first switch to custom and never again. Re-seeding on every switch would
- * silently overwrite an edit the moment the user flipped to "Use default" to re-read the
- * original and flipped back — which is the one thing that control is for.
+ * Seeds on the first switch to custom and never again.
+ *
+ * The guard is `seeded`, not "is the box empty". Those differ in exactly one case, and it is a
+ * case users hit: clear the box to write from scratch, flip to "Use default" to re-read the
+ * original, flip back — and an emptiness test would refill the box with the default, throwing
+ * away the blank canvas the user deliberately made. Flipping across to compare is the one thing
+ * this control exists for, so it must be free.
  */
 export function choosePromptFieldMode(
   state: PromptFieldState,
   mode: PromptFieldMode,
   effectiveDefault: string,
 ): PromptFieldState {
-  if (mode === "default") return { mode: "default", editorText: state.editorText };
-  return {
-    mode: "custom",
-    editorText: state.editorText.trim().length === 0 ? effectiveDefault : state.editorText,
-  };
+  if (mode === "default") return { ...state, mode: "default" };
+  if (state.seeded) return { ...state, mode: "custom" };
+  return { mode: "custom", editorText: effectiveDefault, seeded: true };
 }
 ```
 
@@ -4138,7 +4274,6 @@ Cut each statement and paste it, unchanged, into its new position.
 - Produces:
   - `ShorthandSettingTab.displayBasic(containerEl: HTMLElement, displayGeneration: number): void`
   - `ShorthandSettingTab.displayAdvanced(containerEl: HTMLElement): void`
-  - `ShorthandSettingTab.displayFooter(containerEl: HTMLElement): void`
 
 - [ ] **Step 1: Replace the body of `display()` with three calls**
 
@@ -4153,7 +4288,7 @@ Replace lines 818–911 — that is, the entire `display()` method — with:
     // the guidelines reserve headings for separating multiple sections.
     this.displayBasic(containerEl, displayGeneration);
     this.displayAdvanced(containerEl);
-    this.displayFooter(containerEl);
+
   }
 ```
 
@@ -4206,7 +4341,7 @@ Item 2 is not a bare paste: it was the `else` half of the `if/else` at lines 837
 Do **not** move the LLM block anywhere else. It is already conditional on the backend choice,
 which is its own disclosure, and the spec keeps it where it is.
 
-- [ ] **Step 3: Create `displayAdvanced` and `displayFooter` and paste the rest**
+- [ ] **Step 3: Create `displayAdvanced` and paste the rest**
 
 Add after `displayBasic`:
 
@@ -4224,10 +4359,13 @@ Add after `displayBasic`:
   private displayAdvanced(containerEl: HTMLElement): void {
     new Setting(containerEl).setName("Advanced").setHeading();
   }
-
-  private displayFooter(containerEl: HTMLElement): void {
-  }
 ```
+
+**Two methods, not three.** An earlier draft of this task also created a `displayFooter` to
+hold the "Direct-file write limitation" heading. **Task 47 deletes that row**, so by the time
+you get here there is nothing for a footer to contain. Do not create one, and do not go
+looking for the row — if it is still in the file, Increment 5 has not landed and you are on
+the wrong branch.
 
 Paste into `displayAdvanced`, after the heading, in this order, verbatim from what you cut:
 
@@ -4254,13 +4392,14 @@ Item 2 keeps its condition, which moves with it:
     }
 ```
 
-Paste into `displayFooter`: the "Direct-file write limitation" heading and its `setDesc`, cut
-from lines 903–910, comment included. It is a heading in its own right, so it closes the
-Advanced group rather than reading as part of it.
+There should now be nothing left over. Two rows that the original `display()` contained are
+absent by design, and finding either one means an earlier increment has not landed:
 
-There should now be nothing left over. The row cut from lines 868–873, "Use Shorthand
-post-processing", was deleted by Increment 3 and appears in neither section — if you still find
-it in the file, Increment 3 has not landed and you are on the wrong branch.
+- **"Use Shorthand post-processing"** (lines 868–873 today) — deleted by Increment 3.
+- **"Direct-file write limitation"** (lines 903–910 today) — deleted by Increment 5, Task 47,
+  which moved its content to `README.md`. Advanced is therefore the last group in the pane.
+
+If either is still in the file, stop; you are on the wrong branch.
 
 - [ ] **Step 4: Verify — typecheck, build, then click through Obsidian**
 
@@ -4270,23 +4409,29 @@ cd /d/tools/obsidian-shorthand && npx tsc --noEmit && npm test && npm run build
 
 Then in a real vault, after Ctrl+R:
 
+**Use the post-Increment-5 labels below.** Increment 5 renamed several rows before this task
+ran, so the pane no longer reads the way the original source did. In particular "Write
+transcript note" is now **Transcript notes**.
+
 1. Settings → Shorthand. Read the pane top to bottom. Confirm the order is: Enhancement
-   backend, Write transcript note, Control Shorthand recording, the **Note writing** heading
-   and its Edit… row, the **Advanced** heading, then Shorthand executable, Claude executable,
-   Minimum new characters, Minimum interval, Live enhancement, Debug logging, then the
-   **Direct-file write limitation** heading.
+   backend, **Transcript notes**, Control Shorthand recording, the **Note writing** heading and
+   its Edit… row, the **Advanced** heading, then Shorthand executable, Claude executable,
+   Minimum new characters, Minimum interval, Live enhancement, Debug logging. **Advanced is the
+   last group** — the pane ends with Debug logging.
 2. Confirm there is no heading above "Enhancement backend" and no expander, twisty or
    "Show advanced" toggle anywhere. Advanced is a plain heading with rows under it.
-3. Confirm the Advanced rows read exactly: Shorthand executable, Claude executable, Minimum new
-   characters, Minimum interval, Live enhancement, Debug logging — six rows. Any other wording
-   is Increment 5's copy; fix it there, not here.
+3. Confirm the Advanced group holds exactly six rows: Shorthand executable, Claude executable,
+   Minimum new characters, Minimum interval, Live enhancement, Debug logging. Exact wording is
+   Increment 5's; this check is about which rows are in the group and how many.
 4. Switch **Enhancement backend** to "LLM provider". The Claude executable row disappears from
    Advanced and the LLM provider profile block appears immediately below the dropdown. Switch
    back; Claude executable returns.
-5. Turn **Write transcript note** on. The **Transcript folder** row appears immediately beneath
-   it, in Basic, above the Advanced heading — not down in Advanced. Turn it off; it goes. If it
+5. Turn **Transcript notes** on. The **Transcript folder** row appears immediately beneath it,
+   in Basic, above the Advanced heading — not down in Advanced. Turn it off; it goes. If it
    appears anywhere below the Advanced heading, the paste went into the wrong method.
 6. Type a path into Transcript folder, close settings, reopen. The value persisted.
+7. Confirm no **Direct-file write limitation** row exists. Task 47 deleted it and moved its
+   content to `README.md`. If it is present, Increment 5 did not fully land.
 
 - [ ] **Step 5: Confirm you did NOT apply the unconditional variant**
 
@@ -4326,10 +4471,10 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 `npx tsc --noEmit`, the bundle-load smoke test, and Step 4's manual pass.
 
 **Scope.** Task 5 already converted `enhance-now` and `clean-up-this-note` to `checkCallback`
-and introduced the side-effect-free `activeMarkdownFileOrNull()`. This task converts the one
+and introduced the side-effect-free `hasActiveMarkdownFile()`. This task converts the one
 remaining command with the same precondition, so all three are consistent.
 
-If `activeMarkdownFileOrNull` does not exist in `main.ts`, Task 5 has not landed. **Stop and
+If `hasActiveMarkdownFile` does not exist in `main.ts`, Task 5 has not landed. **Stop and
 say so** rather than reimplementing it here — two copies of that accessor would diverge.
 
 **This is a user-visible change and it is the desired behaviour.** Obsidian's own typings state
@@ -4349,7 +4494,7 @@ the command running.
   by command id)
 
 **Interfaces:**
-- Consumes: `ShorthandPlugin.activeMarkdownFileOrNull(): TFile | null` (produced by Task 5)
+- Consumes: `ShorthandPlugin.hasActiveMarkdownFile(): boolean` (produced by Task 5)
 - Produces: nothing.
 
 - [ ] **Step 1: Confirm Task 5's accessor exists**
@@ -4357,7 +4502,7 @@ the command running.
 Run:
 
 ```sh
-cd /d/tools/obsidian-shorthand && grep -n "activeMarkdownFileOrNull" main.ts
+cd /d/tools/obsidian-shorthand && grep -n "hasActiveMarkdownFile" main.ts
 ```
 
 Expected: at least three hits — the method definition, and its use in the `enhance-now` and
@@ -4382,12 +4527,12 @@ Replace that `addCommand` block with:
     // checkCallback, not callback: Obsidian hides a command whose check returns false, which
     // is its prescribed way to express "needs an open Markdown note". Matches the two
     // enhancement commands. The check runs on every palette render, so it must not fire a
-    // Notice — hence activeMarkdownFileOrNull rather than activeMarkdownFile.
+    // Notice — hence hasActiveMarkdownFile rather than activeMarkdownFile.
     this.addCommand({
       id: "start-capture-this-note",
       name: "Start capture on this note",
       checkCallback: (checking: boolean) => {
-        if (this.activeMarkdownFileOrNull() === null) return false;
+        if (!this.hasActiveMarkdownFile()) return false;
         if (checking) return true;
         void this.startCaptureOnActiveNote();
         return true;
