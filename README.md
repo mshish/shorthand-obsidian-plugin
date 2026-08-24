@@ -160,11 +160,10 @@ text Shorthand had already committed and the corrected `final` is discarded.
 ## Driving Shorthand's recorder
 
 By default, **Start capture** and **Stop capture** also drive Shorthand's recorder, so a capture no
-longer needs a separate press of Shorthand's global hotkey. Two settings control this:
+longer needs a separate press of Shorthand's global hotkey. One setting controls this:
 
-- **Control Shorthand recording** (default on) — drive the recorder from start and stop.
-- **Use Shorthand post-processing** (default off) — use `--toggle-post-process` instead of
-  `--toggle-transcription` as the recording toggle.
+- **Control Shorthand recording** (default on) — drive the recorder from start and stop. The
+  recording toggle is always `--toggle-transcription`.
 
 Shorthand's CLI offers no `--start`/`--stop` — the transcription flags are toggles — so the plugin
 makes each end deterministic instead of guessing:
@@ -213,13 +212,6 @@ makes each end deterministic instead of guessing:
 
 **Toggle Shorthand recording** and **Cancel Shorthand recording** stay available as the manual override,
 with or without an active capture.
-
-With **Use Shorthand post-processing** on, Shorthand runs an LLM pass after the recording ends, so Stop
-capture allows it a longer window (45s instead of 10s) to deliver the final transcript before the
-follower is stopped. A capture keeps whichever value the setting had when it started, so it always
-finalizes with the same toggle it started the recording with; changing the setting mid-capture
-therefore affects only **Toggle Shorthand recording** and the next capture, and during that window the
-manual command drives the other flag than the capture will.
 
 Stopping is not instant: it can spend a control timeout plus the whole drain budget waiting for
 Shorthand's `final`, so the status bar reads `Shorthand: stopping` for that time.
