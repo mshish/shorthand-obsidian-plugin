@@ -31,10 +31,23 @@ module.exports = { Plugin, PluginSettingTab, Modal, Notice, Setting, MarkdownVie
  * than esbuild's import graph — package-lock.json catches a core-pin bump, which changes the
  * bundled code without touching a single file in src/.
  *
+ * tsconfig.json is here for the same reason as esbuild.config.mjs, not because of what it
+ * includes: esbuild reads its compiler options — target among them — and those change the
+ * emitted bundle. Its own `include` also matches files under test/, but the entry point is
+ * main.ts, so those files never reach the bundle — watching tsconfig.json tracks esbuild's
+ * config input, not its module graph.
+ *
  * It is not exhaustive and cannot be: a dependency rebuilt in place under node_modules moves
  * no file listed here. It covers every way this repo's own workflow changes the bundle.
  */
-const BUNDLE_SOURCES = ["main.ts", "src", "package.json", "package-lock.json", "esbuild.config.mjs"];
+const BUNDLE_SOURCES = [
+  "main.ts",
+  "src",
+  "package.json",
+  "package-lock.json",
+  "esbuild.config.mjs",
+  "tsconfig.json",
+];
 
 function newestSourceMtimeMs(target: string): number {
   const stats = statSync(target);
