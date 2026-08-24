@@ -912,8 +912,8 @@ class ShorthandSettingTab extends PluginSettingTab {
       .setName("Control Shorthand recording")
       .setDesc(createFragment((desc) => {
         desc.appendText(
-          "Starting and stopping a capture also starts and stops Shorthand, so you don't need its hotkey. "
-          + "Quitting Shorthand mid-capture normally relaunches it — see ",
+          "Starting and stopping a capture also starts and stops Shorthand's recording, so you don't need its hotkey. "
+          + "Quitting Shorthand mid-capture normally relaunches the app — see ",
         );
         desc.createEl("a", {
           text: "Driving Shorthand's recorder",
