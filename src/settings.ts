@@ -37,7 +37,7 @@ export type ShorthandPluginSettings = Readonly<{
 
 export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
   backend: "claude-agent-sdk",
-  shorthandExecutable: DEFAULT_CONFIG.shorthandBinaryPath,
+  shorthandExecutable: "",
   claudeExecutable: "",
   sidecarDirectory: DEFAULT_CONFIG.sidecarDirectory.replaceAll("\\", "/"),
   minNewChars: DEFAULT_CONFIG.thresholds.enhancementNewCharacters,
@@ -54,7 +54,9 @@ export function normalizePluginSettings(input: unknown): ShorthandPluginSettings
   const value = isRecord(input) ? input : {};
   return {
     backend: backendValue(value.backend, DEFAULT_PLUGIN_SETTINGS.backend),
-    shorthandExecutable: nonEmptyString(value.shorthandExecutable, DEFAULT_PLUGIN_SETTINGS.shorthandExecutable),
+    shorthandExecutable: migrateLegacyShorthandExecutable(
+      stringValue(value.shorthandExecutable, DEFAULT_PLUGIN_SETTINGS.shorthandExecutable),
+    ),
     claudeExecutable: stringValue(value.claudeExecutable, DEFAULT_PLUGIN_SETTINGS.claudeExecutable),
     sidecarDirectory: vaultRelativeDirectory(value.sidecarDirectory, DEFAULT_PLUGIN_SETTINGS.sidecarDirectory),
     minNewChars: finiteInteger(value.minNewChars, DEFAULT_PLUGIN_SETTINGS.minNewChars, 1),
@@ -198,12 +200,21 @@ function finiteInteger(value: unknown, fallback: number, minimum: number): numbe
     : fallback;
 }
 
-function nonEmptyString(value: unknown, fallback: string): string {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback;
-}
-
 function stringValue(value: unknown, fallback: string): string {
   return typeof value === "string" ? value.trim() : fallback;
+}
+
+/**
+ * Every `data.json` written before this fix holds `DEFAULT_CONFIG.shorthandBinaryPath` — not
+ * because anyone chose it, but because it was `DEFAULT_PLUGIN_SETTINGS.shorthandExecutable`
+ * and Obsidian persists the whole settings object. `resolve("shorthand")` points at a file
+ * that doesn't exist, so nothing that works today stops working; treating it as unset lets
+ * `shorthandCommand()`'s `|| undefined` finally reach core's own detection. Compared against
+ * the imported constant, not a string literal, so this stops firing the day core's own
+ * default becomes a real path.
+ */
+function migrateLegacyShorthandExecutable(value: string): string {
+  return value === DEFAULT_CONFIG.shorthandBinaryPath ? "" : value;
 }
 
 function backendValue(

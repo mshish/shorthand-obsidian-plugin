@@ -11,17 +11,24 @@ import {
 import { DEFAULT_PLUGIN_SETTINGS } from "../src/settings.js";
 
 describe("shorthandExecutableDescription", () => {
-  test("a bare command name gets no description: it does not actually resolve via PATH", () => {
-    expect(shorthandExecutableDescription("shorthand")).toBe("");
+  test("empty means core detects Shorthand, mirroring claudeExecutableDescription", () => {
+    expect(shorthandExecutableDescription("")).toBe("Shorthand is found automatically.");
+    expect(shorthandExecutableDescription("   ")).toBe("Shorthand is found automatically.");
+  });
+
+  test("the shipped default is blank and reports detection, not silence", () => {
+    expect(shorthandExecutableDescription(DEFAULT_PLUGIN_SETTINGS.shorthandExecutable))
+      .toBe("Shorthand is found automatically.");
+  });
+
+  test("a bare command name steers back to blank: it resolves relative to Obsidian's folder, not PATH", () => {
+    expect(shorthandExecutableDescription("shorthand"))
+      .toBe("This resolves relative to Obsidian's folder, not your Shorthand install — clear the field to detect it automatically.");
   });
 
   test("a path describes nothing: the field already shows it", () => {
     expect(shorthandExecutableDescription("C:\\Tools\\shorthand.exe")).toBe("");
     expect(shorthandExecutableDescription("/usr/local/bin/shorthand")).toBe("");
-  });
-
-  test("the shipped default is a bare name and stays silent, not falsely descriptive", () => {
-    expect(shorthandExecutableDescription(DEFAULT_PLUGIN_SETTINGS.shorthandExecutable)).toBe("");
   });
 });
 

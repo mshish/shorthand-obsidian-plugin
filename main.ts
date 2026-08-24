@@ -588,10 +588,11 @@ export default class ShorthandPlugin extends Plugin {
    * signal delivered to a different Shorthand install than the one being followed is silent.
    */
   private shorthandCommand(): string {
-    // this.settings.shorthandExecutable is never blank — normalizePluginSettings rewrites a
-    // cleared field back to "shorthand" — so this always passes an explicit override.
-    // detectShorthandExecutable's PATH search and conventional-location fallbacks are
-    // unreachable from this plugin as a result.
+    // detectShorthandExecutable defers to SHORTHAND_BIN only when its override argument is
+    // nullish (`??`), not merely empty, so a blank setting has to become `undefined` here
+    // rather than passing "" straight through: pass "" instead, and every user who leaves
+    // this field blank would silently skip the SHORTHAND_BIN fallback and land straight in
+    // the PATH search.
     return detectShorthandExecutable(this.settings.shorthandExecutable || undefined);
   }
 

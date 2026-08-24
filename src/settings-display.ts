@@ -10,15 +10,19 @@
  */
 
 /**
- * `normalizePluginSettings` never stores a blank `shorthandExecutable` — a cleared field
- * normalizes back to the bare command `shorthand` — so `shorthandCommand()` in `main.ts`
- * always passes an explicit override to `detectShorthandExecutable`, and a bare command name
- * resolves relative to Obsidian's working directory, never through PATH. That resolution is
- * tracked as a separate bug; until it's fixed, this row has no true, useful sentence to show,
- * so it gets none (settings-copy-style.md rule 2) rather than one that documents the bug.
+ * Empty means core detects Shorthand itself (rule 2's opposite case: the label alone doesn't
+ * say that, so it gets a sentence). A full path needs nothing added — the field already shows
+ * it (rule 4's "already self-describing" carve-out) — but a bare command name is worth a word:
+ * `shorthandCommand()` in `main.ts` resolves it relative to Obsidian's working folder, not
+ * through `PATH`, so a name typed here almost never does what it looks like it does. That's a
+ * consequence a user can act on, not core's internal vocabulary (rule 3), so it earns a
+ * sentence steering back to blank instead of staying silent.
  */
-export function shorthandExecutableDescription(_stored: string): string {
-  return "";
+export function shorthandExecutableDescription(stored: string): string {
+  const trimmed = stored.trim();
+  if (trimmed.length === 0) return "Shorthand is found automatically.";
+  if (/[\\/]/.test(trimmed)) return "";
+  return "This resolves relative to Obsidian's folder, not your Shorthand install — clear the field to detect it automatically.";
 }
 
 /** Empty means core detects the CLI itself, and the path it finds is shown nowhere. */

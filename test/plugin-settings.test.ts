@@ -182,6 +182,44 @@ describe("plugin settings normalization", () => {
   });
 });
 
+describe("shorthandExecutable normalization", () => {
+  // The load-bearing property: shorthandCommand() in main.ts only reaches
+  // detectShorthandExecutable's PATH search and conventional-location fallbacks when this
+  // setting is blank. A default or a "cleared" field that comes back non-empty defeats
+  // detection the same way the pre-fix bug did.
+  test("defaults to blank", () => {
+    expect(DEFAULT_PLUGIN_SETTINGS.shorthandExecutable).toBe("");
+    expect(normalizePluginSettings({})).toMatchObject({ shorthandExecutable: "" });
+  });
+
+  test("a cleared field stays cleared", () => {
+    expect(normalizePluginSettings({ shorthandExecutable: "" }).shorthandExecutable).toBe("");
+    expect(normalizePluginSettings({ shorthandExecutable: "   " }).shorthandExecutable).toBe("");
+  });
+
+  // Every data.json written before this fix holds DEFAULT_CONFIG.shorthandBinaryPath, the
+  // pre-fix shipped default — not a value anyone chose. Compared against the imported
+  // constant, not the string literal "shorthand", so this stops firing the day core's own
+  // default becomes a real path rather than a bare command name.
+  test('a stored legacy default ("shorthand") migrates to blank', () => {
+    expect(normalizePluginSettings({ shorthandExecutable: DEFAULT_CONFIG.shorthandBinaryPath }).shorthandExecutable)
+      .toBe("");
+  });
+
+  test("an explicit path is preserved untouched", () => {
+    expect(normalizePluginSettings({ shorthandExecutable: "C:\\Apps\\shorthand.exe" }).shorthandExecutable)
+      .toBe("C:\\Apps\\shorthand.exe");
+    expect(normalizePluginSettings({ shorthandExecutable: "/usr/local/bin/shorthand" }).shorthandExecutable)
+      .toBe("/usr/local/bin/shorthand");
+  });
+
+  test("malformed stored values fall back to blank rather than throwing", () => {
+    for (const garbage of [42, null, {}, [], true]) {
+      expect(normalizePluginSettings({ shorthandExecutable: garbage }).shorthandExecutable).toBe("");
+    }
+  });
+});
+
 describe("prompt setting resolution", () => {
   test("the default heading text matches core's own template sections", () => {
     expect(defaultTemplateSectionText()).toBe("Summary\nDecisions\nAction items");
