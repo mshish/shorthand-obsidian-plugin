@@ -111,8 +111,7 @@ type CaptureRuntime = {
   /**
    * Present exactly when this capture drives Shorthand's recorder. Built once, at start, from
    * the settings as they were then: reading them live at each call site let a setting
-   * flipped mid-capture send a stop signal that had no matching start (or the stop toggle
-   * for a different signal than the one that started the recording).
+   * flipped mid-capture send a stop signal that had no matching start.
    */
   recorder: ShorthandRecorder | undefined;
   /**
@@ -211,7 +210,7 @@ export default class ShorthandPlugin extends Plugin {
     this.addCommand({
       id: "toggle-shorthand-recording",
       name: "Toggle Shorthand recording",
-      callback: () => { this.fireControl(this.recordingSignal()); },
+      callback: () => { this.fireControl("toggle-transcription"); },
     });
     this.addCommand({
       id: "cancel-shorthand-recording",
@@ -311,9 +310,7 @@ export default class ShorthandPlugin extends Plugin {
       const recorder = this.settings.controlShorthandRecording
         ? new ShorthandRecorder({
           control,
-          // Captured from `postProcessing`, not read live: the recorder must stop the
-          // recording with the same toggle it started it with, even if the setting flips.
-          recordingSignal: recordingSignalFor(postProcessing),
+          recordingSignal: "toggle-transcription",
           report: (phase, result) => this.reportControl(phase, result),
           // The recorder's wait for the terminal record replaces the follower's own drain
           // rather than preceding it, so it gets the same budget.
@@ -581,21 +578,6 @@ export default class ShorthandPlugin extends Plugin {
   private shorthandCommand(): string {
     // Blank setting means "find it for me"; an explicit path always wins.
     return detectShorthandExecutable(this.settings.shorthandExecutable || undefined);
-  }
-
-  /**
-   * The live setting, deliberately: this is the manual override, which belongs to the user
-   * and not to any capture, so it must obey the switch as it is set right now.
-   *
-   * A capture snapshots its own copy at start instead of calling this, because it has to
-   * finalize with the same toggle it started the recording with. The split is intentional
-   * and has one visible consequence: flipping **Use Shorthand post-processing** mid-capture makes
-   * "Toggle Shorthand recording" drive the *other* flag than the one the capture will finalize
-   * with. Reconciling them would mean either a capture that stops with a toggle that has no
-   * matching start, or a manual command that silently ignores the setting — both worse.
-   */
-  private recordingSignal(): ControlSignal {
-    return recordingSignalFor(this.settings.useShorthandPostProcessing);
   }
 
   /**
@@ -1370,11 +1352,6 @@ function isInside(root: string, candidate: string): boolean {
 
 function samePath(left: string, right: string): boolean {
   return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
-}
-
-/** Which of Shorthand's two recording toggles a capture drives. */
-function recordingSignalFor(postProcessing: boolean): ControlSignal {
-  return postProcessing ? "toggle-post-process" : "toggle-transcription";
 }
 
 function streamExitMessage(diagnosis: ExitDiagnosis): string {
