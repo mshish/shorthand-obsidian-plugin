@@ -10,15 +10,15 @@
  */
 
 /**
- * Empty normalizes to the bare command `shorthand`, which resolves only through PATH — the
- * one thing the text field cannot show. A full path needs no description: it is already on
- * screen in the field.
+ * `normalizePluginSettings` never stores a blank `shorthandExecutable` — a cleared field
+ * normalizes back to the bare command `shorthand` — so `shorthandCommand()` in `main.ts`
+ * always passes an explicit override to `detectShorthandExecutable`, and a bare command name
+ * resolves relative to Obsidian's working directory, never through PATH. That resolution is
+ * tracked as a separate bug; until it's fixed, this row has no true, useful sentence to show,
+ * so it gets none (settings-copy-style.md rule 2) rather than one that documents the bug.
  */
-export function shorthandExecutableDescription(stored: string): string {
-  const trimmed = stored.trim();
-  if (trimmed.length === 0) return "";
-  if (trimmed.includes("/") || trimmed.includes("\\")) return "";
-  return `${trimmed} is looked up on your PATH.`;
+export function shorthandExecutableDescription(_stored: string): string {
+  return "";
 }
 
 /** Empty means core detects the CLI itself, and the path it finds is shown nowhere. */

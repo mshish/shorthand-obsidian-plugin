@@ -26,8 +26,9 @@ on by package name and a pinned tag. The core repo also holds the design notes
 - Shorthand must be running with **Follow Live Transcript Output** enabled under **Advanced
   settings**. If Shorthand is stopped or that setting is disabled, `--follow-stream` exits with code 2
   and Shorthand reports both remedies. **Shorthand executable** defaults to the bare command
-  `shorthand`, which resolves through your PATH. Clearing the field restores that default rather
-  than leaving it empty.
+  `shorthand`, which this plugin resolves relative to Obsidian's working directory, not your
+  PATH — most installs need an explicit path here. Clearing the field restores that default
+  rather than leaving it empty.
 - For the default Claude Agent SDK enhancement backend, the `claude` CLI must be installed and
   logged in. On Windows the standard `C:\Users\<you>\.local\bin\claude.exe` location is detected;
   another location can be configured in the plugin's settings tab. The LLM provider backend does

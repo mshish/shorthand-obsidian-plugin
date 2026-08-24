@@ -11,8 +11,8 @@ import {
 import { DEFAULT_PLUGIN_SETTINGS } from "../src/settings.js";
 
 describe("shorthandExecutableDescription", () => {
-  test("a bare command name says where it is looked up", () => {
-    expect(shorthandExecutableDescription("shorthand")).toBe("shorthand is looked up on your PATH.");
+  test("a bare command name gets no description: it does not actually resolve via PATH", () => {
+    expect(shorthandExecutableDescription("shorthand")).toBe("");
   });
 
   test("a path describes nothing: the field already shows it", () => {
@@ -20,9 +20,8 @@ describe("shorthandExecutableDescription", () => {
     expect(shorthandExecutableDescription("/usr/local/bin/shorthand")).toBe("");
   });
 
-  test("the shipped default is a bare name, so the row is never silent out of the box", () => {
-    expect(shorthandExecutableDescription(DEFAULT_PLUGIN_SETTINGS.shorthandExecutable))
-      .toBe("shorthand is looked up on your PATH.");
+  test("the shipped default is a bare name and stays silent, not falsely descriptive", () => {
+    expect(shorthandExecutableDescription(DEFAULT_PLUGIN_SETTINGS.shorthandExecutable)).toBe("");
   });
 });
 
