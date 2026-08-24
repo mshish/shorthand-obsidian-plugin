@@ -841,7 +841,7 @@ class ShorthandSettingTab extends PluginSettingTab {
     }
     new Setting(containerEl)
       .setName("Write transcript note")
-      .setDesc("Create a linked transcript note next to the meeting note, holding the raw transcript on disk. Off by default: capture and enhancement work entirely from the live transcript in memory, and nothing else is written to the vault. Turn this on to keep a persistent transcript you can review, or to let \"Enhance active note\" re-drive enhancement from a past capture after Obsidian restarts.")
+      .setDesc("Create a linked transcript sidecar note during capture, holding the raw transcript on disk (location set by \"Transcript sidecar directory\" below). Off by default: capture and live enhancement never require it — enhancement is always fed from the transcript in memory. This only controls whether new captures create a sidecar; a note that already has a transcript link keeps working with \"Enhance active note\" either way.")
       .addToggle((toggle) => toggle
         .setValue(this.plugin.settings.writeTranscriptNote)
         .onChange(async (value) => {
