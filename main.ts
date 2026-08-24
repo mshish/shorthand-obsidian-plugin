@@ -100,7 +100,8 @@ const POST_PROCESS_DRAIN_TIMEOUT_MS = 45_000;
 
 type CaptureRuntime = {
   notePath: string;
-  sidecarPath: string;
+  /** `undefined` when `writeTranscriptNote` is off: no sidecar file exists for this capture. */
+  sidecarPath: string | undefined;
   client: StreamClient;
   control: ShorthandControl;
   /**
@@ -123,7 +124,8 @@ type CaptureRuntime = {
    * Shorthand. The follower's exit code cannot say this on its own.
    */
   helloEver: boolean;
-  sidecar: SidecarWriter;
+  /** `undefined` when `writeTranscriptNote` is off: no sidecar file exists for this capture. */
+  sidecar: SidecarWriter | undefined;
   enhancer: EnhanceRunner | undefined;
   settled: Promise<ExitDiagnosis>;
   stopping: boolean;
@@ -228,35 +230,40 @@ export default class ShorthandPlugin extends Plugin {
 
     try {
       if (!await this.ensureScaffold(notePath)) return;
-      const noteContent = await readFile(notePath, "utf8");
-      const linked = transcriptWikilink(noteContent);
-      const relativeSidecar = linked === undefined
-        ? `${this.settings.sidecarDirectory}/${timestampName(new Date())}`
-        : addMarkdownExtension(linked);
-      const sidecarPath = resolve(vaultRoot, relativeSidecar);
-      if (!isInside(vaultRoot, sidecarPath) || samePath(notePath, sidecarPath)) {
-        this.fail("The configured transcript sidecar path is outside the vault or resolves to the meeting note.");
-        return;
-      }
-      if (linked === undefined) {
-        const link = relative(vaultRoot, sidecarPath).replaceAll("\\", "/").replace(/\.md$/i, "");
-        const result = await linkTranscriptFrontmatter(notePath, link);
-        if (result.status === "note-locked") {
-          this.fail("The meeting note remained locked while adding its transcript link. Close competing file handles and retry.");
+      let sidecarPath: string | undefined;
+      let sidecar: SidecarWriter | undefined;
+      if (this.settings.writeTranscriptNote) {
+        const noteContent = await readFile(notePath, "utf8");
+        const linked = transcriptWikilink(noteContent);
+        const relativeSidecar = linked === undefined
+          ? `${this.settings.sidecarDirectory}/${timestampName(new Date())}`
+          : addMarkdownExtension(linked);
+        const resolvedSidecarPath = resolve(vaultRoot, relativeSidecar);
+        if (!isInside(vaultRoot, resolvedSidecarPath) || samePath(notePath, resolvedSidecarPath)) {
+          this.fail("The configured transcript sidecar path is outside the vault or resolves to the meeting note.");
           return;
         }
-        if (result.status === "retry") {
-          this.fail("The meeting note kept changing while adding its transcript link. Let Obsidian finish saving and retry.");
-          return;
+        if (linked === undefined) {
+          const link = relative(vaultRoot, resolvedSidecarPath).replaceAll("\\", "/").replace(/\.md$/i, "");
+          const result = await linkTranscriptFrontmatter(notePath, link);
+          if (result.status === "note-locked") {
+            this.fail("The meeting note remained locked while adding its transcript link. Close competing file handles and retry.");
+            return;
+          }
+          if (result.status === "retry") {
+            this.fail("The meeting note kept changing while adding its transcript link. Let Obsidian finish saving and retry.");
+            return;
+          }
+          if (result.status === "error") {
+            this.fail(result.error.message);
+            return;
+          }
         }
-        if (result.status === "error") {
-          this.fail(result.error.message);
-          return;
-        }
+        sidecarPath = resolvedSidecarPath;
+        sidecar = new SidecarWriter(sidecarPath, { flushIntervalMs: DEFAULT_CONFIG.sidecarFlushIntervalMs });
       }
 
       const transcript = new TranscriptStore();
-      const sidecar = new SidecarWriter(sidecarPath, { flushIntervalMs: DEFAULT_CONFIG.sidecarFlushIntervalMs });
       let enhancer: EnhanceRunner | undefined;
       let enhancementUnavailable: string | undefined;
       try {
@@ -330,7 +337,7 @@ export default class ShorthandPlugin extends Plugin {
         } else recorder?.observe(record);
         const update = transcript.ingest(generation, record);
         if (update === null) return;
-        sidecar.apply(update);
+        sidecar?.apply(update);
         const delta = enhancementDelta(update);
         if (delta.length === 0) return;
         enhancer?.appendTranscript(delta);
@@ -343,10 +350,10 @@ export default class ShorthandPlugin extends Plugin {
         this.#renderStatus();
       });
       client.on("disconnect", ({ generation }) => {
-        for (const update of transcript.markConnectionEnded(generation)) sidecar.apply(update);
+        for (const update of transcript.markConnectionEnded(generation)) sidecar?.apply(update);
       });
       client.on("reconnect", ({ generation, gap }) => {
-        if (gap) sidecar.addReconnectWarning(generation);
+        if (gap) sidecar?.addReconnectWarning(generation);
       });
       client.on("connectionError", ({ record }) => this.fail(`Shorthand connection error (${record.code}): ${record.message}`));
       client.on("protocolError", ({ error }) => this.fail(error.message));
@@ -358,7 +365,7 @@ export default class ShorthandPlugin extends Plugin {
       });
       client.on("giveUp", ({ attempts }) => this.fail(`Shorthand stream disconnected repeatedly; gave up after ${attempts} reconnect attempts.`));
       client.on("drainTimeout", () => this.fail("Shorthand did not finish the active transcript before the drain timeout; the child was stopped."));
-      sidecar.on("writeError", ({ error }) => this.fail(`Transcript sidecar write failed: ${error.message}`));
+      sidecar?.on("writeError", ({ error }) => this.fail(`Transcript sidecar write failed: ${error.message}`));
       // Registered before anything else awaits `settled`, so `shorthandDown` is already set by
       // the time `stopCapture()` resumes and decides whether a control spawn is safe.
       void settled.then(
@@ -461,7 +468,7 @@ export default class ShorthandPlugin extends Plugin {
     runtime.recorder?.teardown();
     // Signal first so the child cannot be orphaned, then best-effort flush pending sidecar
     // bytes: Obsidian does not await onunload/beforeunload.
-    void runtime.sidecar.close().catch(() => {});
+    void runtime.sidecar?.close().catch(() => {});
     this.#capture = undefined;
     this.dispatch({ type: "capture-stopped" });
   }
@@ -482,7 +489,11 @@ export default class ShorthandPlugin extends Plugin {
       const content = await readFile(notePath, "utf8");
       const linked = transcriptWikilink(content);
       if (linked === undefined) {
-        this.fail("This note has no shorthand-transcript wikilink. Start capture once to create and link a sidecar.");
+        this.fail(
+          this.settings.writeTranscriptNote
+            ? "This note has no shorthand-transcript wikilink. Start capture once to create and link a sidecar."
+            : "This note has no shorthand-transcript wikilink, and \"Write transcript note\" is off. Turn it on in Shorthand settings, then start capture once to create and link a sidecar.",
+        );
         return;
       }
       const sidecarPath = resolve(vaultRoot, addMarkdownExtension(linked));
@@ -648,7 +659,7 @@ export default class ShorthandPlugin extends Plugin {
       }
     }
     try {
-      await runtime.sidecar.close();
+      await runtime.sidecar?.close();
       await runtime.enhancer?.waitForIdle();
       if (reason === "stopped" && runtime.enhancer !== undefined) {
         this.reportOutcome(await runtime.enhancer.enhanceNow("link"));
@@ -828,7 +839,18 @@ class ShorthandSettingTab extends PluginSettingTab {
     } else {
       this.displayLlmProfileControls(containerEl, displayGeneration);
     }
-    textSetting(containerEl, this.plugin, "Transcript sidecar directory", "Vault-relative directory used for new transcript notes.", "sidecarDirectory");
+    new Setting(containerEl)
+      .setName("Write transcript note")
+      .setDesc("Create a linked transcript note next to the meeting note, holding the raw transcript on disk. Off by default: capture and enhancement work entirely from the live transcript in memory, and nothing else is written to the vault. Turn this on to keep a persistent transcript you can review, or to let \"Enhance active note\" re-drive enhancement from a past capture after Obsidian restarts.")
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.writeTranscriptNote)
+        .onChange(async (value) => {
+          await this.plugin.saveSettings({ ...this.plugin.settings, writeTranscriptNote: value });
+          this.display();
+        }));
+    if (this.plugin.settings.writeTranscriptNote) {
+      textSetting(containerEl, this.plugin, "Transcript sidecar directory", "Vault-relative directory used for new transcript notes.", "sidecarDirectory");
+    }
     numberSetting(containerEl, this.plugin, "Minimum new characters", "Live-pass transcript threshold.", "minNewChars");
     numberSetting(containerEl, this.plugin, "Minimum interval (ms)", "Minimum time between completed live passes.", "minIntervalMs");
     new Setting(containerEl)

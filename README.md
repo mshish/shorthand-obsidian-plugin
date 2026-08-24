@@ -5,9 +5,11 @@ Granola-style meeting notes for Obsidian, driven by [Shorthand](https://github.c
 speaker-labelled lanes, and this plugin keeps an AI-owned summary in the note while the meeting
 is still running.
 
-Capture lands in a linked transcript sidecar note. Stateless Claude Agent SDK passes use the new
-transcript plus your own notes to maintain a structured summary in the meeting note; sections may
-be added, rewritten, reordered, or removed as the meeting develops.
+Stateless Claude Agent SDK passes use the new transcript plus your own notes to maintain a
+structured summary in the meeting note; sections may be added, rewritten, reordered, or removed
+as the meeting develops. Turn on **Write transcript note** in settings to also keep a linked
+transcript sidecar note with the raw transcript on disk — off by default, since the meeting
+note's summary is usually all that's needed.
 
 This repository is the **Obsidian plugin only** — a thin desktop lifecycle and UI wrapper. All
 capture, transcript reconciliation, enhancement and file writing live in the headless core,
@@ -285,8 +287,8 @@ file writer, never through Obsidian's vault API.
   cap would never trip, and a raw pass count can't tell a long meeting from a runaway loop — a
   wall-clock window is the one backstop that works regardless of auth mode. The interval setting
   (`minIntervalMs`) is what actually bounds pass rate.
-- A stream disconnect cannot replay missed Shorthand events. Reconnects add a visible transcript-gap
-  warning to the sidecar.
+- A stream disconnect cannot replay missed Shorthand events. When **Write transcript note** is on,
+  reconnects add a visible transcript-gap warning to the sidecar.
 
 ## Verification — run this before every push
 
