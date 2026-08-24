@@ -59,6 +59,15 @@ import {
   type ShorthandPluginSettings,
 } from "./src/settings.js";
 import {
+  apiKeyDescription,
+  baseUrlDescription,
+  claudeExecutableDescription,
+  newCharacterThresholdDescription,
+  passIntervalDescription,
+  shorthandExecutableDescription,
+  transcriptFolderDescription,
+} from "./src/settings-display.js";
+import {
   INITIAL_PLUGIN_STATE,
   reducePluginState,
   type PluginUiEvent,
@@ -860,7 +869,7 @@ class ShorthandSettingTab extends PluginSettingTab {
     containerEl.empty();
     // No plugin-name heading at the top: Obsidian already titles this pane "Shorthand", and
     // the guidelines reserve headings for separating multiple sections.
-    textSetting(containerEl, this.plugin, "Shorthand executable", "Path to shorthand.exe, or a command available on PATH.", "shorthandExecutable");
+    textSetting(containerEl, this.plugin, "Shorthand executable", shorthandExecutableDescription, "shorthandExecutable");
     new Setting(containerEl)
       .setName("Enhancement backend")
       .setDesc("Choose whether note enhancement uses the Claude Agent SDK or a directly configured LLM provider.")
@@ -874,7 +883,7 @@ class ShorthandSettingTab extends PluginSettingTab {
           this.display();
         }));
     if (this.plugin.settings.backend === "claude-agent-sdk") {
-      textSetting(containerEl, this.plugin, "Claude executable", "Optional path to claude.exe. Leave blank for automatic detection.", "claudeExecutable");
+      textSetting(containerEl, this.plugin, "Claude executable", claudeExecutableDescription, "claudeExecutable");
     } else {
       this.displayLlmProfileControls(containerEl, displayGeneration);
     }
@@ -888,10 +897,10 @@ class ShorthandSettingTab extends PluginSettingTab {
           this.display();
         }));
     if (this.plugin.settings.writeTranscriptNote) {
-      textSetting(containerEl, this.plugin, "Transcript sidecar directory", "Vault-relative directory used for new transcript notes.", "sidecarDirectory");
+      textSetting(containerEl, this.plugin, "Transcript folder", transcriptFolderDescription, "sidecarDirectory");
     }
-    numberSetting(containerEl, this.plugin, "Minimum new characters", "Live-pass transcript threshold.", "minNewChars");
-    numberSetting(containerEl, this.plugin, "Minimum interval (ms)", "Minimum time between completed live passes.", "minIntervalMs");
+    numberSetting(containerEl, this.plugin, "Minimum new characters", newCharacterThresholdDescription, "minNewChars");
+    numberSetting(containerEl, this.plugin, "Minimum interval", passIntervalDescription, "minIntervalMs");
     new Setting(containerEl)
       .setName("Enable live enhancement")
       .setDesc("Run tick passes while capture is active. Stop and Enhance now still use a link-tier pass.")
@@ -1164,26 +1173,38 @@ function textSetting(
   container: HTMLElement,
   plugin: ShorthandPlugin,
   name: string,
-  description: string,
+  describe: (value: string) => string,
   key: "shorthandExecutable" | "claudeExecutable" | "sidecarDirectory",
 ): void {
-  new Setting(container).setName(name).setDesc(description).addText((text) => text
+  const setting = new Setting(container).setName(name).setDesc(describe(plugin.settings[key]));
+  setting.addText((text) => text
     .setValue(plugin.settings[key])
-    .onChange(async (value) => plugin.saveSettings({ ...plugin.settings, [key]: value })));
+    .onChange(async (value) => {
+      await plugin.saveSettings({ ...plugin.settings, [key]: value });
+      // Described from the stored value, never the typed one. normalizePluginSettings is the
+      // trust boundary for data.json and rewrites what it rejects, so a description built
+      // from the raw input would name a folder the plugin is not using.
+      setting.setDesc(describe(plugin.settings[key]));
+    }));
 }
 
 function numberSetting(
   container: HTMLElement,
   plugin: ShorthandPlugin,
   name: string,
-  description: string,
+  describe: (value: number) => string,
   key: "minNewChars" | "minIntervalMs",
 ): void {
-  new Setting(container).setName(name).setDesc(description).addText((text) => {
+  const setting = new Setting(container).setName(name).setDesc(describe(plugin.settings[key]));
+  setting.addText((text) => {
     text.inputEl.type = "number";
     text.setValue(String(plugin.settings[key])).onChange(async (value) => {
       const parsed = Number(value);
-      if (Number.isFinite(parsed)) await plugin.saveSettings({ ...plugin.settings, [key]: parsed });
+      // Unchanged: a half-typed or non-numeric field keeps the previous value. The
+      // description keeps the previous value with it, rather than flickering to a default.
+      if (!Number.isFinite(parsed)) return;
+      await plugin.saveSettings({ ...plugin.settings, [key]: parsed });
+      setting.setDesc(describe(plugin.settings[key]));
     });
   });
 }
