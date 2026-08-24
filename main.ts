@@ -905,12 +905,6 @@ class ShorthandSettingTab extends PluginSettingTab {
         .setValue(this.plugin.settings.controlShorthandRecording)
         .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, controlShorthandRecording: value })));
     new Setting(containerEl)
-      .setName("Use Shorthand post-processing")
-      .setDesc("Drive Shorthand's post-processed transcription instead of plain transcription. Post-processing runs an LLM pass after the recording ends, so stopping a capture waits longer for the final transcript (45s instead of 10s). A capture keeps the value this setting had when it started, so that it stops the recording with the same toggle it started; changing it mid-capture affects only the \"Toggle Shorthand recording\" command and the next capture.")
-      .addToggle((toggle) => toggle
-        .setValue(this.plugin.settings.useShorthandPostProcessing)
-        .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, useShorthandPostProcessing: value })));
-    new Setting(containerEl)
       .setName("Debug logging")
       .setDesc("Log every enhancement status and state transition to the developer console (Ctrl+Shift+I). Off by default because it is noisy. Turn it on when the note stops updating but capture looks healthy: a re-queue and a timeout both put the transcript back and retry, so they are deliberately silent in the UI and look identical to an idle capture from outside. Applies to the next capture, not one already running.")
       .addToggle((toggle) => toggle
