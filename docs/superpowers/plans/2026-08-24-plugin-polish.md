@@ -969,7 +969,7 @@ shows only `?? .serena/` (and `main.js`, if it is not ignored) left over.
   `bun test`.
 - Produces:
   - `type EnhanceCommandId = "enhance-now" | "clean-up-this-note"`
-  - `type EnhanceRequest = Readonly<{ command: EnhanceCommandId; captureOnThisNote: boolean; transcriptLink: string | undefined; writeTranscriptNote: boolean }>`
+  - `type EnhanceRequest = Readonly<{ command: EnhanceCommandId; captureOnThisNote: boolean; captureEnhancerReady: boolean; transcriptLink: string | undefined; writeTranscriptNote: boolean }>`
   - `type EnhanceMode = Readonly<{ kind: "live-capture" }> | Readonly<{ kind: "transcript"; transcriptLink: string }> | Readonly<{ kind: "notes-only" }> | Readonly<{ kind: "unavailable"; message: string }>`
   - `function resolveEnhanceMode(request: EnhanceRequest): EnhanceMode`
 
