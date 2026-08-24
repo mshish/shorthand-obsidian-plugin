@@ -18,6 +18,21 @@ describe("plugin settings normalization", () => {
     expect(normalizePluginSettings({ debugLogging: true }).useShorthandPostProcessing).toBe(false);
   });
 
+  test("writeTranscriptNote defaults to false when absent or malformed, independently of the other toggles", () => {
+    expect(normalizePluginSettings({}).writeTranscriptNote).toBe(false);
+    expect(normalizePluginSettings({ writeTranscriptNote: "yes" }).writeTranscriptNote).toBe(false);
+    expect(normalizePluginSettings({ debugLogging: true }).writeTranscriptNote).toBe(false);
+    expect(normalizePluginSettings({ writeTranscriptNote: true }).debugLogging).toBe(false);
+    expect(DEFAULT_PLUGIN_SETTINGS.writeTranscriptNote).toBe(false);
+  });
+
+  test("falls back for a non-boolean writeTranscriptNote", () => {
+    for (const garbage of ["true", 1, null, {}, []]) {
+      expect(normalizePluginSettings({ writeTranscriptNote: garbage }).writeTranscriptNote)
+        .toBe(DEFAULT_PLUGIN_SETTINGS.writeTranscriptNote);
+    }
+  });
+
   test("normalizes valid persisted values", () => {
     expect(normalizePluginSettings({
       backend: "llm",
@@ -29,6 +44,7 @@ describe("plugin settings normalization", () => {
       enableLiveEnhancement: false,
       controlShorthandRecording: false,
       useShorthandPostProcessing: true,
+      writeTranscriptNote: true,
       debugLogging: true,
       noteTakingGuidance: "  Write terse bullets.  ",
       templateSectionText: " Agenda \n\n Decisions ",
@@ -42,6 +58,7 @@ describe("plugin settings normalization", () => {
       enableLiveEnhancement: false,
       controlShorthandRecording: false,
       useShorthandPostProcessing: true,
+      writeTranscriptNote: true,
       debugLogging: true,
       noteTakingGuidance: "Write terse bullets.",
       templateSectionText: "Agenda \n\n Decisions",

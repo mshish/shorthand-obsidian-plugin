@@ -11,6 +11,15 @@ export type ShorthandPluginSettings = Readonly<{
   controlShorthandRecording: boolean;
   useShorthandPostProcessing: boolean;
   /**
+   * Whether capture creates and maintains a linked transcript sidecar note holding the raw
+   * transcript on disk. Off by default: enhancement is fed from the in-memory transcript
+   * during a live capture regardless of this setting, so a fresh install writes nothing to the
+   * vault beyond the meeting note itself. Turning this on also makes "Enhance active note"
+   * able to re-drive enhancement from a past capture after Obsidian restarts, since that
+   * command has no in-memory transcript to fall back on and reads the sidecar file instead.
+   */
+  writeTranscriptNote: boolean;
+  /**
    * Replaces core's `DEFAULT_EDITORIAL_GUIDANCE`. Empty means "use core's default" and is
    * stored as empty rather than as a copy of that default: a user who never touches this
    * keeps inheriting improvements to it, instead of being frozen at whatever the text
@@ -40,6 +49,7 @@ export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
   enableLiveEnhancement: true,
   controlShorthandRecording: true,
   useShorthandPostProcessing: false,
+  writeTranscriptNote: false,
   debugLogging: false,
   noteTakingGuidance: "",
   templateSectionText: "",
@@ -63,6 +73,9 @@ export function normalizePluginSettings(input: unknown): ShorthandPluginSettings
     useShorthandPostProcessing: typeof value.useShorthandPostProcessing === "boolean"
       ? value.useShorthandPostProcessing
       : DEFAULT_PLUGIN_SETTINGS.useShorthandPostProcessing,
+    writeTranscriptNote: typeof value.writeTranscriptNote === "boolean"
+      ? value.writeTranscriptNote
+      : DEFAULT_PLUGIN_SETTINGS.writeTranscriptNote,
     debugLogging: typeof value.debugLogging === "boolean"
       ? value.debugLogging
       : DEFAULT_PLUGIN_SETTINGS.debugLogging,
