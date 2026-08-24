@@ -34,13 +34,15 @@ and `D:/tools/obsidian-shorthand`. Do not "normalize" them to backslashes.
 ### Verification gates — there is no CI in either repo
 
 - **Core:** all four of `bun test`, `bun run typecheck`, `bun run build`, `bun run test:e2e`. All four, because `bun test` transpiles without typechecking, so a green suite is not evidence that `tsc` is happy.
-- **Plugin:** `npm test`, `npx tsc --noEmit`, `npm run build`.
+- **Plugin — and after Task 0 the order matters:** `npx tsc --noEmit && npm run build && npm test`. **Build before test, always.** Task 0 makes the bundle test fail when `main.js` is absent or older than its sources, so a full `npm test` against an unbuilt tree fails on staleness rather than on anything you did. Every full gate in this plan uses that order. Red/green TDD steps are the exception: name the file (`npm test -- test/plugin-settings.test.ts`), which skips the bundle test and needs no build. Targeted while iterating, full gate before committing.
 - `tsconfig.json` includes `test/**/*.ts`, so `npx tsc --noEmit` typechecks the tests. A change to a settings type and the test rewrite that follows it **cannot be split across commits** without a red typecheck between them.
 - `main.ts` cannot be imported under `bun test` — `node_modules/obsidian` has `"main": ""` and ships only type declarations. Anything expressed in `main.ts` is verified only by typecheck, the bundle smoke test, and a human clicking through Obsidian.
 
 ### The vault-delivery hazard
 
-`OBSIDIAN_PLUGIN_DIR` may be set in the environment. `esbuild.config.mjs`'s `deliver-to-vault` plugin fires on `build.onEnd`, so **any** esbuild run copies `main.js` and `manifest.json` into a live Obsidian vault — including the build that `npm test` spawns via `ensureBundle()`, not just `npm run build`. Be deliberate about when you build, and leave the vault holding a build from committed code.
+`OBSIDIAN_PLUGIN_DIR` may be set in the environment. `esbuild.config.mjs`'s `deliver-to-vault` plugin fires on `build.onEnd`, so **any** esbuild run copies `main.js` and `manifest.json` into a live Obsidian vault. Be deliberate about when you build, and leave the vault holding a build from committed code.
+
+Before Task 0, `npm test` could trigger that delivery too, because `ensureBundle()` built a missing bundle. **Task 0 removes the build from the test path entirely**, so after it lands only an explicit `npm run build` writes to the vault. Passages later in this plan that describe `npm test` spawning a build are describing the state Task 0 fixes — Task 0 corrects them in `README.md` and in `esbuild.config.mjs`'s comment as part of its own work.
 
 `esbuild.config.mjs:48` copies only `["main.js", "manifest.json"]`. **Any new file that must reach the vault — a stylesheet, for instance — has to be added to that list, or it will pass every gate and silently never be applied.**
 
@@ -132,6 +134,8 @@ the build anyway.
 
 **Files:**
 - Modify: `D:/tools/obsidian-shorthand/test/plugin-bundle.test.ts:2` (delete the `spawnSync` import), `:5` (widen the `node:fs` import), `:29-33` (`ensureBundle`)
+- Modify: `D:/tools/obsidian-shorthand/esbuild.config.mjs:31-33` — a comment that claims the bundle test rebuilds a missing `main.js`
+- Modify: `D:/tools/obsidian-shorthand/README.md:351-352` — a bullet documenting the manual delete-and-rebuild workaround this task automates
 
 **Interfaces:**
 - Consumes: nothing.
@@ -167,9 +171,12 @@ const BUNDLE_SOURCES = ["main.ts", "src", "package.json", "package-lock.json", "
 function newestSourceMtimeMs(target: string): number {
   const stats = statSync(target);
   if (!stats.isDirectory()) return stats.mtimeMs;
+  // Seed with the directory's own mtime, not 0. Deleting or renaming a file touches the
+  // directory but leaves every surviving child older than the bundle — so a reduction over
+  // children alone would call a bundle fresh when a module had just been removed from it.
   return readdirSync(target)
     .map((entry) => newestSourceMtimeMs(join(target, entry)))
-    .reduce((newest, candidate) => Math.max(newest, candidate), 0);
+    .reduce((newest, candidate) => Math.max(newest, candidate), stats.mtimeMs);
 }
 
 /**
@@ -241,7 +248,42 @@ Expected: PASS.
 vault.** That is expected and fine here — you are building from committed code plus this one
 test change. Do not leave the vault holding a build from a mid-edit tree later in this plan.
 
-- [ ] **Step 6: Run the rest of the gate**
+- [ ] **Step 6: Correct the two places that document the old behaviour**
+
+Both currently describe a test that builds a missing bundle. After Step 2 it does not, and a
+comment describing behaviour the code no longer has is the thing `AGENTS.md` forbids outright.
+
+**`esbuild.config.mjs`, lines 31–33.** The clause "the bundle-load test resolves it from the
+root and rebuilds it there when missing" is now false. Replace that clause so the sentence
+reads:
+
+```js
+ * The build still writes `main.js` at the repository root and copies from there rather than
+ * pointing `outfile` at the vault: the bundle-load test resolves it from the root and fails if
+ * it is missing or stale, releases attach that same file, and the recorded byte baseline has to
+ * keep meaning one file. Unset, nothing is copied and the build behaves as it always has.
+```
+
+**`README.md`, lines 351–352.** The bullet currently reads "`test/plugin-bundle.test.ts` only
+builds `main.js` when it is absent, so delete it and rebuild first. Otherwise the load test
+exercises a bundle built against the old core." That manual workaround is exactly what Step 2
+automates. Replace the bullet with:
+
+```md
+- `test/plugin-bundle.test.ts` fails when `main.js` is missing or older than its sources, so
+  run `npm run build` after bumping the pin. It will not silently exercise a bundle built
+  against the old core.
+```
+
+Verify nothing else still makes the old claim:
+
+```sh
+cd /d/tools/obsidian-shorthand && grep -rn "when it is absent\|rebuilds it there\|when missing" README.md esbuild.config.mjs AGENTS.md
+```
+
+Expected: no output.
+
+- [ ] **Step 7: Run the rest of the gate**
 
 Run:
 
@@ -251,11 +293,11 @@ cd /d/tools/obsidian-shorthand && npx tsc --noEmit
 
 Expected: no output, exit 0.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 cd /d/tools/obsidian-shorthand
-git add test/plugin-bundle.test.ts
+git add test/plugin-bundle.test.ts esbuild.config.mjs README.md
 git commit -m "test: fail the bundle test when main.js is older than its sources
 
 ensureBundle() only built when main.js was absent, so an ordinary run
@@ -739,7 +781,7 @@ new overload, so `tsc` would be green against the old version too.
 - [ ] **Step 5: Rebuild from scratch and run the gate**
 
 ```sh
-cd D:/tools/obsidian-shorthand && rm -f main.js && npm run build && npm test && npx tsc --noEmit
+cd D:/tools/obsidian-shorthand && npx tsc --noEmit && rm -f main.js && npm run build && npm test
 ```
 
 `main.js` is deleted first because `test/plugin-bundle.test.ts` only builds the
@@ -1160,7 +1202,7 @@ the run.
 - [ ] **Step 4: Run test to verify it passes**
 
 ```sh
-cd D:/tools/obsidian-shorthand && rm -f main.js && npm run build && npm test && npx tsc --noEmit
+cd D:/tools/obsidian-shorthand && npx tsc --noEmit && rm -f main.js && npm run build && npm test
 ```
 
 All three. `test/plugin-bundle.test.ts` is the one that matters: it loads the
@@ -1245,18 +1287,21 @@ the quoted text, not on the number.** Each task re-states the text it expects to
 
 **1. `OBSIDIAN_PLUGIN_DIR` may be set in your environment.** `esbuild.config.mjs` has a
 `deliver-to-vault` plugin: when that variable is set, **every** build copies `main.js` and
-`manifest.json` straight into a live Obsidian vault's plugin folder. That includes builds you
-did not ask for — `test/plugin-bundle.test.ts` calls `ensureBundle()`, which runs
-`node esbuild.config.mjs production` whenever `main.js` is missing, so even `npm test` can write
-into the vault. Check with `echo "$OBSIDIAN_PLUGIN_DIR"` before you begin. AGENTS.md requires you
-leave the vault holding a build from **committed** code; Task 25 does that as its last step.
+`manifest.json` straight into a live Obsidian vault's plugin folder. Check with
+`echo "$OBSIDIAN_PLUGIN_DIR"` before you begin. AGENTS.md requires you leave the vault holding a
+build from **committed** code; Task 25 does that as its last step.
+
+Task 0 has already removed the build from the test path, so `npm test` no longer writes to the
+vault. Only an explicit `npm run build` does.
 
 **2. `main.js` is gitignored.** Never `git add main.js`. It is a ~6.9MB bundle shipped via GitHub
 releases.
 
-**3. The bundle test can pass against a stale bundle.** `ensureBundle()` only builds when
-`main.js` is *absent*. A `main.js` left over from before your changes will load fine and prove
-nothing. That is why Task 25 deletes it and rebuilds before the final `npm test`.
+**3. Build before you run the full suite.** Task 0 made `test/plugin-bundle.test.ts` fail when
+`main.js` is missing or older than its sources, so `npm test` on an unbuilt tree fails on
+staleness rather than on your change. Full gate is `npx tsc --noEmit && npm run build &&
+npm test`. While iterating red/green, name the file instead — `npm test --
+test/plugin-settings.test.ts` — which skips the bundle test and needs no build.
 
 **4. Nothing in `main.ts` can be imported under `bun test`.** `node_modules/obsidian` has
 `"main": ""` and ships only type declarations, so there is no runtime module to stub at import
@@ -1429,7 +1474,7 @@ with `"toggle-transcription"` and `"toggle-post-process"` appears nowhere in the
 - [ ] **Step 4: Run test to verify it passes**
 
   ```bash
-  cd /d/tools/obsidian-shorthand && npx tsc --noEmit && npm test
+  cd /d/tools/obsidian-shorthand && npx tsc --noEmit && npm run build && npm test
   ```
 
   Expect `tsc` silent and `bun test` green. Then confirm the deletion is total:
@@ -1569,7 +1614,7 @@ explained the longer window. Stopping now always spends `DEFAULT_CONFIG.drainTim
 - [ ] **Step 4: Run test to verify it passes**
 
   ```bash
-  cd /d/tools/obsidian-shorthand && npx tsc --noEmit && npm test
+  cd /d/tools/obsidian-shorthand && npx tsc --noEmit && npm run build && npm test
   ```
 
   Expect `tsc` silent and `bun test` green. `tsc` is the real gate here: it is what catches an
@@ -1639,7 +1684,7 @@ being offered to the user.
 - [ ] **Step 4: Run test to verify it passes**
 
   ```bash
-  cd /d/tools/obsidian-shorthand && npx tsc --noEmit && npm test
+  cd /d/tools/obsidian-shorthand && npx tsc --noEmit && npm run build && npm test
   ```
 
   Expect `tsc` silent, `bun test` green. Then confirm `main.ts` is finished:
@@ -1785,7 +1830,7 @@ deleted**. That pair is a good replacement precisely because their defaults diff
 - [ ] **Step 2: Run test to verify it fails**
 
   ```bash
-  cd /d/tools/obsidian-shorthand && npm test
+  cd /d/tools/obsidian-shorthand && npm test -- test/plugin-settings.test.ts
   ```
 
   Expect **two failing tests** in `test/plugin-settings.test.ts`:
@@ -1829,7 +1874,7 @@ deleted**. That pair is a good replacement precisely because their defaults diff
 - [ ] **Step 4: Run test to verify it passes**
 
   ```bash
-  cd /d/tools/obsidian-shorthand && npm test && npx tsc --noEmit
+  cd /d/tools/obsidian-shorthand && npx tsc --noEmit && npm run build && npm test
   ```
 
   Expect `bun test` fully green and `tsc` silent. `tsc` matters as much as the tests here:
@@ -1897,7 +1942,7 @@ This is separate from Tasks 20–22 because it is the only comment work outside 
   touch a test file, so a later failure can only be yours:
 
   ```bash
-  cd /d/tools/obsidian-shorthand && npm test
+  cd /d/tools/obsidian-shorthand && npm test -- test/plugin-settings.test.ts
   ```
 
   Expect green.
@@ -1941,7 +1986,7 @@ This is separate from Tasks 20–22 because it is the only comment work outside 
 - [ ] **Step 4: Run test to verify it passes**
 
   ```bash
-  cd /d/tools/obsidian-shorthand && npm test && npx tsc --noEmit
+  cd /d/tools/obsidian-shorthand && npx tsc --noEmit && npm run build && npm test
   ```
 
   Expect green and silent. Then:
@@ -2000,7 +2045,7 @@ commit in the section.
   commit of the section:
 
   ```bash
-  cd /d/tools/obsidian-shorthand && npm test && npx tsc --noEmit
+  cd /d/tools/obsidian-shorthand && npx tsc --noEmit && npm run build && npm test
   ```
 
   Expect green and silent.
@@ -2049,7 +2094,7 @@ commit in the section.
   work and prove nothing:
 
   ```bash
-  cd /d/tools/obsidian-shorthand && rm -f main.js && npm run build && npm test && npx tsc --noEmit
+  cd /d/tools/obsidian-shorthand && npx tsc --noEmit && rm -f main.js && npm run build && npm test
   ```
 
   Expect: `npm run build` runs `tsc --noEmit` then esbuild and writes `main.js`; `npm test` green
@@ -2153,7 +2198,7 @@ every build copies into a live vault — leave the vault holding a build from co
 - The **Advanced** `setHeading()` grouping and the row reordering in the spec's increment-6
   table. A different section owns that. Write the copy where the row lives today; the grouping
   section moves the rows afterwards.
-- The `NotePromptModal` "Use default / Customize" rebuild, the `area.style.width` CSS fix, and
+- The `NotePromptModal` "Default / Custom" rebuild, the `area.style.width` CSS fix, and
   the `checkCallback` conversion. All increment 6, all a different section.
 - Command names and the palette. `README.md` § Commands already lists them and they already
   comply (no plugin name, sentence case).
@@ -2302,15 +2347,29 @@ the string this section actually ships, so the guide and the code agree from day
   recording: on" passes the aloud test cleanly. Prefer the noun phrase; keep the verb phrase
   when the noun form drops the object.
 
-  ## Rule 6 — Banned generic verbs in labels.
+  ## Rule 6 — Banned generic verbs in naming labels.
 
   Android's settings guidance: labels must not "Use generic terms, such as: Set, Change, Edit,
-  Modify, Manage, Use, Select, or Choose." The ban is on **labels** — control labels, headings,
-  dropdown option text, button text. A description may use these words when they are the
-  accurate verb.
+  Modify, Manage, Use, Select, or Choose."
 
-  - **Don't** — the provider dropdown's placeholder option, "Select a provider".
-  - **Do** — "No provider chosen", which names the state rather than issuing an order.
+  The ban applies to **naming labels** — anything that names a thing rather than invokes an
+  action: setting names, headings, and the option text of a dropdown or radio. In those
+  positions a generic verb displaces the noun that would have carried the meaning.
+
+  It does **not** apply to **action buttons**. A button's job is to invoke, so an imperative
+  verb is the correct part of speech there, and Obsidian's own UI is built from "Edit", "Save",
+  "Cancel". Forcing a noun onto a button produces worse copy, not better.
+
+  A description may use any of these words when it is the accurate verb.
+
+  - **Don't** — the provider dropdown's placeholder option, "Select a provider". It is option
+    text, so it names a state and must not issue an order.
+  - **Do** — "No provider chosen".
+  - **Don't** — a mode option reading "Use default". Same position, same problem: the verb adds
+    nothing and "Default" alone is unambiguous next to "Custom".
+  - **Do** — the prompt modal's two mode options, **Default** and **Custom**.
+  - **Allowed** — the prompt row's **Edit…** button. An action button, not a naming label. The
+    ellipsis follows the platform convention for an action that opens a further window.
   ```
 
 - [ ] **Step 5: Write rules 7, 8 and 9 (terminology, case and punctuation, person).**
@@ -2567,6 +2626,11 @@ best — the same sentence shape repeated across ten rows, a tricolon in every t
         .toBe("Live passes run no more often than once every 1 second. The value is in milliseconds.");
     });
 
+    test("one millisecond is singular", () => {
+      expect(passIntervalDescription(1))
+        .toBe("Live passes run no more often than once every 1 millisecond. The value is in milliseconds.");
+    });
+
     test("under a second stays in milliseconds rather than rounding to zero", () => {
       expect(passIntervalDescription(250))
         .toBe("Live passes run no more often than once every 250 milliseconds. The value is in milliseconds.");
@@ -2694,7 +2758,9 @@ best — the same sentence shape repeated across ten rows, a tricolon in every t
 
   /** Callers clamp to >= 1 first, so this never has to render a zero duration. */
   function formatDuration(milliseconds: number): string {
-    if (milliseconds < 1000) return `${milliseconds} milliseconds`;
+    // countOf, not a bare template. 1 is reachable — the field's floor is 1ms, not 1000 — and
+    // "1 milliseconds" is the sort of thing a user reads as sloppiness in the whole plugin.
+    if (milliseconds < 1000) return countOf(milliseconds, "millisecond");
     const totalSeconds = Math.round(milliseconds / 1000);
     const minutes = Math.floor(totalSeconds / 60);
     const seconds = totalSeconds % 60;
@@ -2871,6 +2937,7 @@ and keeping an overload for none would be a branch nobody exercises.
 **Files:**
 - Modify: `D:/tools/obsidian-shorthand/main.ts:825–836` (Enhancement backend)
 - Modify: `D:/tools/obsidian-shorthand/main.ts:842–850` (Write transcript note)
+- Modify: `D:/tools/obsidian-shorthand/src/enhance-mode.ts` and its test — the renamed label appears in a user-facing error string Task 4 wrote and pinned
 - Modify: `D:/tools/obsidian-shorthand/main.ts:856–861` (Enable live enhancement)
 - Modify: `D:/tools/obsidian-shorthand/main.ts:862–867` (Control Shorthand recording)
 - Modify: `D:/tools/obsidian-shorthand/main.ts:874–879` (Debug logging)
@@ -3622,7 +3689,7 @@ alone and consumes the accessor Task 5 produced. If you are executing Task 65 an
 
 The two-state control's state must be **derived** from whether the stored string is empty. No
 second key is stored. This task builds the derivation and the read-back, and pins the property
-the whole design exists to protect: choosing "Use default" stores `""`, never a copy of the
+the whole design exists to protect: choosing "Default" stores `""`, never a copy of the
 default's text.
 
 **Files:**
@@ -3637,7 +3704,7 @@ default's text.
 - Consumes: nothing from earlier tasks.
 - Produces:
   - `type PromptFieldMode = "default" | "custom"`
-  - `type PromptFieldState = Readonly<{ mode: PromptFieldMode; editorText: string }>`
+  - `type PromptFieldState = Readonly<{ mode: PromptFieldMode; editorText: string; seeded: boolean }>`
   - `initialPromptFieldState(stored: string): PromptFieldState`
   - `storedPromptFieldValue(state: PromptFieldState): string`
 
@@ -3709,7 +3776,7 @@ export type PromptFieldMode = "default" | "custom";
  * and there would be no way to tell which one was right.
  *
  * `seeded` is modal-session state and is likewise never stored. It records that this field has
- * already been filled from the default once, so a later switch to Customize leaves the editor
+ * already been filled from the default once, so a later switch to Custom leaves the editor
  * alone. Without it, "has the user cleared this box on purpose?" and "has this box never been
  * filled?" are the same observation, and the second reading silently overwrites the first.
  */
@@ -3746,7 +3813,7 @@ export function storedPromptFieldValue(state: PromptFieldState): string {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```sh
-cd /d/tools/obsidian-shorthand && npm test && npx tsc --noEmit
+cd /d/tools/obsidian-shorthand && npx tsc --noEmit && npm run build && npm test
 ```
 
 - [ ] **Step 5: Commit**
@@ -3754,7 +3821,7 @@ cd /d/tools/obsidian-shorthand && npm test && npx tsc --noEmit
 ```sh
 cd /d/tools/obsidian-shorthand && git add src/settings.ts test/plugin-settings.test.ts && git commit -m "feat: derive the prompt field's mode from the stored string
 
-The modal is about to gain a Use default / Customize control. Its state has to
+The modal is about to gain a Default / Custom control. Its state has to
 come from the stored string rather than a second key, so that empty can keep
 meaning \"inherit core's guidance\" with nothing able to contradict it.
 
@@ -3763,9 +3830,9 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-### Task 61: Seed the editor from the default on the first switch to Customize
+### Task 61: Seed the editor from the default on the first switch to Custom
 
-"Customize" reveals the editable textarea **seeded from the default the first time it is
+"Custom" reveals the editable textarea **seeded from the default the first time it is
 chosen**, so the user edits the real guidance rather than an empty box. Switching back to "Use
 default" must remain a genuine one-click route out, which means it must not discard the text
 the user typed — only refuse to store it.
@@ -3813,7 +3880,7 @@ Append these three tests inside the `prompt field mode derivation` describe bloc
 
   // Seeding is the risk in this design: it puts the default's text in an editable field, and
   // saving from there stores a frozen copy. That is correct once the user has chosen to
-  // customise — but only while "Use default" is still a one-click route back to "".
+  // customise — but only while "Default" is still a one-click route back to "".
   test("choosing the default after a seeded edit stores an empty string", () => {
     const seeded = choosePromptFieldMode(initialPromptFieldState(""), "custom", "Write plainly.");
     const backedOut = choosePromptFieldMode(seeded, "default", "Write plainly.");
@@ -3843,7 +3910,7 @@ Insert into `src/settings.ts` after `storedPromptFieldValue`:
  * Seeds on the first switch to custom and never again.
  *
  * The guard is `seeded`, not "is the box empty". Those differ in exactly one case, and it is a
- * case users hit: clear the box to write from scratch, flip to "Use default" to re-read the
+ * case users hit: clear the box to write from scratch, flip to "Default" to re-read the
  * original, flip back — and an emptiness test would refill the box with the default, throwing
  * away the blank canvas the user deliberately made. Flipping across to compare is the one thing
  * this control exists for, so it must be free.
@@ -3862,15 +3929,15 @@ export function choosePromptFieldMode(
 - [ ] **Step 4: Run test to verify it passes**
 
 ```sh
-cd /d/tools/obsidian-shorthand && npm test && npx tsc --noEmit
+cd /d/tools/obsidian-shorthand && npx tsc --noEmit && npm run build && npm test
 ```
 
 - [ ] **Step 5: Commit**
 
 ```sh
-cd /d/tools/obsidian-shorthand && git add src/settings.ts test/plugin-settings.test.ts && git commit -m "feat: seed the prompt editor from the default on the first Customize
+cd /d/tools/obsidian-shorthand && git add src/settings.ts test/plugin-settings.test.ts && git commit -m "feat: seed the prompt editor from the default on the first switch to Custom
 
-Editing an empty box is guesswork. Seeding is safe only while Use default is a
+Editing an empty box is guesswork. Seeding is safe only while Default is a
 one-click route back to \"\", so that route is what the tests pin.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
@@ -3992,7 +4059,7 @@ Then three edits to `README.md`, so the file is not lost at install or release t
 - [ ] **Step 4: Run test to verify it passes**
 
 ```sh
-cd /d/tools/obsidian-shorthand && npm test && npx tsc --noEmit && npm run build
+cd /d/tools/obsidian-shorthand && npx tsc --noEmit && npm run build && npm test
 ```
 
 If `OBSIDIAN_PLUGIN_DIR` is set, this build is the first one that copies `styles.css` into the
@@ -4012,7 +4079,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-### Task 63: Give NotePromptModal a Use default / Customize control
+### Task 63: Give NotePromptModal a Default / Custom control
 
 **This task lands entirely in `main.ts` and cannot be unit-tested.** `main.ts` is not importable
 under `bun test`, so its verification is `npx tsc --noEmit`, the bundle-load smoke test, and the
@@ -4085,7 +4152,7 @@ Add above the `NotePromptModal` class (above the doc comment at line 1190):
 /**
  * What the modal needs back from one field: the value to store, and a way to put the cursor
  * in it when validation rejects it. A bare textarea element cannot answer the first, because
- * "Use default" stores "" no matter what text the textarea is holding.
+ * "Default" stores "" no matter what text the textarea is holding.
  */
 type PromptFieldHandle = Readonly<{ value: () => string; focus: () => void }>;
 ```
@@ -4094,7 +4161,7 @@ Replace the whole of `field()` (lines 1240–1256) with:
 
 ```ts
   /**
-   * One field: label, explanation, a Use default / Customize control, and the body that
+   * One field: label, explanation, a Default / Custom control, and the body that
    * control switches between. The mode is derived from the stored string by
    * `initialPromptFieldState`, so there is no second key that could disagree with the text.
    */
@@ -4119,26 +4186,30 @@ Replace the whole of `field()` (lines 1240–1256) with:
         body.createEl("textarea", {
           text: effectiveDefault,
           cls: "shorthand-prompt-textarea",
-          attr: { readonly: "true", rows: 10, spellcheck: "false" },
+          // aria-label because these textareas are siblings of the Setting rather than children
+          // of a <label>, so a screen reader has nothing to announce them by. Obsidian's own
+          // components carry this for you; hand-rolled elements do not, which is the trade this
+          // modal accepts to get a multi-line field at all.
+          attr: { readonly: "true", rows: 10, spellcheck: "false", "aria-label": `${name} (Shorthand's default, read-only)` },
         });
         return;
       }
       const area = body.createEl("textarea", {
         cls: "shorthand-prompt-textarea",
-        attr: { rows: 10, spellcheck: "false" },
+        attr: { rows: 10, spellcheck: "false", "aria-label": name },
       });
       area.value = state.editorText;
       // Mirrored into the state on every keystroke so `storedPromptFieldValue` stays the only
       // thing that decides what is written. Reading `area.value` at save time instead would
-      // route around it and could store the seeded default after a switch back to Use default.
+      // route around it and could store the seeded default after a switch back to Default.
       area.addEventListener("input", () => { state = { ...state, editorText: area.value }; });
       editor = area;
       area.focus();
     };
 
     setting.addDropdown((dropdown) => dropdown
-      .addOption("default", "Use default")
-      .addOption("custom", "Customize")
+      .addOption("default", "Default")
+      .addOption("custom", "Custom")
       .setValue(state.mode)
       .onChange((value) => {
         state = choosePromptFieldMode(state, value === "custom" ? "custom" : "default", effectiveDefault);
@@ -4209,7 +4280,7 @@ property and are still exactly right.
 - [ ] **Step 4: Verify — typecheck, build, then click through Obsidian**
 
 ```sh
-cd /d/tools/obsidian-shorthand && npx tsc --noEmit && npm test && npm run build
+cd /d/tools/obsidian-shorthand && npx tsc --noEmit && npm run build && npm test
 ```
 
 Then, in a real vault (if `OBSIDIAN_PLUGIN_DIR` is set the build above already delivered it;
@@ -4217,34 +4288,34 @@ otherwise copy `main.js`, `manifest.json` and `styles.css` into
 `<vault>/.obsidian/plugins/shorthand/`). Reload Obsidian with Ctrl+R, then:
 
 1. Settings → Shorthand → **Edit…** on the note-taking prompt row. The modal opens.
-2. Both fields show a dropdown reading **Use default**, and below it a textarea containing
+2. Both fields show a dropdown reading **Default**, and below it a textarea containing
    readable text that you cannot type into. Confirm the guidance field shows text beginning
    "You maintain the AI-owned section block of a meeting note." and the sections field shows
    one heading per line.
 3. Confirm both textareas span the full width of the modal. That is `styles.css` working — if
    they are narrow, the stylesheet did not reach the vault.
-4. Switch the first dropdown to **Customize**. The read-only text is replaced by an editable
+4. Switch the first dropdown to **Custom**. The read-only text is replaced by an editable
    textarea **already containing that same text**, with the cursor in it.
-5. Type ` Name owners.` at the end. Switch to **Use default**, then back to **Customize**.
+5. Type ` Name owners.` at the end. Switch to **Default**, then back to **Custom**.
    Your edit is still there — it was not re-seeded over.
-6. Switch to **Use default** and click **Save**. The settings row now reads that both follow
+6. Switch to **Default** and click **Save**. The settings row now reads that both follow
    Shorthand's defaults.
 7. Open `<vault>/.obsidian/plugins/shorthand/data.json`. Confirm `"noteTakingGuidance": ""` —
    an empty string, **not** a copy of the default's text. This is the property the whole
    design exists to protect.
-8. Reopen the modal. The dropdown reads **Use default** again, derived from that empty string.
-9. Switch to **Customize**, replace the whole guidance with `x` repeated past 10,000
+8. Reopen the modal. The dropdown reads **Default** again, derived from that empty string.
+9. Switch to **Custom**, replace the whole guidance with `x` repeated past 10,000
    characters (paste it), and click **Save**. The modal stays open, an inline red message names
    the character count and the limit, and the cursor lands in the guidance field.
 
 - [ ] **Step 5: Commit**
 
 ```sh
-cd /d/tools/obsidian-shorthand && git add main.ts README.md && git commit -m "feat: show the prompt default read-only behind a Use default control
+cd /d/tools/obsidian-shorthand && git add main.ts README.md && git commit -m "feat: show the prompt default read-only behind a Default control
 
 A placeholder vanished on the first keystroke, so a user who had customised the
 prompt could not see what they diverged from. The default is now always legible
-and Use default is a one-click route back to inheriting it.
+and Default is a one-click route back to inheriting it.
 
 Also drops the inline width the plugin guidelines forbid, onto styles.css.
 
@@ -4404,7 +4475,7 @@ If either is still in the file, stop; you are on the wrong branch.
 - [ ] **Step 4: Verify — typecheck, build, then click through Obsidian**
 
 ```sh
-cd /d/tools/obsidian-shorthand && npx tsc --noEmit && npm test && npm run build
+cd /d/tools/obsidian-shorthand && npx tsc --noEmit && npm run build && npm test
 ```
 
 Then in a real vault, after Ctrl+R:
@@ -4602,7 +4673,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 Run the full gate once more from a clean tree:
 
 ```sh
-cd /d/tools/obsidian-shorthand && git status --porcelain && npx tsc --noEmit && npm test && npm run build
+cd /d/tools/obsidian-shorthand && git status --porcelain && npx tsc --noEmit && npm run build && npm test
 ```
 
 If `OBSIDIAN_PLUGIN_DIR` is set, that final build is what the vault keeps — and it must be a
@@ -4645,3 +4716,14 @@ cd /d/tools/obsidian-shorthand && git status --porcelain && npx tsc --noEmit && 
 - [ ] **No setting description exceeds three sentences**, and none names a
   command that does not exist. The current copy fails both: `main.ts:844` points
   users at "Enhance active note", and the actual command is "Enhance now".
+- [ ] **The plugin work is pushed.** Section B pushes after Task 25, and then
+  nothing does — Tasks 40 through 65 would sit committed on a local `main`.
+  Both repos are private and single-user, and their `AGENTS.md` files make
+  pushing part of finishing the work, not something to ask about:
+
+```sh
+cd /d/tools/obsidian-shorthand && git push origin main
+```
+
+  Push **after** the clean-tree gate above, not before. A push is the point at
+  which the work stops being yours to quietly amend.
