@@ -643,26 +643,29 @@ export default class ShorthandPlugin extends Plugin {
       }
       agent = new ClaudeAgentClient();
     } else if (backend === "codex") {
-      // The path is mandatory here, where `claudeExecutable` is optional, and that asymmetry is
-      // the fix for a backend that could not run at all. Left to itself the Codex SDK resolves
-      // `@openai/codex` relative to the file it is running in; the file it is running in is this
-      // bundle, installed at `<vault>/.obsidian/plugins/shorthand/`, and no `node_modules` sits
-      // at or above a vault. That resolution therefore cannot succeed however Codex was
-      // installed, and the SDK does not fall back to PATH. It also defers the lookup to the
-      // first query(), so a bare client loads, saves and reports healthy, then throws "Unable to
-      // locate Codex CLI binaries" at the first enhancement pass — mid-meeting, which is the
-      // worst possible moment to learn that a setting was never filled in.
+      // A path is always passed, even when the user configured none, because the SDK's own
+      // lookup cannot work here: left to itself it resolves `@openai/codex` relative to the file
+      // it is running in, and that file is this bundle, installed at
+      // `<vault>/.obsidian/plugins/shorthand/` with no `node_modules` at or above it. The SDK
+      // defers that lookup to the first query(), so a bare client loads, saves and reports
+      // healthy, then throws "Unable to locate Codex CLI binaries" mid-meeting.
+      //
+      // `detectCodexExecutable` is what makes the blank setting work: it searches PATH itself and
+      // returns an absolute path the SDK can spawn. So blank is a working default here exactly as
+      // it is for `claudeExecutable`, and only a genuinely absent Codex reaches the throw below.
       //
       // Both checks run on the resolved path rather than on the stored one, because
       // detectCodexExecutable also honours SHORTHAND_CODEX_EXE; testing the setting alone would
-      // skip a path this plugin is about to spawn.
+      // skip a path this plugin is about to spawn. A configured path is returned unverified —
+      // core resolves it without stat'ing — so existsSync is still what makes a typo fail here,
+      // naming the field, instead of failing inside the SDK on the first pass.
       const configuredCodex = this.settings.codexExecutable;
       const codexExecutable = detectCodexExecutable(configuredCodex.length === 0 ? undefined : configuredCodex);
       if (codexExecutable === undefined) {
-        throw new Error("Codex was not found, and Shorthand cannot locate it on its own. Enter the full path to the codex program in \"Codex executable\" under Advanced in Shorthand settings — \"npm root -g\" in a terminal prints the folder npm installs it under, and this plugin's README gives the rest of the path.");
+        throw new Error("Codex was not found on PATH. Install the Codex CLI and run \"codex login\", or enter the full path to the codex program in \"Codex executable\" under Advanced in Shorthand settings.");
       }
       if (!existsSync(codexExecutable)) {
-        throw new Error(`Codex was not found at "${codexExecutable}". Update "Codex executable" in Shorthand settings.`);
+        throw new Error(`Codex was not found at "${codexExecutable}". Update "Codex executable" in Shorthand settings, or clear it to find Codex on PATH.`);
       }
       agent = new CodexAgentClient({ codexPathOverride: codexExecutable });
     } else {
@@ -953,20 +956,15 @@ class ShorthandSettingTab extends PluginSettingTab {
       // Codex authenticates through its own CLI and this plugin has no route into that flow.
       // Without a row saying so, a user who has never run `codex login` learns about it from a
       // failed enhancement pass mid-meeting, with nothing on this tab pointing at the cause.
-      // The path is named here for the same reason and not left to Advanced alone: it is the
-      // one prerequisite that has no default, and it sits several rows below the dropdown that
-      // reveals it.
+      // The sign-in is now the only Codex prerequisite this row has to name: core finds the
+      // binary on PATH, so the executable field in Advanced is an override like Claude's and
+      // does not need pointing at from up here.
       new Setting(containerEl)
         .setName("Codex sign-in")
         .setDesc(createFragment((desc) => {
           desc.appendText("Sign in with ");
           desc.createEl("code", { text: "codex login" });
-          desc.appendText(" in a terminal first; Shorthand uses that sign-in and cannot start it for you. It also needs the path to Codex under Advanced — see ");
-          desc.createEl("a", {
-            text: "Prerequisites",
-            href: "https://github.com/mshish/obsidian-shorthand#prerequisites",
-          });
-          desc.appendText(".");
+          desc.appendText(" in a terminal first. Shorthand uses that sign-in and cannot start it for you.");
         }));
     }
     // Each half of this pair names its own backend rather than being an if/else, and that is
@@ -1043,9 +1041,9 @@ class ShorthandSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName("Advanced").setHeading();
     textSetting(containerEl, this.plugin, "Shorthand executable", shorthandExecutableDescription, "shorthandExecutable");
     // Both revealed by the backend dropdown in displayBasic, and each naming its own backend
-    // rather than sharing an else, for the reason recorded there. Claude's is optional — blank
-    // means automatic detection — which is why it can sit this far from that dropdown. Codex's
-    // is not: nothing detects Codex, so the sign-in row up in displayBasic points down here.
+    // rather than sharing an else, for the reason recorded there. Both are optional — blank
+    // means automatic detection, of `claude` at its install location and of `codex` on PATH —
+    // which is why they can sit this far from the dropdown that reveals them.
     if (this.plugin.settings.backend === "claude-agent-sdk") {
       textSetting(containerEl, this.plugin, "Claude executable", claudeExecutableDescription, "claudeExecutable");
     }

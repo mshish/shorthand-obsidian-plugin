@@ -31,16 +31,15 @@ export function claudeExecutableDescription(stored: string): string {
 }
 
 /**
- * The inverse of `claudeExecutableDescription`'s empty case, and the reason the two rows read
- * differently: nothing detects Codex. Its SDK locates the binary relative to the file it is
- * running in, and that file is the plugin bundle installed in the vault, with no `node_modules`
- * above it — so an empty field is a backend that fails on its first pass, not one that finds
- * Codex by itself. Rule 4's "the raw value is not self-describing" case: blank here looks like
- * the blank next door, which is a working default. Where to find the path is a paragraph, so it
- * lives in README's Prerequisites, linked from the Codex sign-in row that this one belongs to.
+ * Word-for-word the shape of `claudeExecutableDescription`, because the two rows now mean the
+ * same thing: blank is a working default that core resolves for itself. It once said "Required",
+ * which was true only while core had no detection of its own — core 0.11.2 searches PATH, so a
+ * user with `codex` installed needs this field only to name a different build. "On PATH" is left
+ * out for the same reason the Shorthand and Claude rows leave out *their* search order: the row
+ * says whether the user has to act, and the README says how detection works.
  */
 export function codexExecutableDescription(stored: string): string {
-  return stored.trim().length === 0 ? "Required — Codex is not found automatically." : "";
+  return stored.trim().length === 0 ? "Codex is found automatically." : "";
 }
 
 /**

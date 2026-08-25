@@ -251,10 +251,11 @@ describe("shorthandExecutable normalization", () => {
 });
 
 describe("codexExecutable normalization", () => {
-  // Blank is the shipped default, and unlike shorthandExecutable and claudeExecutable it is not
-  // a working state: nothing detects Codex, so createEnhancer refuses the backend while this is
-  // empty rather than letting the SDK throw mid-pass. The default is still blank because a
-  // guessed path is worse than a named error — see the field's comment in src/settings.ts.
+  // Blank is the shipped default and a working state, exactly as it is for claudeExecutable:
+  // core's detectCodexExecutable searches PATH itself, so createEnhancer only fails when Codex
+  // is genuinely absent. It stays stored as blank rather than as whatever path was detected once,
+  // so a reinstalled or relocated Codex keeps being found instead of the field freezing on the
+  // layout of one machine — see the field's comment in src/settings.ts.
   test("defaults to blank", () => {
     expect(DEFAULT_PLUGIN_SETTINGS.codexExecutable).toBe("");
     expect(normalizePluginSettings({})).toMatchObject({ codexExecutable: "" });
@@ -272,9 +273,11 @@ describe("codexExecutable normalization", () => {
       .toBe("/usr/local/bin/codex");
   });
 
-  // No migration of a bare name here, deliberately: shorthandExecutable's exists to undo a
-  // default an older build persisted, and this key has never shipped a non-empty default.
-  test("a bare command name is preserved untouched, so the branch reports it as missing", () => {
+  // Preserved rather than rewritten or rejected, because core accepts a bare name as an override
+  // and searches PATH for it: `codex` typed here is a usable value, not a mistake to repair. No
+  // migration either — shorthandExecutable's exists to undo a default an older build persisted,
+  // and this key has never shipped a non-empty default.
+  test("a bare command name round-trips, since core resolves an override through PATH too", () => {
     expect(normalizePluginSettings({ codexExecutable: "codex" }).codexExecutable).toBe("codex");
   });
 

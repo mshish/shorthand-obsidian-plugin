@@ -45,15 +45,21 @@ describe("claudeExecutableDescription", () => {
 });
 
 describe("codexExecutableDescription", () => {
-  test("empty says required, because nothing detects Codex", () => {
-    // The one string on the tab that must not read like its neighbour: an empty Claude
-    // executable is a working default, an empty Codex executable is a backend that throws on
-    // its first pass. Pinned so a later harmonisation of the two rows fails here.
-    const required = "Required — Codex is not found automatically.";
-    expect(codexExecutableDescription("")).toBe(required);
-    expect(codexExecutableDescription("   ")).toBe(required);
-    expect(codexExecutableDescription(DEFAULT_PLUGIN_SETTINGS.codexExecutable)).toBe(required);
-    expect(codexExecutableDescription("")).not.toBe(claudeExecutableDescription(""));
+  test("empty means core detects the CLI, and the shipped default is empty", () => {
+    const detected = "Codex is found automatically.";
+    expect(codexExecutableDescription("")).toBe(detected);
+    expect(codexExecutableDescription("   ")).toBe(detected);
+    expect(codexExecutableDescription(DEFAULT_PLUGIN_SETTINGS.codexExecutable)).toBe(detected);
+  });
+
+  test("reads as the Claude row does, differing only in the name of the binary", () => {
+    // The inversion of the assertion that stood here, and deliberate rather than a relaxation.
+    // It used to pin the two rows *apart* — `not.toBe(claudeExecutableDescription(""))` — because
+    // an empty Codex field really was a broken backend while an empty Claude field was a working
+    // default, and a copy-edit that harmonised them would have told the user a lie. Core 0.11.2
+    // searches PATH for Codex, so the two rows now describe the same thing about two binaries,
+    // and what needs guarding is the reverse: a future divergence should be deliberate.
+    expect(codexExecutableDescription("").replace("Codex", "Claude")).toBe(claudeExecutableDescription(""));
   });
 
   test("a configured path describes nothing", () => {

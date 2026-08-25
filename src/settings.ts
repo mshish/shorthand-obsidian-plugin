@@ -21,12 +21,13 @@ export type ShorthandPluginSettings = Readonly<{
   shorthandExecutable: string;
   claudeExecutable: string;
   /**
-   * Full path to the Codex program. Blank is not a working state here, unlike
-   * `claudeExecutable`: the Codex SDK finds its binary by resolving `@openai/codex` relative to
-   * the file it is running in, and this plugin ships as one bundled `main.js` installed into
-   * `<vault>/.obsidian/plugins/shorthand/`, where there is no `node_modules` at or above it. It
-   * never consults PATH either, so nothing detects Codex on the user's behalf and
-   * `createEnhancer` refuses to build the backend while this is empty.
+   * Path to the Codex program, or blank to let core find it. Blank is the working default, as it
+   * is for `claudeExecutable`: `detectCodexExecutable` searches PATH and hands the SDK an
+   * absolute path to spawn. That detection is what the plugin leans on, because the SDK's own
+   * lookup cannot work here — it resolves `@openai/codex` relative to the file it is running in,
+   * and this plugin ships as one bundled `main.js` installed into
+   * `<vault>/.obsidian/plugins/shorthand/` with no `node_modules` at or above it. A value stored
+   * here overrides that search, for a Codex off PATH or for naming one specific build.
    */
   codexExecutable: string;
   sidecarDirectory: string;
