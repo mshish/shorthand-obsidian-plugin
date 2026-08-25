@@ -20,6 +20,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 // It is a separate repository (mshish/shorthand-core), pinned by tag in package.json.
 import {
   ClaudeAgentClient,
+  CodexAgentClient,
   DEFAULT_CONFIG,
   DEFAULT_EDITORIAL_GUIDANCE,
   detectClaudeExecutable,
@@ -56,6 +57,7 @@ import {
   choosePromptFieldMode,
   defaultTemplateSectionText,
   initialPromptFieldState,
+  isEnhancementBackend,
   normalizePluginSettings,
   resolveTemplateSections,
   storedPromptFieldValue,
@@ -628,7 +630,7 @@ export default class ShorthandPlugin extends Plugin {
     const configuredClaude = this.settings.claudeExecutable;
     const guidance = this.settings.noteTakingGuidance;
     let claudeExecutable: string | undefined;
-    let agent: ClaudeAgentClient | LlmAgentClient;
+    let agent: ClaudeAgentClient | CodexAgentClient | LlmAgentClient;
     if (backend === "claude-agent-sdk") {
       if (configuredClaude.length > 0 && !existsSync(configuredClaude)) {
         throw new Error(`claude.exe was not found at "${configuredClaude}". Update the path in Shorthand settings.`);
@@ -638,6 +640,14 @@ export default class ShorthandPlugin extends Plugin {
         throw new Error("claude.exe was not found. Install and log in to Claude CLI, or configure its full path in Shorthand settings.");
       }
       agent = new ClaudeAgentClient();
+    } else if (backend === "codex") {
+      // Constructed bare, and the asymmetry with `claudeExecutable` above is deliberate rather
+      // than an oversight to harmonise later. The Codex SDK's findCodexPath() resolves the
+      // binary out of the @openai/codex platform package and throws when it is absent; it never
+      // consults PATH, so an executable-path setting here would be a field that changes nothing
+      // no matter what a user typed into it. There is no credential to read either — the client
+      // brings across the auth from the user's own `codex login`.
+      agent = new CodexAgentClient();
     } else {
       const credentialsPath = llmCredentialsPath();
       const credentials = await readLlmCredentials(credentialsPath);
@@ -906,19 +916,39 @@ class ShorthandSettingTab extends PluginSettingTab {
   private displayBasic(containerEl: HTMLElement, displayGeneration: number): void {
     new Setting(containerEl)
       .setName("Enhancement backend")
-      .setDesc("The Claude Agent SDK backend can look things up elsewhere in your vault; an LLM provider cannot.")
+      .setDesc("Only the Claude Agent SDK backend can look things up elsewhere in your vault.")
       .addDropdown((dropdown) => dropdown
         .addOption("claude-agent-sdk", "Claude Agent SDK")
+        .addOption("codex", "Codex")
         .addOption("llm", "LLM provider")
         .setValue(this.plugin.settings.backend)
         .onChange(async (value) => {
-          if (value !== "claude-agent-sdk" && value !== "llm") return;
+          // Narrowed through the same predicate `normalizePluginSettings` uses, not against
+          // literals repeated here. The literals this replaced listed only the two backends
+          // that existed when it was written, so adding a third made its option selectable
+          // and unsaveable: the dropdown moved, this handler returned, and nothing anywhere
+          // reported that the choice had been discarded.
+          if (!isEnhancementBackend(value)) return;
           await this.plugin.saveSettings({ ...this.plugin.settings, backend: value });
           this.display();
         }));
-    // The if/else this came from was split when "Claude executable" moved to Advanced. With
-    // `backend` a two-member union this pair is exactly equivalent to that if/else; add a
-    // third backend and it stops being — the LLM block would then render for it too.
+    if (this.plugin.settings.backend === "codex") {
+      // Codex authenticates through its own CLI and this plugin has no route into that flow.
+      // Without a row saying so, a user who has never run `codex login` learns about it from a
+      // failed enhancement pass mid-meeting, with nothing on this tab pointing at the cause.
+      new Setting(containerEl)
+        .setName("Codex sign-in")
+        .setDesc(createFragment((desc) => {
+          desc.appendText("Sign in with ");
+          desc.createEl("code", { text: "codex login" });
+          desc.appendText(" in a terminal first. Shorthand uses that sign-in and cannot start it for you.");
+        }));
+    }
+    // Each half of this pair names its own backend rather than being an if/else, and that is
+    // what keeps a third backend from inheriting a block written for a different one: Codex
+    // wants neither the LLM profile rows nor the Claude executable field in Advanced. Turning
+    // either test back into an else silently hands whichever block sits on that branch to
+    // every backend added after it.
     if (this.plugin.settings.backend === "llm") {
       this.displayLlmProfileControls(containerEl, displayGeneration);
     }

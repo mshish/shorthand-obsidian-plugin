@@ -1,7 +1,23 @@
 import { DEFAULT_CONFIG, MAX_GUIDANCE_CHARACTERS, parseTemplateSections, type Section } from "shorthand-core";
 
+/**
+ * Every stored enhancement-backend identifier, and the one source the union below is derived
+ * from. Deriving rather than restating it is what stops a backend from existing in the type
+ * while a validator elsewhere still rejects it: the settings tab's dropdown handler narrows
+ * through `isEnhancementBackend`, and the hand-written literal comparison it replaced would
+ * have dropped a newly added option on the floor — the dropdown moves, nothing saves, and no
+ * error is raised anywhere.
+ */
+const ENHANCEMENT_BACKENDS = ["claude-agent-sdk", "llm", "codex"] as const;
+
+export type EnhancementBackend = (typeof ENHANCEMENT_BACKENDS)[number];
+
+export function isEnhancementBackend(value: unknown): value is EnhancementBackend {
+  return (ENHANCEMENT_BACKENDS as readonly unknown[]).includes(value);
+}
+
 export type ShorthandPluginSettings = Readonly<{
-  backend: "claude-agent-sdk" | "llm";
+  backend: EnhancementBackend;
   shorthandExecutable: string;
   claudeExecutable: string;
   sidecarDirectory: string;
@@ -218,11 +234,8 @@ function migrateLegacyShorthandExecutable(value: string): string {
   return value === "shorthand" ? "" : value;
 }
 
-function backendValue(
-  value: unknown,
-  fallback: ShorthandPluginSettings["backend"],
-): ShorthandPluginSettings["backend"] {
-  return value === "claude-agent-sdk" || value === "llm" ? value : fallback;
+function backendValue(value: unknown, fallback: EnhancementBackend): EnhancementBackend {
+  return isEnhancementBackend(value) ? value : fallback;
 }
 
 /**

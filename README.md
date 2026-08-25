@@ -30,15 +30,23 @@ on by package name and a pinned tag. The core repo also holds the design notes
   explicit path here only if detection doesn't find your install.
 - For the default Claude Agent SDK enhancement backend, the `claude` CLI must be installed and
   logged in. On Windows the standard `C:\Users\<you>\.local\bin\claude.exe` location is detected;
-  another location can be configured in the plugin's settings tab. The LLM provider backend does
-  not use this CLI.
+  another location can be configured in the plugin's settings tab. Neither of the other backends
+  uses this CLI.
+- For the Codex backend, run `codex login` once in a terminal. The plugin has no sign-in flow of
+  its own and reuses that login. It never needs a path to the Codex binary: the Codex SDK
+  resolves its own, so there is deliberately no setting for one.
 - A desktop, filesystem-backed vault. The plugin is `isDesktopOnly`.
 - Node.js 20+ and npm, to build from source.
 
 ## Enhancement backends
 
-The default **Claude Agent SDK** backend keeps its existing capabilities and vault access. To use
-an ordinary provider API instead,
+The default **Claude Agent SDK** backend keeps its existing capabilities and vault access.
+
+**Codex** runs enhancement through the Codex CLI you already have installed, using the login from
+`codex login`. It asks the plugin for nothing else: no API key, no model, no path to the binary.
+Choosing it therefore reveals no further controls, only a reminder about that login.
+
+To use an ordinary provider API instead,
 choose **LLM provider** under **Enhancement backend** in the plugin settings. That reveals the
 provider, exact model ID, base URL and API-key controls. The supported provider families are
 OpenAI, Anthropic and OpenAI-compatible endpoints, including a locally served Ollama model.
@@ -60,12 +68,13 @@ use **Clear key** to remove it. If the credentials file is malformed, the settin
 specific problem and disables the profile fields. **Discard file** deletes the entire profile,
 including any key that might still have been recoverable by editing the file by hand.
 
-The backends do not have the same view of your notes. The LLM provider backend cannot use
-Read/Glob/Grep, so no enhancement pass—including the closing pass or **Enhance now**—looks elsewhere
-in the vault. Its notes will not reference people, projects or prior meetings found in other files.
-The default Claude Agent SDK backend still performs those vault lookups.
+The backends do not have the same view of your notes. Only the default Claude Agent SDK backend
+performs vault lookups. Neither the LLM provider backend nor Codex can use Read/Glob/Grep, so with
+either of those no enhancement pass—including the closing pass or **Enhance now**—looks elsewhere in
+the vault, and their notes will not reference people, projects or prior meetings found in other
+files.
 
-Both backends validate the returned section structure before writing. With the LLM provider
+Every backend validates the returned section structure before writing. With the LLM provider
 backend, however, generation depends on the endpoint honouring the supplied schema; a weak local
 model may fail validation more often, in which case the existing note sections are kept.
 

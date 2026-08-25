@@ -4,6 +4,7 @@ import {
   choosePromptFieldMode,
   defaultTemplateSectionText,
   initialPromptFieldState,
+  isEnhancementBackend,
   normalizePluginSettings,
   resolveTemplateSections,
   storedPromptFieldValue,
@@ -68,9 +69,10 @@ describe("plugin settings normalization", () => {
     });
   });
 
-  test("round-trips either note-enhancement backend", () => {
+  test("round-trips every note-enhancement backend", () => {
     expect(normalizePluginSettings({ backend: "llm" }).backend).toBe("llm");
     expect(normalizePluginSettings({ backend: "claude-agent-sdk" }).backend).toBe("claude-agent-sdk");
+    expect(normalizePluginSettings({ backend: "codex" }).backend).toBe("codex");
   });
 
   test("defaults an absent backend to Claude Agent SDK, preserving existing behavior", () => {
@@ -79,8 +81,24 @@ describe("plugin settings normalization", () => {
   });
 
   test("falls back for malformed note-enhancement backends without throwing", () => {
-    for (const backend of [42, "claude", null, { backend: "llm" }]) {
+    // "openai-codex" and "Codex" are here because the accepted spelling is neither: a
+    // near-miss written by hand into data.json, or synced from a build that named it
+    // differently, must land on the default rather than reaching createEnhancer as a
+    // backend no branch matches.
+    for (const backend of [42, "claude", null, { backend: "llm" }, "openai-codex", "Codex"]) {
       expect(normalizePluginSettings({ backend }).backend).toBe(DEFAULT_PLUGIN_SETTINGS.backend);
+    }
+  });
+
+  test("isEnhancementBackend accepts exactly the stored backends", () => {
+    // The settings tab's dropdown handler narrows through this rather than through
+    // normalizePluginSettings, so it needs its own coverage: a member missing here is a
+    // dropdown option that moves and never saves.
+    for (const backend of ["claude-agent-sdk", "llm", "codex"]) {
+      expect(isEnhancementBackend(backend)).toBe(true);
+    }
+    for (const garbage of ["", "claude", "openai-codex", 42, null, undefined, {}, ["codex"]]) {
+      expect(isEnhancementBackend(garbage)).toBe(false);
     }
   });
 
