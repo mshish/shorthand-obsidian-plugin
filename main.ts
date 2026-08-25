@@ -24,6 +24,7 @@ import {
   DEFAULT_CONFIG,
   DEFAULT_EDITORIAL_GUIDANCE,
   detectClaudeExecutable,
+  detectCodexExecutable,
   detectShorthandExecutable,
   EnhanceRunner,
   LlmAgentClient,
@@ -69,6 +70,7 @@ import {
   apiKeyDescription,
   baseUrlDescription,
   claudeExecutableDescription,
+  codexExecutableDescription,
   newCharacterThresholdDescription,
   passIntervalDescription,
   shorthandExecutableDescription,
@@ -641,13 +643,28 @@ export default class ShorthandPlugin extends Plugin {
       }
       agent = new ClaudeAgentClient();
     } else if (backend === "codex") {
-      // Constructed bare, and the asymmetry with `claudeExecutable` above is deliberate rather
-      // than an oversight to harmonise later. The Codex SDK's findCodexPath() resolves the
-      // binary out of the @openai/codex platform package and throws when it is absent; it never
-      // consults PATH, so an executable-path setting here would be a field that changes nothing
-      // no matter what a user typed into it. There is no credential to read either — the client
-      // brings across the auth from the user's own `codex login`.
-      agent = new CodexAgentClient();
+      // The path is mandatory here, where `claudeExecutable` is optional, and that asymmetry is
+      // the fix for a backend that could not run at all. Left to itself the Codex SDK resolves
+      // `@openai/codex` relative to the file it is running in; the file it is running in is this
+      // bundle, installed at `<vault>/.obsidian/plugins/shorthand/`, and no `node_modules` sits
+      // at or above a vault. That resolution therefore cannot succeed however Codex was
+      // installed, and the SDK does not fall back to PATH. It also defers the lookup to the
+      // first query(), so a bare client loads, saves and reports healthy, then throws "Unable to
+      // locate Codex CLI binaries" at the first enhancement pass — mid-meeting, which is the
+      // worst possible moment to learn that a setting was never filled in.
+      //
+      // Both checks run on the resolved path rather than on the stored one, because
+      // detectCodexExecutable also honours SHORTHAND_CODEX_EXE; testing the setting alone would
+      // skip a path this plugin is about to spawn.
+      const configuredCodex = this.settings.codexExecutable;
+      const codexExecutable = detectCodexExecutable(configuredCodex.length === 0 ? undefined : configuredCodex);
+      if (codexExecutable === undefined) {
+        throw new Error("Codex was not found, and Shorthand cannot locate it on its own. Enter the full path to the codex program in \"Codex executable\" under Advanced in Shorthand settings — \"npm root -g\" in a terminal prints the folder npm installs it under, and this plugin's README gives the rest of the path.");
+      }
+      if (!existsSync(codexExecutable)) {
+        throw new Error(`Codex was not found at "${codexExecutable}". Update "Codex executable" in Shorthand settings.`);
+      }
+      agent = new CodexAgentClient({ codexPathOverride: codexExecutable });
     } else {
       const credentialsPath = llmCredentialsPath();
       const credentials = await readLlmCredentials(credentialsPath);
@@ -936,12 +953,20 @@ class ShorthandSettingTab extends PluginSettingTab {
       // Codex authenticates through its own CLI and this plugin has no route into that flow.
       // Without a row saying so, a user who has never run `codex login` learns about it from a
       // failed enhancement pass mid-meeting, with nothing on this tab pointing at the cause.
+      // The path is named here for the same reason and not left to Advanced alone: it is the
+      // one prerequisite that has no default, and it sits several rows below the dropdown that
+      // reveals it.
       new Setting(containerEl)
         .setName("Codex sign-in")
         .setDesc(createFragment((desc) => {
           desc.appendText("Sign in with ");
           desc.createEl("code", { text: "codex login" });
-          desc.appendText(" in a terminal first. Shorthand uses that sign-in and cannot start it for you.");
+          desc.appendText(" in a terminal first; Shorthand uses that sign-in and cannot start it for you. It also needs the path to Codex under Advanced — see ");
+          desc.createEl("a", {
+            text: "Prerequisites",
+            href: "https://github.com/mshish/obsidian-shorthand#prerequisites",
+          });
+          desc.appendText(".");
         }));
     }
     // Each half of this pair names its own backend rather than being an if/else, and that is
@@ -1017,10 +1042,15 @@ class ShorthandSettingTab extends PluginSettingTab {
   private displayAdvanced(containerEl: HTMLElement): void {
     new Setting(containerEl).setName("Advanced").setHeading();
     textSetting(containerEl, this.plugin, "Shorthand executable", shorthandExecutableDescription, "shorthandExecutable");
-    // The other half of the split if/else in displayBasic. Optional — blank means automatic
-    // detection — which is why it can sit this far from the dropdown that reveals it.
+    // Both revealed by the backend dropdown in displayBasic, and each naming its own backend
+    // rather than sharing an else, for the reason recorded there. Claude's is optional — blank
+    // means automatic detection — which is why it can sit this far from that dropdown. Codex's
+    // is not: nothing detects Codex, so the sign-in row up in displayBasic points down here.
     if (this.plugin.settings.backend === "claude-agent-sdk") {
       textSetting(containerEl, this.plugin, "Claude executable", claudeExecutableDescription, "claudeExecutable");
+    }
+    if (this.plugin.settings.backend === "codex") {
+      textSetting(containerEl, this.plugin, "Codex executable", codexExecutableDescription, "codexExecutable");
     }
     numberSetting(containerEl, this.plugin, "Minimum new characters", newCharacterThresholdDescription, "minNewChars");
     numberSetting(containerEl, this.plugin, "Minimum interval", passIntervalDescription, "minIntervalMs");
@@ -1264,7 +1294,7 @@ function textSetting(
   plugin: ShorthandPlugin,
   name: string,
   describe: (value: string) => string,
-  key: "shorthandExecutable" | "claudeExecutable" | "sidecarDirectory",
+  key: "shorthandExecutable" | "claudeExecutable" | "codexExecutable" | "sidecarDirectory",
 ): void {
   const setting = new Setting(container).setName(name).setDesc(describe(plugin.settings[key]));
   setting.addText((text) => text

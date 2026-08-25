@@ -32,9 +32,18 @@ on by package name and a pinned tag. The core repo also holds the design notes
   logged in. On Windows the standard `C:\Users\<you>\.local\bin\claude.exe` location is detected;
   another location can be configured in the plugin's settings tab. Neither of the other backends
   uses this CLI.
-- For the Codex backend, run `codex login` once in a terminal. The plugin has no sign-in flow of
-  its own and reuses that login. It never needs a path to the Codex binary: the Codex SDK
-  resolves its own, so there is deliberately no setting for one.
+- For the Codex backend, two things. Run `codex login` once in a terminal — the plugin has no
+  sign-in flow of its own and reuses that login — and set **Codex executable** in the plugin's
+  settings tab to the full path of the `codex` program. That path is required, unlike **Claude
+  executable**: the Codex SDK finds its binary by resolving `@openai/codex` relative to the file
+  it is running in, and the file it is running in is this plugin's single bundled `main.js`,
+  installed at `<vault>/.obsidian/plugins/shorthand/` where no `node_modules` exists at or above
+  it. The SDK never consults `PATH` either, so nothing can detect Codex for you. `npm root -g`
+  prints the folder a global npm install put it under; the binary itself is at
+  `<npm root -g>/@openai/codex/node_modules/@openai/codex-<platform>/vendor/<target-triple>/bin/codex`
+  (`codex.exe` on Windows, where `<platform>` is e.g. `win32-x64` and `<target-triple>` e.g.
+  `x86_64-pc-windows-msvc`). Point the setting at that file, not at the `codex` shim next to
+  `npm` — the shim is a shell script and the plugin spawns the program directly.
 - A desktop, filesystem-backed vault. The plugin is `isDesktopOnly`.
 - Node.js 20+ and npm, to build from source.
 
@@ -43,8 +52,10 @@ on by package name and a pinned tag. The core repo also holds the design notes
 The default **Claude Agent SDK** backend keeps its existing capabilities and vault access.
 
 **Codex** runs enhancement through the Codex CLI you already have installed, using the login from
-`codex login`. It asks the plugin for nothing else: no API key, no model, no path to the binary.
-Choosing it therefore reveals no further controls, only a reminder about that login.
+`codex login`. It asks for no API key and no model, but it does need the full path to the `codex`
+program in **Codex executable** under **Advanced** — see [Prerequisites](#prerequisites) for why
+and for where to find that path. Choosing Codex reveals a reminder about the login and that one
+field.
 
 To use an ordinary provider API instead,
 choose **LLM provider** under **Enhancement backend** in the plugin settings. That reveals the

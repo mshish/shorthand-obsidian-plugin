@@ -20,6 +20,15 @@ export type ShorthandPluginSettings = Readonly<{
   backend: EnhancementBackend;
   shorthandExecutable: string;
   claudeExecutable: string;
+  /**
+   * Full path to the Codex program. Blank is not a working state here, unlike
+   * `claudeExecutable`: the Codex SDK finds its binary by resolving `@openai/codex` relative to
+   * the file it is running in, and this plugin ships as one bundled `main.js` installed into
+   * `<vault>/.obsidian/plugins/shorthand/`, where there is no `node_modules` at or above it. It
+   * never consults PATH either, so nothing detects Codex on the user's behalf and
+   * `createEnhancer` refuses to build the backend while this is empty.
+   */
+  codexExecutable: string;
   sidecarDirectory: string;
   minNewChars: number;
   minIntervalMs: number;
@@ -55,6 +64,7 @@ export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
   backend: "claude-agent-sdk",
   shorthandExecutable: "",
   claudeExecutable: "",
+  codexExecutable: "",
   sidecarDirectory: DEFAULT_CONFIG.sidecarDirectory.replaceAll("\\", "/"),
   minNewChars: DEFAULT_CONFIG.thresholds.enhancementNewCharacters,
   minIntervalMs: DEFAULT_CONFIG.thresholds.enhancementIntervalMs,
@@ -74,6 +84,7 @@ export function normalizePluginSettings(input: unknown): ShorthandPluginSettings
       stringValue(value.shorthandExecutable, DEFAULT_PLUGIN_SETTINGS.shorthandExecutable),
     ),
     claudeExecutable: stringValue(value.claudeExecutable, DEFAULT_PLUGIN_SETTINGS.claudeExecutable),
+    codexExecutable: stringValue(value.codexExecutable, DEFAULT_PLUGIN_SETTINGS.codexExecutable),
     sidecarDirectory: vaultRelativeDirectory(value.sidecarDirectory, DEFAULT_PLUGIN_SETTINGS.sidecarDirectory),
     minNewChars: finiteInteger(value.minNewChars, DEFAULT_PLUGIN_SETTINGS.minNewChars, 1),
     minIntervalMs: finiteInteger(value.minIntervalMs, DEFAULT_PLUGIN_SETTINGS.minIntervalMs, 0),

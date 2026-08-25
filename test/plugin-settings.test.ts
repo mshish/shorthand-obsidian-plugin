@@ -44,6 +44,7 @@ describe("plugin settings normalization", () => {
       backend: "llm",
       shorthandExecutable: "  C:\\Apps\\shorthand.exe ",
       claudeExecutable: " C:\\Apps\\claude.exe ",
+      codexExecutable: "  C:\\Apps\\codex.exe\t",
       sidecarDirectory: "./Calls\\Transcripts/",
       minNewChars: 42.9,
       minIntervalMs: 0,
@@ -57,6 +58,7 @@ describe("plugin settings normalization", () => {
       backend: "llm",
       shorthandExecutable: "C:\\Apps\\shorthand.exe",
       claudeExecutable: "C:\\Apps\\claude.exe",
+      codexExecutable: "C:\\Apps\\codex.exe",
       sidecarDirectory: "Calls/Transcripts",
       minNewChars: 42,
       minIntervalMs: 0,
@@ -245,6 +247,48 @@ describe("shorthandExecutable normalization", () => {
     for (const garbage of [42, null, {}, [], true]) {
       expect(normalizePluginSettings({ shorthandExecutable: garbage }).shorthandExecutable).toBe("");
     }
+  });
+});
+
+describe("codexExecutable normalization", () => {
+  // Blank is the shipped default, and unlike shorthandExecutable and claudeExecutable it is not
+  // a working state: nothing detects Codex, so createEnhancer refuses the backend while this is
+  // empty rather than letting the SDK throw mid-pass. The default is still blank because a
+  // guessed path is worse than a named error — see the field's comment in src/settings.ts.
+  test("defaults to blank", () => {
+    expect(DEFAULT_PLUGIN_SETTINGS.codexExecutable).toBe("");
+    expect(normalizePluginSettings({})).toMatchObject({ codexExecutable: "" });
+  });
+
+  test("a cleared field stays cleared", () => {
+    expect(normalizePluginSettings({ codexExecutable: "" }).codexExecutable).toBe("");
+    expect(normalizePluginSettings({ codexExecutable: "   " }).codexExecutable).toBe("");
+  });
+
+  test("an explicit path round-trips, trimmed", () => {
+    const vendored = "C:\\nvm4w\\nodejs\\node_modules\\@openai\\codex\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe";
+    expect(normalizePluginSettings({ codexExecutable: ` ${vendored} ` }).codexExecutable).toBe(vendored);
+    expect(normalizePluginSettings({ codexExecutable: "/usr/local/bin/codex" }).codexExecutable)
+      .toBe("/usr/local/bin/codex");
+  });
+
+  // No migration of a bare name here, deliberately: shorthandExecutable's exists to undo a
+  // default an older build persisted, and this key has never shipped a non-empty default.
+  test("a bare command name is preserved untouched, so the branch reports it as missing", () => {
+    expect(normalizePluginSettings({ codexExecutable: "codex" }).codexExecutable).toBe("codex");
+  });
+
+  test("malformed stored values fall back to blank rather than throwing", () => {
+    for (const garbage of [42, null, {}, [], true]) {
+      expect(normalizePluginSettings({ codexExecutable: garbage }).codexExecutable).toBe("");
+    }
+  });
+
+  test("stays on its own key, so filling one executable field cannot blank another", () => {
+    const filled = normalizePluginSettings({ codexExecutable: "C:\\Apps\\codex.exe" });
+    expect(filled.claudeExecutable).toBe("");
+    expect(filled.shorthandExecutable).toBe("");
+    expect(normalizePluginSettings({ claudeExecutable: "C:\\Apps\\claude.exe" }).codexExecutable).toBe("");
   });
 });
 

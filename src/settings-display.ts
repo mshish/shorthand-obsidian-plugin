@@ -31,6 +31,19 @@ export function claudeExecutableDescription(stored: string): string {
 }
 
 /**
+ * The inverse of `claudeExecutableDescription`'s empty case, and the reason the two rows read
+ * differently: nothing detects Codex. Its SDK locates the binary relative to the file it is
+ * running in, and that file is the plugin bundle installed in the vault, with no `node_modules`
+ * above it — so an empty field is a backend that fails on its first pass, not one that finds
+ * Codex by itself. Rule 4's "the raw value is not self-describing" case: blank here looks like
+ * the blank next door, which is a working default. Where to find the path is a paragraph, so it
+ * lives in README's Prerequisites, linked from the Codex sign-in row that this one belongs to.
+ */
+export function codexExecutableDescription(stored: string): string {
+  return stored.trim().length === 0 ? "Required — Codex is not found automatically." : "";
+}
+
+/**
  * Rendered from the stored folder, not the typed one: `normalizePluginSettings` rejects
  * absolute, drive-letter and traversing paths back to the default, so the field and the
  * folder in force can legitimately disagree.

@@ -3,6 +3,7 @@ import {
   apiKeyDescription,
   baseUrlDescription,
   claudeExecutableDescription,
+  codexExecutableDescription,
   newCharacterThresholdDescription,
   passIntervalDescription,
   shorthandExecutableDescription,
@@ -40,6 +41,23 @@ describe("claudeExecutableDescription", () => {
 
   test("a configured path describes nothing", () => {
     expect(claudeExecutableDescription("C:\\Users\\me\\.local\\bin\\claude.exe")).toBe("");
+  });
+});
+
+describe("codexExecutableDescription", () => {
+  test("empty says required, because nothing detects Codex", () => {
+    // The one string on the tab that must not read like its neighbour: an empty Claude
+    // executable is a working default, an empty Codex executable is a backend that throws on
+    // its first pass. Pinned so a later harmonisation of the two rows fails here.
+    const required = "Required — Codex is not found automatically.";
+    expect(codexExecutableDescription("")).toBe(required);
+    expect(codexExecutableDescription("   ")).toBe(required);
+    expect(codexExecutableDescription(DEFAULT_PLUGIN_SETTINGS.codexExecutable)).toBe(required);
+    expect(codexExecutableDescription("")).not.toBe(claudeExecutableDescription(""));
+  });
+
+  test("a configured path describes nothing", () => {
+    expect(codexExecutableDescription("C:\\npm\\@openai\\codex\\vendor\\bin\\codex.exe")).toBe("");
   });
 });
 
