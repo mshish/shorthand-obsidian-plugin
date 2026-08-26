@@ -33,6 +33,37 @@ export type RecorderPhase = "start" | "recall" | "finalize" | "backstop";
 
 export type RecorderReport = (phase: RecorderPhase, result: ControlResult) => void;
 
+/**
+ * The outcome of a capture start. Meeting's call site ignores it, exactly as it ignored the
+ * `void` this replaced. Assisted Notes awaits it, because a `sent` toggle is not proof of a
+ * live recording the way it is for Meeting: Shorthand's disabled-mode refusal still exits the
+ * forwarding process 0, and only the primary instance knows it declined.
+ */
+export type RecorderStartOutcome = "started" | "not-started" | "stopped";
+
+/**
+ * Why a capability-gated start resolved `"not-started"`, queried through `startFailure` after
+ * `start()` settles. `start()`'s own return stays the plain three-value union above — Meeting
+ * reads the same type and must not have to widen anything it does not use — so a caller that
+ * needs to choose between three different remediation notices reads this instead.
+ *
+ * - `no-hello`: the follower never attached within the grace window, so there is no `hello` to
+ *   check a capability against at all.
+ * - `unsupported`: a `hello` arrived, but its `capabilities` did not name the one required —
+ *   an app old enough to predate capability negotiation, most likely.
+ * - `start-timeout`: the toggle was confirmed delivered, but no session it started ever
+ *   announced itself within the acknowledgement budget — Shorthand's disabled-mode refusal,
+ *   most likely, which still exits the forwarding process 0.
+ *
+ * Left `undefined` when `start()` returns `"not-started"` for an ordinary control failure
+ * (`ShorthandControl.send()` itself reporting `not-running` or `error`): that case already has
+ * a complete, specific message via the ordinary `report()` channel, and does not need a second.
+ */
+export type RecorderStartFailure = "no-hello" | "unsupported" | "start-timeout";
+
+/** The subset of a `hello` record the capability gate cares about. */
+export type HelloInfo = { capabilities?: string[] };
+
 export type RecorderStopOutcome =
   /** Shorthand was driven to idle by the start sequence's own recall; nothing left to do. */
   | "idle"
@@ -89,6 +120,23 @@ export type RecorderOptions = {
    * only the gap between the start toggle landing and Shorthand announcing the session.
    */
   beginGraceMs: number;
+  /**
+   * A capability the attached Shorthand must have advertised in its `hello` before this
+   * capture's `recordingSignal` is sent at all. Unset for Meeting, which any protocol-1 app
+   * can serve. Set for Assisted Notes: an older app would otherwise parse-fail the flag with a
+   * clap error the user sees mid-capture, which this turns into an upfront refusal instead —
+   * see `RecorderStartFailure`.
+   */
+  requiredCapability?: string;
+  /**
+   * Only consulted when `requiredCapability` is set. How long to wait, once the toggle is
+   * confirmed delivered, for the session it should have started to actually announce itself,
+   * before concluding Shorthand refused the mode. Unset for Meeting: `ShorthandControl.send()`
+   * reporting `sent` has always been treated as proof enough there, and this option exists
+   * precisely because that proof is weaker for a mode Shorthand's primary instance can itself
+   * decline after forwarding already succeeded.
+   */
+  startAcknowledgementMs?: number;
   /** Injectable clock; the default is the real one. */
   delay?: (ms: number) => Promise<void>;
 };
@@ -111,6 +159,8 @@ export class ShorthandRecorder {
   readonly #finalizeTimeoutMs: number;
   readonly #attachGraceMs: number;
   readonly #beginGraceMs: number;
+  readonly #requiredCapability: string | undefined;
+  readonly #startAcknowledgementMs: number | undefined;
   readonly #delay: (ms: number) => Promise<void>;
 
   /** True between the first record of a session and whichever terminal record ends it. */
@@ -153,11 +203,20 @@ export class ShorthandRecorder {
   #reattached = false;
   #stopping = false;
   #startSequence: Promise<void> = Promise.resolve();
+  /** Set only by the capability-gated path, and only when its outcome is `"not-started"`. */
+  #startFailure: RecorderStartFailure | undefined = undefined;
   /** The session `stop()` is waiting on a terminal record for, while it is waiting. */
   #finalizingSession: number | undefined = undefined;
   readonly #beginWaiters = new Set<() => void>();
   readonly #terminalWaiters = new Set<() => void>();
   readonly #usurpedWaiters = new Set<() => void>();
+  /**
+   * Resolved by `requestStop()`, so a start sequence blocked on the acknowledgement wait can
+   * react to a stop immediately instead of only at its next `await`. Nothing else here needs
+   * this: every other checkpoint is a synchronous flag read right before an `await`, but the
+   * acknowledgement wait is itself the thing being awaited, so it has to be a race participant.
+   */
+  readonly #stopRequestWaiters = new Set<() => void>();
 
   constructor(options: RecorderOptions) {
     this.#control = options.control;
@@ -166,6 +225,8 @@ export class ShorthandRecorder {
     this.#finalizeTimeoutMs = options.finalizeTimeoutMs;
     this.#attachGraceMs = options.attachGraceMs;
     this.#beginGraceMs = options.beginGraceMs;
+    this.#requiredCapability = options.requiredCapability;
+    this.#startAcknowledgementMs = options.startAcknowledgementMs;
     this.#delay = options.delay ?? realDelay;
   }
 
@@ -197,6 +258,15 @@ export class ShorthandRecorder {
    */
   get controlConfirmed(): boolean {
     return this.#controlConfirmed;
+  }
+
+  /**
+   * Why the most recent capability-gated `start()` returned `"not-started"`, or `undefined` if
+   * it did not, or resolved that way for an ordinary control failure instead. See
+   * `RecorderStartFailure`.
+   */
+  get startFailure(): RecorderStartFailure | undefined {
+    return this.#startFailure;
   }
 
   /**
@@ -318,22 +388,48 @@ export class ShorthandRecorder {
    * The returned promise is what makes a stop safe: it is stored, awaited by `stop()`, and
    * never rejects.
    */
-  start(attached: Promise<void>): Promise<void> {
-    this.#startSequence = this.#runStart(attached).catch((error: unknown) => {
+  start(attached: Promise<HelloInfo | void>): Promise<RecorderStartOutcome> {
+    const outcome = this.#runStart(attached).catch((error: unknown): RecorderStartOutcome => {
       this.#report("start", { status: "error", message: errorMessage(error) });
+      return "not-started";
     });
-    return this.#startSequence;
+    this.#startSequence = outcome.then(() => {});
+    return outcome;
   }
 
-  async #runStart(attached: Promise<void>): Promise<void> {
-    await Promise.race([attached, this.#delay(this.#attachGraceMs)]);
+  async #runStart(attached: Promise<HelloInfo | void>): Promise<RecorderStartOutcome> {
+    this.#startFailure = undefined;
+    let hello: HelloInfo | undefined;
+    let gotHello = false;
+    await Promise.race([
+      attached.then((info) => { hello = info ?? undefined; gotHello = true; }),
+      this.#delay(this.#attachGraceMs),
+    ]);
     // Before the first spawn a plain check is enough: nothing has been sent, so there is
     // nothing to recall and no state of Shorthand's this capture is responsible for.
-    if (this.#stopping) return;
-    if (!await this.#send("cancel", "start")) return;
+    if (this.#stopping) return "stopped";
+
+    const requiredCapability = this.#requiredCapability;
+    if (requiredCapability !== undefined) {
+      // Unlike Meeting, which proceeds anyway on the theory that a recording nobody is
+      // following still beats no recording, a capability-gated signal must not go out blind:
+      // an older app that predates negotiation would refuse it with a clap error surfaced only
+      // after the plugin had already entered capturing state — see AGENTS.md on install order.
+      if (!gotHello) {
+        this.#startFailure = "no-hello";
+        return "not-started";
+      }
+      if (!(hello?.capabilities ?? []).includes(requiredCapability)) {
+        this.#startFailure = "unsupported";
+        return "not-started";
+      }
+    }
+
+    if (!await this.#send("cancel", "start")) return "not-started";
     this.#markIdle();
-    if (this.#stopping) return;
-    if (await this.#send(this.#recordingSignal, "start")) {
+    if (this.#stopping) return "stopped";
+    const toggled = await this.#send(this.#recordingSignal, "start");
+    if (toggled) {
       this.#expectingSession = true;
       this.#idleGuaranteed = false;
     }
@@ -341,7 +437,33 @@ export class ShorthandRecorder {
     // flight could not stop the spawn — the process was already on its way to Shorthand — so
     // the only way to end deterministically idle is to sequence a cancel *after* it. This
     // is also what heals the teardown paths, which cannot await anything.
-    if (this.#stopping) await this.#recall();
+    if (this.#stopping) {
+      await this.#recall();
+      return "stopped";
+    }
+    if (!toggled) return "not-started";
+    if (this.#startAcknowledgementMs === undefined) return "started";
+
+    // The toggle landed, but for a capability-gated signal that only proves delivery, not
+    // acceptance: Shorthand's disabled-mode refusal still exits the forwarding process 0, and
+    // only the primary instance knows it declined. Wait for the session it should have started
+    // to actually announce itself before believing it.
+    const acknowledgement = await Promise.race([
+      this.#waitFor(this.#beginWaiters).then(() => "ack" as const),
+      this.#waitFor(this.#stopRequestWaiters).then(() => "stop" as const),
+      this.#delay(this.#startAcknowledgementMs).then(() => "timeout" as const),
+    ]);
+    if (acknowledgement === "ack") return "started";
+    if (acknowledgement === "stop") {
+      await this.#recall();
+      return "stopped";
+    }
+    // Timed out. Never a second toggle: if Shorthand started slowly after all, a toggle here
+    // could turn that late recording off or on ambiguously, while cancel has only the one safe
+    // direction.
+    await this.#recall();
+    this.#startFailure = "start-timeout";
+    return "not-started";
   }
 
   /**
@@ -357,6 +479,7 @@ export class ShorthandRecorder {
    */
   requestStop(): void {
     this.#stopping = true;
+    resolveAll(this.#stopRequestWaiters);
   }
 
   /**

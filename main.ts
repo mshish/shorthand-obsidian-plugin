@@ -83,7 +83,12 @@ import {
   type PluginUiEvent,
   type PluginUiState,
 } from "./src/state.js";
-import { ShorthandRecorder, shorthandProvenDown, type RecorderPhase } from "./src/recorder.js";
+import {
+  ShorthandRecorder,
+  shorthandProvenDown,
+  type HelloInfo,
+  type RecorderPhase,
+} from "./src/recorder.js";
 import { formatElapsed } from "./src/elapsed.js";
 import { createRequestUrlFetch } from "./src/request-url-fetch.js";
 import { deleteLlmCredentials, writeLlmCredentials } from "./src/llm-credentials-writer.js";
@@ -110,6 +115,18 @@ const ATTACH_GRACE_MS = 2_000;
  * one Shorthand round trip, not a user-visible wait.
  */
 const BEGIN_GRACE_MS = 1_500;
+
+/**
+ * Only consulted for Assisted Notes. How long to wait, once the toggle is confirmed delivered,
+ * for the session it should have started to actually announce itself. Shorthand's disabled-mode
+ * refusal still exits the forwarding process 0 — the primary instance is the one that declines —
+ * so a confirmed `sent` is not proof of a live recording the way it is for Meeting, and without
+ * a bound Obsidian would sit "capturing" indefinitely with a follower attached and no `begin`
+ * ever coming. Sized a little more generously than `BEGIN_GRACE_MS`: that budget covers only the
+ * ordinary gap between a toggle landing and Shorthand announcing the session, while this one also
+ * has to absorb Shorthand raising its window before it can even evaluate the flag.
+ */
+const START_ACKNOWLEDGEMENT_MS = 3_000;
 
 type CaptureRuntime = {
   notePath: string;
@@ -156,13 +173,34 @@ type CaptureRuntime = {
  * A `not-running` result means something different on every path that can produce it, and
  * one shared sentence was wrong on three of them — it told the user to re-run a command
  * they had already finished, up to five seconds after being told the capture had stopped.
+ *
+ * `start` is not among these: which manual command can resume the capture depends on which
+ * signal it was trying to send, so it is a function of that signal instead — see
+ * `START_NOT_RUNNING`. A manual recovery that always named "Toggle Shorthand recording" would
+ * start a *Meeting* on a capture that was trying to start Assisted Notes.
  */
-const NOT_RUNNING_NOTICES: Record<RecorderPhase | "manual", string> = {
-  start: "Shorthand was not running, so this capture did not start a recording; Shorthand is starting now. Once it is up, start the recording with Shorthand's hotkey or \"Toggle Shorthand recording\" — the capture is already running and will pick it up.",
+const NOT_RUNNING_NOTICES: Record<Exclude<RecorderPhase, "start"> | "manual", string> = {
   recall: "Shorthand did not confirm the cancel for the recording this capture had just started. Check that Shorthand is not still recording.",
   finalize: "Shorthand was not running, so there was no recording to finalize. The transcript keeps whatever Shorthand had already sent.",
   backstop: "Shorthand did not confirm the final cancel. Check that Shorthand is not still recording.",
   manual: "Shorthand was not running; it is starting now. Run the command again once it is up.",
+};
+
+const START_NOT_RUNNING = (signal: ControlSignal): string =>
+  `Shorthand was not running, so this capture did not start a recording; Shorthand is starting now. Once it is up, start the recording with Shorthand's shortcut or "${signal === "toggle-assisted-notes" ? "Toggle Shorthand assisted notes" : "Toggle Shorthand recording"}" — the capture is already running and will pick it up.`;
+
+/**
+ * Assisted Notes' three capability-gated ways to fail to start, named by
+ * `ShorthandRecorder.startFailure` after `start()` resolves `"not-started"`. An ordinary
+ * control failure (`ShorthandControl.send()` itself reporting `not-running` or `error`) leaves
+ * `startFailure` `undefined` and is not among these: `reportControl` already showed a complete,
+ * specific message for it via the ordinary report channel, and a second, generic notice on top
+ * would only be noise.
+ */
+const ASSISTED_NOTES_START_FAILURE_NOTICES: Record<"no-hello" | "unsupported" | "start-timeout", string> = {
+  "no-hello": "Assisted Notes needs a compatible running Shorthand with live transcript following; none was found in time. Start Shorthand with that setting enabled and try again.",
+  unsupported: "This Shorthand build does not support Assisted Notes. Install a Shorthand build that advertises it and try again.",
+  "start-timeout": "Assisted Notes did not start. In Shorthand, open Settings → Modes → Notetaking → Assisted notes, enable it, and try again.",
 };
 
 export default class ShorthandPlugin extends Plugin {
@@ -201,6 +239,16 @@ export default class ShorthandPlugin extends Plugin {
       },
     });
     this.addCommand({
+      id: "start-assisted-notes-capture-this-note",
+      name: "Start assisted notes capture on this note",
+      checkCallback: (checking: boolean) => {
+        if (!this.hasActiveMarkdownFile()) return false;
+        if (checking) return true;
+        void this.startCaptureOnActiveNote("toggle-assisted-notes");
+        return true;
+      },
+    });
+    this.addCommand({
       id: "stop-capture",
       name: "Stop capture",
       callback: () => { void this.stopCapture().catch((error: unknown) => this.fail(errorMessage(error))); },
@@ -230,6 +278,14 @@ export default class ShorthandPlugin extends Plugin {
       name: "Toggle Shorthand recording",
       callback: () => { this.fireControl("toggle-transcription"); },
     });
+    // Not decoration: a manual recovery that named "Toggle Shorthand recording" would start a
+    // *Meeting*. The Assisted Notes recovery path has to select the same mode it was trying to
+    // start — see START_NOT_RUNNING, which points here for that signal.
+    this.addCommand({
+      id: "toggle-shorthand-assisted-notes",
+      name: "Toggle Shorthand assisted notes",
+      callback: () => { this.fireControl("toggle-assisted-notes"); },
+    });
     this.addCommand({
       id: "cancel-shorthand-recording",
       name: "Cancel Shorthand recording",
@@ -251,7 +307,9 @@ export default class ShorthandPlugin extends Plugin {
     await this.saveData(this.settings);
   }
 
-  async startCaptureOnActiveNote(): Promise<void> {
+  async startCaptureOnActiveNote(
+    recordingSignal: ControlSignal = "toggle-transcription",
+  ): Promise<void> {
     if (this.#capture !== undefined) {
       new Notice("Shorthand is already capturing. Stop it before starting another note.");
       return;
@@ -319,20 +377,28 @@ export default class ShorthandPlugin extends Plugin {
       });
       const settled = new Promise<ExitDiagnosis>((resolveSettled) => client.once("settled", resolveSettled));
       const control = new ShorthandControl({ command });
-      // Resolved by the follower's own `hello` record; `ShorthandRecorder.start()` explains why
-      // the start toggle waits on it.
-      let markAttached = (): void => {};
-      const attached = new Promise<void>((resolveAttached) => { markAttached = resolveAttached; });
+      // Resolved with the follower's parsed `hello` record; `ShorthandRecorder.start()` explains
+      // why the start toggle waits on it, and Assisted Notes additionally gates the toggle on
+      // the record's advertised `capabilities`.
+      let markAttached = (_info: HelloInfo): void => {};
+      const attached = new Promise<HelloInfo>((resolveAttached) => { markAttached = resolveAttached; });
       const recorder = this.settings.controlShorthandRecording
         ? new ShorthandRecorder({
           control,
-          recordingSignal: "toggle-transcription",
-          report: (phase, result) => this.reportControl(phase, result),
+          recordingSignal,
+          report: (phase, result) => this.reportControl(phase, result, recordingSignal),
           // The recorder's wait for the terminal record replaces the follower's own drain
           // rather than preceding it, so it gets the same budget.
           finalizeTimeoutMs: DEFAULT_CONFIG.drainTimeoutMs,
           attachGraceMs: ATTACH_GRACE_MS,
           beginGraceMs: BEGIN_GRACE_MS,
+          // Only Assisted Notes needs the capability gate and the bounded acknowledgement: an
+          // older app would otherwise parse-fail the flag mid-capture, and Shorthand's
+          // disabled-mode refusal exits the forwarding process 0 with nothing to say a
+          // recording never actually began. Meeting keeps the plain fire-and-forget contract.
+          ...(recordingSignal === "toggle-assisted-notes"
+            ? { requiredCapability: "toggle-assisted-notes", startAcknowledgementMs: START_ACKNOWLEDGEMENT_MS }
+            : {}),
         })
         : undefined;
       const runtime: CaptureRuntime = {
@@ -363,7 +429,10 @@ export default class ShorthandPlugin extends Plugin {
         if (record.t === "hello") {
           runtime.helloEver = true;
           recorder?.noteAttached();
-          markAttached();
+          // `record.capabilities`, when present, already passed core's own defensive parsing
+          // (`stringArrayField`): a malformed field is dropped before this event ever fires, so
+          // it is not re-validated here.
+          markAttached({ capabilities: record.capabilities });
         } else recorder?.observe(record);
         const update = transcript.ingest(generation, record);
         if (update === null) return;
@@ -421,10 +490,30 @@ export default class ShorthandPlugin extends Plugin {
         this.fail(`Capture shutdown failed: ${errorMessage(error)}`);
       });
       client.start();
-      // Not awaited here — the capture is live either way — but the promise is retained by
-      // the recorder itself, which is what lets a stop sequence wait for it.
-      void recorder?.start(attached);
-      new Notice(`Shorthand capture started: ${file.path}`);
+      if (recorder === undefined || recordingSignal !== "toggle-assisted-notes") {
+        // Meeting's existing contract, unchanged: not awaited here — the capture is live
+        // either way — but the promise is retained by the recorder itself, which is what lets
+        // a stop sequence wait for it.
+        void recorder?.start(attached);
+        new Notice(`Shorthand capture started: ${file.path}`);
+      } else {
+        // Assisted Notes opts into the bounded acknowledgement: a `sent` toggle is not proof
+        // Shorthand actually started recording (see `START_ACKNOWLEDGEMENT_MS`), so the
+        // "capture started" notice waits for that proof instead of firing unconditionally.
+        void recorder.start(attached).then(async (outcome) => {
+          if (outcome === "started") {
+            new Notice(`Shorthand capture started: ${file.path}`);
+            return;
+          }
+          if (outcome === "stopped") {
+            // A concurrent stop/quit already owns its own notices and teardown.
+            return;
+          }
+          const reason = recorder.startFailure;
+          if (reason !== undefined) new Notice(ASSISTED_NOTES_START_FAILURE_NOTICES[reason], 10_000);
+          await this.abortAssistedNotesStart(runtime);
+        });
+      }
     } catch (error) {
       this.fail(errorMessage(error));
       this.forceStopCapture();
@@ -500,6 +589,26 @@ export default class ShorthandPlugin extends Plugin {
     // bytes: Obsidian does not await onunload/beforeunload.
     void runtime.sidecar?.close().catch(() => {});
     this.#capture = undefined;
+    this.dispatch({ type: "capture-stopped" });
+  }
+
+  /**
+   * Assisted Notes' start acknowledgement timed out, its capability check refused, or no hello
+   * ever arrived — `startCaptureOnActiveNote()`'s `not-started` branch calls this rather than
+   * `finishRuntime()`, because nothing here was ever driven to "capturing" in the sense that
+   * path expects: there is no finalized transcript worth a closing enhancement pass, and
+   * "Shorthand capture stopped" would tell the user a capture had run when it never actually
+   * started recording. Unlike `forceStopCapture()` this can and does await the follower's exit
+   * and the sidecar's flush, since it runs from inside the start sequence, not a shutdown hook.
+   */
+  private async abortAssistedNotesStart(runtime: CaptureRuntime): Promise<void> {
+    if (this.#capture !== runtime) return;
+    runtime.stopping = true;
+    runtime.enhancer?.stopLiveTicks();
+    runtime.client.forceStop();
+    await runtime.settled;
+    await runtime.sidecar?.close().catch(() => {});
+    if (this.#capture === runtime) this.#capture = undefined;
     this.dispatch({ type: "capture-stopped" });
   }
 
@@ -614,10 +723,15 @@ export default class ShorthandPlugin extends Plugin {
     );
   }
 
-  private reportControl(phase: RecorderPhase | "manual", result: ControlResult): void {
+  /**
+   * `signal` is only consulted for phase `"start"`, which is the one notice that has to name a
+   * specific recovery command — see `START_NOT_RUNNING`. Every other phase's wording is fixed
+   * regardless of which signal was being sent.
+   */
+  private reportControl(phase: RecorderPhase | "manual", result: ControlResult, signal?: ControlSignal): void {
     if (result.status === "sent") return;
     if (result.status === "not-running") {
-      new Notice(NOT_RUNNING_NOTICES[phase], 10_000);
+      new Notice(phase === "start" ? START_NOT_RUNNING(signal ?? "toggle-transcription") : NOT_RUNNING_NOTICES[phase], 10_000);
       return;
     }
     this.fail(`Shorthand control failed: ${result.message}`);
