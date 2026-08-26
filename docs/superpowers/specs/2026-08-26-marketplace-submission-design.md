@@ -114,9 +114,11 @@ placeholder names; no `window.app` or global `app` access.
 
 Expected findings:
 
-- `main.ts:346` calls `console.log` unconditionally. The guidelines are that the
-  developer console shows error messages only in a default configuration. The
-  repository already has the right mechanism for this — `main.ts:701` gates a
+- `main.ts:376` calls `console.log` unconditionally, once per transcript delta,
+  reporting characters accumulated toward the next enhancement pass. The
+  guidelines are that the developer console shows error messages only in a
+  default configuration; this is the chattiest possible violation of that. The
+  repository already has the right mechanism — `main.ts:701` gates a
   `console.debug` behind the `debugLogging` setting. This call should use it.
 - `node:` imports in `main.ts` and `src/llm-credentials-writer.ts` will trip the
   Platform rule. `isDesktopOnly: true` is a manifest declaration and does not
@@ -212,18 +214,25 @@ open a modal gated on a setting, from `workspace.onLayoutReady()` rather than
 `onload()`. The distinction matters — Obsidian's own guidance is that `onload`
 does only what initialization requires and nothing expensive.
 
-The modal presents the two backends and the tradeoff that actually
-distinguishes them, which is not cost but capability:
+There are **three** backends, not two — `ENHANCEMENT_BACKENDS` in
+`src/settings.ts` is `["claude-agent-sdk", "llm", "codex"]`, and the settings
+tab already offers all three. The picker offers all three, and the tradeoff that
+distinguishes them is not cost but capability and what has to be installed:
 
-- **Claude Agent SDK** — needs the `claude` CLI installed and logged in. Can
-  read elsewhere in the vault, so notes can reference people, projects and
-  prior meetings found in other files.
+- **Claude Agent SDK** (current default) — needs the `claude` CLI installed and
+  logged in. Can read elsewhere in the vault, so notes can reference people,
+  projects and prior meetings found in other files.
+- **Codex** — needs the `codex` CLI on PATH and a completed `codex login`. The
+  settings tab already surfaces that sign-in prerequisite in its own row,
+  because a user who has never run it otherwise learns from a failed pass
+  mid-meeting.
 - **LLM provider** — needs only an API key, for OpenAI, Anthropic, an
   OpenAI-compatible endpoint or a local Ollama model. Cannot use Read, Glob or
   Grep, so no pass looks outside the current note.
 
-Both descriptions already exist in the README § "Enhancement backends" and
-should be compressed from there rather than newly invented.
+The descriptions already exist in the README § "Enhancement backends" and the
+settings tab's own copy, and should be compressed from there rather than newly
+invented. `docs/settings-copy-style.md` governs the register.
 
 Structure follows `AGENTS.md`: the rule deciding whether the picker is owed
 lives in `src/settings.ts` where `bun test` can reach it, along with its
@@ -262,9 +271,20 @@ Two workflows:
   the plugin has none, and the template's reference to it is removed rather
   than left to fail.
 
-The tag is an annotated tag equal to the `manifest.json` version with no `v`
-prefix. `version-bump.mjs` already produces a matching `manifest.json` and
+The tag equals the `manifest.json` version with no `v` prefix.
+`version-bump.mjs` already produces a matching `manifest.json` and
 `versions.json` through `npm version`.
+
+Obsidian's official workflow documentation creates an *annotated* tag. This
+repository deliberately uses lightweight tags, and `README.md` § "Cutting a
+release" says so explicitly — Obsidian and BRAT care only that the tag name
+equals the manifest version, and it instructs against harmonising with
+`shorthand-core`'s annotated tags. **Keep lightweight tags.** The official
+template's `on: push: tags: "*"` trigger fires for either kind.
+
+The same README section instructs attaching `styles.css`. The plugin has no
+`styles.css`. That instruction is wrong today and gets removed rather than
+carried into the workflow.
 
 Releases stay drafts until a human publishes them, so a bad build is caught
 before the directory scans it.
