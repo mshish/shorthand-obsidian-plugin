@@ -156,15 +156,27 @@ Obsidian prefixes these with the plugin name in the palette, so they appear as
 "Shorthand: Start capture on this note":
 
 - **Start capture on this note**
+- **Start assisted notes capture on this note**
 - **Stop capture**
 - **Enhance now**
 - **Clean up this note**
 - **Toggle Shorthand recording**
+- **Toggle Shorthand assisted notes**
 - **Cancel Shorthand recording**
 
 Capture starts only on the active Markdown note. If it has no ownership markers, the plugin offers
 to append a seeded marker scaffold. Malformed, duplicate, nested, or inverted markers are never
 repaired automatically.
+
+**Start assisted notes capture on this note** drives Shorthand's Assisted Notes mode instead of
+an ordinary recording: Shorthand fills the note live without pasting into your focused window and
+without capturing system audio — "Meeting, but solo". It requires a running Shorthand whose
+follower `hello` advertises the `toggle-assisted-notes` capability. Installing this plugin ahead
+of an older Shorthand build does not raise an error mid-capture: the command checks the
+advertised capability before sending anything, refuses up front with a notice if it is missing,
+and — if Shorthand's own **Settings → Modes → Notetaking → Assisted notes** toggle is off, so the
+running app accepts the flag but declines to start — times out and cancels rather than leaving
+Obsidian showing "capturing" indefinitely.
 
 **Enhance now** and **Clean up this note** are the same pass over two different inputs, and
 each is offered only while a Markdown note is open. **Enhance now** needs a transcript — the
@@ -183,7 +195,8 @@ By default, **Start capture** and **Stop capture** also drive Shorthand's record
 longer needs a separate press of Shorthand's global hotkey. One setting controls this:
 
 - **Control Shorthand recording** (default on) — drive the recorder from start and stop. The
-  recording toggle is always `--toggle-transcription`.
+  recording toggle is `--toggle-transcription` for **Start capture on this note**, or
+  `--toggle-assisted-notes` for **Start assisted notes capture on this note**.
 
 Shorthand's CLI offers no `--start`/`--stop` — the transcription flags are toggles — so the plugin
 makes each end deterministic instead of guessing:
@@ -230,8 +243,10 @@ makes each end deterministic instead of guessing:
   cheaper mistake — but it is a real, visible consequence of leaving **Control Shorthand recording**
   on.
 
-**Toggle Shorthand recording** and **Cancel Shorthand recording** stay available as the manual override,
-with or without an active capture.
+**Toggle Shorthand recording**, **Toggle Shorthand assisted notes**, and **Cancel Shorthand
+recording** stay available as the manual override, with or without an active capture. Use the
+assisted-notes toggle rather than the plain recording toggle to recover an Assisted Notes
+capture — the plain toggle would start an ordinary recording instead.
 
 Stopping is not instant: it can spend a control timeout plus the whole drain budget waiting for
 Shorthand's `final`, so the status bar reads `Shorthand: stopping` for that time.
