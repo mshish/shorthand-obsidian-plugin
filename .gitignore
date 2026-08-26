@@ -25,3 +25,6 @@ data.json.bak
 
 # SDD scratch (ledger, briefs, review packages)
 .superpowers/
+
+# Serena MCP workspace metadata — machine-local, not project source
+.serena/
