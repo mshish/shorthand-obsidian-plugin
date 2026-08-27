@@ -1,6 +1,6 @@
 node_modules/
 
-# The compiled bundle (~6.9MB — it bundles the Claude Agent SDK). Ship it via a GitHub
+# The compiled bundle (~13MB — it bundles the Claude Agent SDK). Ship it via a GitHub
 # release, never git. A fresh clone therefore has no main.js: run `npm run build` before
 # enabling the plugin in Obsidian.
 main.js

@@ -8,15 +8,15 @@ is still running.
 Stateless Claude Agent SDK passes use the new transcript plus your own notes to maintain a
 structured summary in the meeting note; sections may be added, rewritten, reordered, or removed
 as the meeting develops. Turn on **Transcript notes** in settings to also keep a linked
-transcript sidecar note with the raw transcript on disk — off by default, since the meeting
+transcript sidecar note holding the raw transcript — off by default, since the meeting
 note's summary is usually all that's needed. A running capture never needs the sidecar: its passes
 are fed from the transcript held in memory, and the setting governs only whether *new* captures
-also write that transcript to disk. Afterwards is where the sidecar earns its keep — **Enhance
+also write that transcript to the vault. Afterwards is where the sidecar earns its keep — **Enhance
 now** on a note with no capture running reads the transcript back from the sidecar the note links,
 and a note that already links one keeps working whether the setting is on or off.
 
 This repository is the **Obsidian plugin only** — a thin desktop lifecycle and UI wrapper. All
-capture, transcript reconciliation, enhancement and file writing live in the headless core,
+capture, transcript reconciliation and enhancement live in the headless core,
 [`mshish/shorthand-core`](https://github.com/mshish/shorthand-core), which this repo depends
 on by package name and a pinned tag. The core repo also holds the design notes
 (`docs/DESIGN.md`) and the core/consumer contract (`docs/CONTRACT.md`).
@@ -309,9 +309,11 @@ AI-maintained sections live here.
 
 Every AI update re-reads the note, verifies the current block hash, and splices only the marker
 body. Marker anomalies fail closed. The agent has no write tools. All note writes go through
-Obsidian's own APIs: a note you are editing is updated through its `Editor` with the smallest
-replacement range that covers the change, and a background note through `Vault.process()`,
-Obsidian's atomic read-modify-write. Nothing is written to a vault note behind Obsidian's back.
+Obsidian's own APIs. A note open in any pane — focused or not — is updated through that pane's
+`Editor` with the smallest replacement range that covers the change, so an unsaved buffer is
+never written underneath. A note open in no pane goes through `Vault.process()`, Obsidian's
+atomic read-modify-write. Transcript sidecars take the same two routes. Nothing is written to a
+vault note behind Obsidian's back.
 
 ## Known limitations
 

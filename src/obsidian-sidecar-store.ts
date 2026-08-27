@@ -2,9 +2,14 @@ import type { Editor, TFile } from "obsidian";
 import type { SidecarStore } from "shorthand-core";
 
 /** The live editor surface needed when a transcript sidecar is open. */
-export type ActiveSidecarEditor = Readonly<{
-  file: TFile;
-  editor: Pick<Editor, "getValue" | "setValue">;
+export type OpenSidecarEditor = Readonly<{
+  editor: Pick<Editor, "getValue" | "replaceRange" | "offsetToPos">;
+  /**
+   * Persist the buffer. Without this the next flush that finds the sidecar
+   * closed would read a file still holding the previous content, which core
+   * reports as the sidecar having been changed outside Shorthand.
+   */
+  save(): Promise<void>;
 }>;
 
 /**
@@ -20,7 +25,8 @@ export type ObsidianSidecarApi = Readonly<{
     read(file: TFile): Promise<string>;
     process(file: TFile, transform: (content: string) => string): Promise<string>;
   }>;
-  activeEditor(): ActiveSidecarEditor | undefined;
+  /** The editor holding this file in any leaf, focused or not. */
+  openEditor(file: TFile): OpenSidecarEditor | undefined;
 }>;
 
 export type ObsidianSidecarStoreOptions = Readonly<{
@@ -76,10 +82,22 @@ export class ObsidianSidecarStore implements SidecarStore {
       target = created.file;
     }
 
-    const active = this.activeEditor(target);
-    if (active !== undefined) {
-      const candidate = transform(active.editor.getValue());
-      if (candidate.content !== active.editor.getValue()) active.editor.setValue(candidate.content);
+    const open = this.#api.openEditor(target);
+    if (open !== undefined) {
+      const current = open.editor.getValue();
+      const candidate = transform(current);
+      if (candidate.content !== current) {
+        // A transcript flushes several times a second. Replacing the whole
+        // document would reset the reader's cursor, selection and scroll that
+        // often, so touch only the range that actually differs.
+        const edit = minimalEdit(current, candidate.content);
+        open.editor.replaceRange(
+          edit.replacement,
+          open.editor.offsetToPos(edit.from),
+          open.editor.offsetToPos(edit.to),
+        );
+        await open.save();
+      }
       return candidate.value;
     }
 
@@ -104,10 +122,6 @@ export class ObsidianSidecarStore implements SidecarStore {
     return this.#api.vault.getFileByPath(file.path) === file ? file : undefined;
   }
 
-  private activeEditor(target: TFile): ActiveSidecarEditor | undefined {
-    const active = this.#api.activeEditor();
-    return active?.file === target ? active : undefined;
-  }
 
   private async create(content: string): Promise<Readonly<{ file: TFile; created: boolean }>> {
     const folder = parentPath(this.#requestedPath);
@@ -140,4 +154,33 @@ export class ObsidianSidecarStore implements SidecarStore {
 function parentPath(path: string): string {
   const index = path.lastIndexOf("/");
   return index < 0 ? "" : path.slice(0, index);
+}
+
+/**
+ * The one contiguous range in `current` that has to change to become `next`.
+ * Offsets are UTF-16 code units, which is what `Editor.offsetToPos()` expects;
+ * the boundaries back off a step rather than split a surrogate pair.
+ */
+function minimalEdit(current: string, next: string): Readonly<{ from: number; to: number; replacement: string }> {
+  let prefix = 0;
+  const shortest = Math.min(current.length, next.length);
+  while (prefix < shortest && current.charCodeAt(prefix) === next.charCodeAt(prefix)) prefix += 1;
+  if (prefix > 0 && isHighSurrogate(current.charCodeAt(prefix - 1))) prefix -= 1;
+
+  let suffix = 0;
+  while (
+    suffix < shortest - prefix
+    && current.charCodeAt(current.length - 1 - suffix) === next.charCodeAt(next.length - 1 - suffix)
+  ) suffix += 1;
+  if (suffix > 0 && isLowSurrogate(current.charCodeAt(current.length - suffix))) suffix -= 1;
+
+  return { from: prefix, to: current.length - suffix, replacement: next.slice(prefix, next.length - suffix) };
+}
+
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
 }

@@ -13,9 +13,14 @@ import {
 } from "shorthand-core";
 
 /** The live editor surface needed to preserve unsaved user input. */
-export type ActiveMarkdownEditor = Readonly<{
-  file: TFile;
+export type OpenMarkdownEditor = Readonly<{
   editor: Editor;
+  /**
+   * Persist the buffer. Obsidian would do this on its own debounce, but a later
+   * background write reads the file rather than the buffer, and would then find
+   * content that disagrees with what we just wrote.
+   */
+  save(): Promise<void>;
 }>;
 
 /**
@@ -30,7 +35,12 @@ export type ObsidianNoteApi = Readonly<{
     read(file: TFile): Promise<string>;
     process(file: TFile, transform: (content: string) => string): Promise<string>;
   }>;
-  activeEditor(): ActiveMarkdownEditor | undefined;
+  /**
+   * The editor holding this file in any leaf, not merely the focused one:
+   * Obsidian keeps an unsaved buffer per leaf, so a note sitting in a split or
+   * a background tab can hold keystrokes the file on disk has never seen.
+   */
+  openEditor(file: TFile): OpenMarkdownEditor | undefined;
 }>;
 
 export type ObsidianNoteSinkOptions = Readonly<{
@@ -44,9 +54,9 @@ export type ObsidianScaffoldResult =
   | Readonly<{ status: "error"; message: string }>;
 
 /**
- * Obsidian-backed note sink. It edits an active note through its Editor so an
- * unsaved buffer is never overwritten; background writes use Vault.process(),
- * Obsidian's atomic read-transform-write API.
+ * Obsidian-backed note sink. It edits an open note through its Editor so an
+ * unsaved buffer is never overwritten; a note open in no leaf is written with
+ * Vault.process(), Obsidian's atomic read-transform-write API.
  */
 export class ObsidianNoteSink implements NoteSink {
   readonly #api: ObsidianNoteApi;
@@ -66,8 +76,8 @@ export class ObsidianNoteSink implements NoteSink {
   async read(): Promise<SinkReadResult> {
     const target = this.target();
     if (target === undefined) return missingTarget();
-    const active = this.activeEditor(target);
-    if (active !== undefined) return readMarkdownDocument(active.editor.getValue());
+    const open = this.#api.openEditor(target);
+    if (open !== undefined) return readMarkdownDocument(open.editor.getValue());
     try {
       return readMarkdownDocument(await this.#api.vault.read(target));
     } catch (error) {
@@ -78,8 +88,8 @@ export class ObsidianNoteSink implements NoteSink {
   async write(sections: readonly Section[], expectedRevision: string): Promise<SinkWriteResult> {
     const target = this.target();
     if (target === undefined) return { status: "error", error: missingTarget().error };
-    const active = this.activeEditor(target);
-    if (active !== undefined) return this.writeEditor(active.editor, sections, expectedRevision);
+    const open = this.#api.openEditor(target);
+    if (open !== undefined) return this.writeEditor(open, sections, expectedRevision);
 
     let result: SinkWriteResult | undefined;
     try {
@@ -104,17 +114,17 @@ export class ObsidianNoteSink implements NoteSink {
     }
     if (this.target() === undefined) return { status: "error", error: missingTarget().error };
 
-    // A note can receive focus while Vault.process() is awaiting. Reapply only
-    // the owned range to the old editor buffer; replacing the full text here
-    // would discard user edits that have not been saved yet.
-    const focused = this.activeEditor(target);
-    if (focused === undefined || result.status === "error" || result.status === "stale" || result.status === "busy") return result;
-    const focusedSnapshot = readMarkdownDocument(focused.editor.getValue());
-    if (focusedSnapshot.ok && focusedSnapshot.value.revision === result.revision) return result;
+    // A note can be opened while Vault.process() is awaiting. Reapply only the
+    // owned range to that editor buffer; replacing the full text here would
+    // discard user edits that have not been saved yet.
+    const opened = this.#api.openEditor(target);
+    if (opened === undefined || result.status === "error" || result.status === "stale" || result.status === "busy") return result;
+    const snapshot = readMarkdownDocument(opened.editor.getValue());
+    if (snapshot.ok && snapshot.value.revision === result.revision) return result;
     // A user change in the owned block landed after the atomic Vault write.
     // Do not replace it with the now-stale enhancement result.
-    if (!focusedSnapshot.ok || focusedSnapshot.value.revision !== expectedRevision) return { status: "stale" };
-    const reconciled = this.writeEditor(focused.editor, sections, expectedRevision);
+    if (!snapshot.ok || snapshot.value.revision !== expectedRevision) return { status: "stale" };
+    const reconciled = await this.writeEditor(opened, sections, expectedRevision);
     if (reconciled.status === "stale" || reconciled.status === "error") return reconciled;
     return result.status === "written" ? result : reconciled;
   }
@@ -123,8 +133,8 @@ export class ObsidianNoteSink implements NoteSink {
   async readContent(): Promise<Readonly<{ ok: true; content: string }> | Readonly<{ ok: false; message: string }>> {
     const target = this.target();
     if (target === undefined) return { ok: false, message: missingTarget().error.message };
-    const active = this.activeEditor(target);
-    if (active !== undefined) return { ok: true, content: active.editor.getValue() };
+    const open = this.#api.openEditor(target);
+    if (open !== undefined) return { ok: true, content: open.editor.getValue() };
     try {
       return { ok: true, content: await this.#api.vault.read(target) };
     } catch (error) {
@@ -136,8 +146,8 @@ export class ObsidianNoteSink implements NoteSink {
   async scaffold(sections: readonly Section[]): Promise<ObsidianScaffoldResult> {
     const target = this.target();
     if (target === undefined) return { status: "error", message: missingTarget().error.message };
-    const active = this.activeEditor(target);
-    if (active !== undefined) return this.scaffoldEditor(active.editor, sections);
+    const open = this.#api.openEditor(target);
+    if (open !== undefined) return this.scaffoldEditor(open, sections);
 
     let result: ObsidianScaffoldResult | undefined;
     try {
@@ -155,27 +165,38 @@ export class ObsidianNoteSink implements NoteSink {
     }
     if (result === undefined) return { status: "error", message: `Obsidian did not complete scaffolding ${target.path}.` };
     if (this.target() === undefined) return { status: "error", message: missingTarget().error.message };
-    const focused = this.activeEditor(target);
-    if (focused === undefined || result.status === "error") return result;
-    const reconciled = this.scaffoldEditor(focused.editor, sections);
+    const opened = this.#api.openEditor(target);
+    if (opened === undefined || result.status === "error") return result;
+    const reconciled = await this.scaffoldEditor(opened, sections);
     return reconciled.status === "error" ? reconciled : result.status === "written" ? result : reconciled;
   }
 
-  private writeEditor(editor: Editor, sections: readonly Section[], expectedRevision: string): SinkWriteResult {
+  private async writeEditor(
+    open: OpenMarkdownEditor,
+    sections: readonly Section[],
+    expectedRevision: string,
+  ): Promise<SinkWriteResult> {
+    const { editor } = open;
     const update = updateMarkdownDocument(editor.getValue(), sections, expectedRevision);
     if (update.status === "error") return { status: "error", error: update.error };
     if (update.status === "stale") return { status: "stale" };
     if (update.status === "written") {
       editor.replaceRange(update.edit.replacement, editor.offsetToPos(update.edit.from), editor.offsetToPos(update.edit.to));
+      await open.save();
     }
     return { status: update.status, revision: update.revision };
   }
 
-  private scaffoldEditor(editor: Editor, sections: readonly Section[]): ObsidianScaffoldResult {
+  private async scaffoldEditor(
+    open: OpenMarkdownEditor,
+    sections: readonly Section[],
+  ): Promise<ObsidianScaffoldResult> {
+    const { editor } = open;
     const scaffold = scaffoldMarkdownDocument(editor.getValue(), sections);
     if (scaffold.status === "error") return { status: "error", message: scaffold.error.message };
     if (scaffold.status === "written") {
       editor.replaceRange(scaffold.edit.replacement, editor.offsetToPos(scaffold.edit.from), editor.offsetToPos(scaffold.edit.to));
+      await open.save();
     }
     return { status: scaffold.status };
   }
@@ -187,10 +208,6 @@ export class ObsidianNoteSink implements NoteSink {
     return this.#api.vault.getFileByPath(this.#file.path) === this.#file ? this.#file : undefined;
   }
 
-  private activeEditor(target: TFile): ActiveMarkdownEditor | undefined {
-    const active = this.#api.activeEditor();
-    return active?.file === target ? active : undefined;
-  }
 }
 
 function missingTarget(): Readonly<{ ok: false; error: ReturnType<typeof sinkError> }> {

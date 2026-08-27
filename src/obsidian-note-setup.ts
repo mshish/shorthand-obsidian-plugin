@@ -43,6 +43,11 @@ export async function scaffoldAfterPreflight(
  * Add the generated candidate only when the property is absent. `processFrontMatter`
  * serializes this atomically with concurrent metadata writers; the callback's observed
  * value means a concurrent valid link always wins.
+ *
+ * A property that is present but not a wikilink is left exactly as the user wrote it.
+ * Unparseable is not the same as absent: a list of links, a bare path, or a link with a
+ * `#section` subpath are all things a person may reasonably have put there, and each of
+ * them points somewhere. Overwriting one would orphan the transcript it names.
  */
 export async function ensureTranscriptLink(
   api: TranscriptLinkApi,
@@ -50,11 +55,19 @@ export async function ensureTranscriptLink(
   candidate: string,
 ): Promise<TranscriptLinkResult> {
   let chosen: string | undefined;
+  let occupied: unknown;
   try {
     await api.fileManager.processFrontMatter(file, (frontmatter) => {
-      const existing = frontmatterLink(frontmatter["shorthand-transcript"]);
-      if (existing !== undefined) {
-        chosen = existing;
+      // Reset per invocation: Obsidian may run this callback more than once.
+      chosen = undefined;
+      occupied = undefined;
+      const existing = readFrontmatterLink(frontmatter["shorthand-transcript"]);
+      if (existing.kind === "link") {
+        chosen = existing.link;
+        return;
+      }
+      if (existing.kind === "occupied") {
+        occupied = frontmatter["shorthand-transcript"];
         return;
       }
       chosen = candidate;
@@ -62,6 +75,13 @@ export async function ensureTranscriptLink(
     });
   } catch (error) {
     return { status: "error", message: errorMessage(error) };
+  }
+  if (occupied !== undefined) {
+    return {
+      status: "error",
+      message: `This note's shorthand-transcript property is not a wikilink (${describe(occupied)}). `
+        + "Point it at a transcript note as [[Folder/Note]], or clear it, then start capture again.",
+    };
   }
   if (chosen === undefined) return { status: "error", message: "Obsidian did not return a transcript link." };
   // Link resolution belongs to MetadataCache: a link may be aliased or point at
@@ -73,10 +93,24 @@ export async function ensureTranscriptLink(
   };
 }
 
-function frontmatterLink(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
+type FrontmatterLink =
+  | Readonly<{ kind: "absent" }>
+  | Readonly<{ kind: "link"; link: string }>
+  /** Present, but nothing we may safely replace. */
+  | Readonly<{ kind: "occupied" }>;
+
+function readFrontmatterLink(value: unknown): FrontmatterLink {
+  if (value === undefined || value === null) return { kind: "absent" };
+  if (typeof value !== "string") return { kind: "occupied" };
+  if (value.trim().length === 0) return { kind: "absent" };
   const parsed = /^\s*\[\[([^\]|]+)(?:\|[^\]]*)?\]\]\s*$/.exec(value)?.[1]?.trim();
-  return parsed === undefined || parsed.length === 0 ? undefined : parsed;
+  return parsed === undefined || parsed.length === 0 ? { kind: "occupied" } : { kind: "link", link: parsed };
+}
+
+function describe(value: unknown): string {
+  if (Array.isArray(value)) return "a list";
+  if (typeof value === "object") return "a nested value";
+  return `"${String(value)}"`;
 }
 
 function errorMessage(error: unknown): string {

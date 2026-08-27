@@ -11,6 +11,8 @@ import {
   type ButtonComponent,
   type DropdownComponent,
   type TFile,
+  normalizePath,
+  type Editor,
   type TextComponent,
 } from "obsidian";
 import { existsSync } from "node:fs";
@@ -340,6 +342,16 @@ export default class ShorthandPlugin extends Plugin {
         let linked = transcriptWikilink(noteContent.content);
         if (linked === undefined) {
           const candidate = `${this.settings.sidecarDirectory}/${timestampName(new Date()).replace(/\.md$/i, "")}`;
+          // A folder named `Notes [2026]` is legal in Obsidian but cannot survive
+          // a round trip through `[[...]]`: every later capture would fail to
+          // read the link back and would generate another sidecar.
+          if (/[[\]|#^]/.test(candidate)) {
+            this.fail(
+              `The transcript folder "${this.settings.sidecarDirectory}" contains a character a wikilink cannot hold `
+              + "([, ], |, # or ^). Rename the folder or change the transcript folder setting.",
+            );
+            return;
+          }
           const linkedResult = await ensureTranscriptLink({
             fileManager: this.app.fileManager,
             metadataCache: this.app.metadataCache,
@@ -350,7 +362,7 @@ export default class ShorthandPlugin extends Plugin {
           }
           linked = linkedResult.linkPath;
         }
-        const target = this.app.metadataCache.getFirstLinkpathDest(linked, file.path);
+        const target = this.app.metadataCache.getFirstLinkpathDest(linkTarget(linked), file.path);
         const store = this.sidecarStore(file, linked, target);
         if (store === undefined) return;
         sidecar = new SidecarWriter(store.describe, {
@@ -665,7 +677,7 @@ export default class ShorthandPlugin extends Plugin {
           this.reportOutcome(await liveEnhancer.enhanceNow("link"), command);
           return;
         case "transcript": {
-          const sidecar = this.app.metadataCache.getFirstLinkpathDest(mode.transcriptLink, file.path);
+          const sidecar = this.app.metadataCache.getFirstLinkpathDest(linkTarget(mode.transcriptLink), file.path);
           if (sidecar === null || sidecar === file) {
             this.fail("The note's shorthand-transcript link does not resolve to a separate vault note.");
             return;
@@ -928,8 +940,11 @@ export default class ShorthandPlugin extends Plugin {
         // Only a target that asked for a backoff is actionable. A plain re-queue means
         // the note kept changing under the writer — i.e. the user is typing during the
         // meeting — which self-heals on the next pass and must stay silent.
+        //
+        // Writing through Obsidian, the note itself is never the busy party, so this
+        // reports the delay without advising a remedy that would not apply.
         if (status.retryAfterMs !== undefined) {
-          this.fail(`${status.message} Close competing file handles; Shorthand will retry on the next pass.`);
+          this.fail(`${status.message} Shorthand will retry on the next pass.`);
         }
         return;
       case "timed-out":
@@ -965,7 +980,7 @@ export default class ShorthandPlugin extends Plugin {
     } else if (outcome.status === "requeued") {
       this.fail(outcome.retryAfterMs === undefined
         ? `Enhancement was safely re-queued (${outcome.reason}).`
-        : `The meeting note was busy. Close competing file handles and run ${enhanceCommandName(command)} again.`);
+        : `The meeting note was busy. Run ${enhanceCommandName(command)} again in a moment.`);
     } else if (outcome.status === "failed") {
       this.fail(outcome.error);
     } else if (outcome.status === "timed-out") {
@@ -986,14 +1001,25 @@ export default class ShorthandPlugin extends Plugin {
       agentContext: { cwd: vaultRoot },
       api: {
         vault: this.app.vault,
-        activeEditor: () => {
-          const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-          return view?.file === null || view?.file === undefined
-            ? undefined
-            : { file: view.file, editor: view.editor };
-        },
+        openEditor: (target) => this.openEditor(target),
       },
     });
+  }
+
+  /**
+   * The editor holding `file`, in whichever leaf holds it. Deliberately not
+   * `getActiveViewOfType`: Obsidian keeps a separate unsaved buffer per leaf,
+   * so a note in a split or a background tab can be holding keystrokes that its
+   * file does not have yet. Writing such a note through the Vault would put the
+   * update underneath that buffer, and the buffer wins on its next save.
+   */
+  private openEditor(file: TFile): Readonly<{ editor: Editor; save(): Promise<void> }> | undefined {
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      const view = leaf.view;
+      if (!(view instanceof MarkdownView) || view.file !== file) continue;
+      return { editor: view.editor, save: () => view.save() };
+    }
+    return undefined;
   }
 
   /**
@@ -1003,7 +1029,10 @@ export default class ShorthandPlugin extends Plugin {
    * vault-relative link text so Vault.create can make it on first flush.
    */
   private sidecarStore(note: TFile, link: string, resolved: TFile | null): ObsidianSidecarStore | undefined {
-    const path = resolved?.path ?? addMarkdownExtension(link);
+    // Only an unresolved link falls back to being read as a path, and a link is
+    // not a path: `[[Note#Section]]` names a heading inside a note, so the
+    // subpath has to come off before either half is used.
+    const path = resolved?.path ?? normalizePath(addMarkdownExtension(linkTarget(link)));
     if (!isVaultMarkdownPath(path) || resolved === note || path === note.path) {
       this.fail("The shorthand-transcript link must name a separate Markdown note inside this vault.");
       return undefined;
@@ -1011,12 +1040,7 @@ export default class ShorthandPlugin extends Plugin {
     return new ObsidianSidecarStore({
       api: {
         vault: this.app.vault,
-        activeEditor: () => {
-          const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-          return view?.file === null || view?.file === undefined
-            ? undefined
-            : { file: view.file, editor: view.editor };
-        },
+        openEditor: (target) => this.openEditor(target),
       },
       path,
       ...(resolved === null ? {} : { file: resolved }),
@@ -1687,12 +1711,17 @@ function addMarkdownExtension(path: string): string {
   return /\.md$/i.test(path) ? path : `${path}.md`;
 }
 
+/** The note half of a wikilink: `Folder/Note#Heading` names the note `Folder/Note`. */
+function linkTarget(link: string): string {
+  return link.split(/[#^]/, 1)[0]?.trim() ?? link;
+}
+
 function isVaultMarkdownPath(path: string): boolean {
-  const normalized = path.replaceAll("\\", "/");
-  return /\.md$/i.test(normalized)
-    && !normalized.startsWith("/")
-    && !/^[A-Za-z]:\//.test(normalized)
-    && normalized.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+  return /\.md$/i.test(path)
+    && !path.startsWith("/")
+    && !/^[A-Za-z]:/.test(path)
+    && !path.includes("\\")
+    && path.split("/").every((segment) => segment.trim().length > 0 && segment !== "." && segment !== "..");
 }
 
 function streamExitMessage(diagnosis: ExitDiagnosis): string {
