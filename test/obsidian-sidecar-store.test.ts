@@ -52,6 +52,25 @@ describe("ObsidianSidecarStore", () => {
     expect(vault.processCalls).toBe(0);
   });
 
+  test.each([
+    ["appends", "one\ntwo", "one\ntwo\nthree", { from: 7, to: 7, replacement: "\nthree" }],
+    ["replaces in the middle", "one\ntwo\nthree", "one\nTWO\nthree", { from: 4, to: 7, replacement: "TWO" }],
+    ["deletes from the middle", "one\ntwo\nthree", "one\nthree", { from: 5, to: 9, replacement: "" }],
+    ["rewrites everything", "one", "two", { from: 0, to: 3, replacement: "two" }],
+    // Both strings end in the same low surrogate, so a naive suffix scan would
+    // cut a character in half.
+    ["keeps surrogate pairs whole", "a\u{1F600}b", "a\u{1FA00}b", { from: 1, to: 3, replacement: "\u{1FA00}" }],
+  ])("%s with one minimal edit", async (_label, before, after, expected) => {
+    const vault = memoryVault();
+    const file = vault.add("Calls/Transcript.md", "saved");
+    const open = openEditor(before);
+    const store = new ObsidianSidecarStore({ path: file.path, file, api: vault.api(() => open) });
+
+    await store.process(() => ({ content: after, value: null }));
+    expect(open.editor.getValue()).toBe(after);
+    expect(open.edits).toEqual([expected]);
+  });
+
   test("leaves an unchanged open sidecar untouched", async () => {
     const vault = memoryVault();
     const file = vault.add("Calls/Transcript.md", "saved");

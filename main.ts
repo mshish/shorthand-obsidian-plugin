@@ -1031,8 +1031,11 @@ export default class ShorthandPlugin extends Plugin {
   private sidecarStore(note: TFile, link: string, resolved: TFile | null): ObsidianSidecarStore | undefined {
     // Only an unresolved link falls back to being read as a path, and a link is
     // not a path: `[[Note#Section]]` names a heading inside a note, so the
-    // subpath has to come off before either half is used.
-    const path = resolved?.path ?? normalizePath(addMarkdownExtension(linkTarget(link)));
+    // subpath has to come off before either half is used. What is left can be
+    // empty — `[[#Section]]` points into the meeting note itself — and an empty
+    // name would otherwise become a file called `.md` at the vault root.
+    const target = linkTarget(link);
+    const path = resolved?.path ?? (target === "" ? "" : normalizePath(addMarkdownExtension(target)));
     if (!isVaultMarkdownPath(path) || resolved === note || path === note.path) {
       this.fail("The shorthand-transcript link must name a separate Markdown note inside this vault.");
       return undefined;
@@ -1717,7 +1720,8 @@ function linkTarget(link: string): string {
 }
 
 function isVaultMarkdownPath(path: string): boolean {
-  return /\.md$/i.test(path)
+  // A name, not merely an extension: `.md` is a dot-file, not a note.
+  return /[^/]\.md$/i.test(path)
     && !path.startsWith("/")
     && !/^[A-Za-z]:/.test(path)
     && !path.includes("\\")

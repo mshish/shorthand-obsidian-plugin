@@ -70,6 +70,28 @@ describe("ensureTranscriptLink", () => {
     expect(frontmatter["shorthand-transcript"]).toBe("[[Transcripts/Someone else]]");
   });
 
+  test("lets a concurrently written link win over a value it had refused", async () => {
+    const note = fakeFile("Meeting.md");
+    // Run 1 finds junk and refuses; run 2 finds the link another writer just
+    // committed. The refusal must not survive into the second look.
+    const frontmatter: Record<string, unknown> = { "shorthand-transcript": 42 };
+    const result = await ensureTranscriptLink({
+      ...api(frontmatter),
+      fileManager: {
+        processFrontMatter: async (
+          _file: TFile,
+          transform: (value: Record<string, unknown>) => void,
+        ) => {
+          transform(frontmatter);
+          frontmatter["shorthand-transcript"] = "[[Transcripts/Someone else]]";
+          transform(frontmatter);
+        },
+      },
+    } as unknown as TranscriptLinkApi, note, CANDIDATE);
+
+    expect(result).toMatchObject({ status: "linked", linkPath: "Transcripts/Someone else" });
+  });
+
   test.each([
     ["a list", ["[[Transcripts/Older]]"]],
     ["a bare path", "Transcripts/Older.md"],
