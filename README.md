@@ -307,17 +307,14 @@ AI-maintained sections live here.
 <!-- shorthand:ai:end -->
 ```
 
-Every AI update re-reads the file, verifies the current block hash, splices only the marker body,
-writes a same-directory temporary file, and atomically renames it over the note with lock retries.
-Marker anomalies fail closed. The agent has no write tools; all note writes go through the core
-file writer, never through Obsidian's vault API.
+Every AI update re-reads the note, verifies the current block hash, and splices only the marker
+body. Marker anomalies fail closed. The agent has no write tools. All note writes go through
+Obsidian's own APIs: a note you are editing is updated through its `Editor` with the smallest
+replacement range that covers the change, and a background note through `Vault.process()`,
+Obsidian's atomic read-modify-write. Nothing is written to a vault note behind Obsidian's back.
 
 ## Known limitations
 
-- Because the core writes directly to disk, Obsidian notices updates through its file watcher. If
-  the note has unsaved keystrokes in Obsidian's editor buffer, that buffer can win on its next save
-  and an AI update may be lost. This is the intentionally safe direction: Shorthand does not
-  discard user text.
 - Enhancement runs inside a fixed 4-hour wall-clock window as a loop-breaker backstop, and that
   window is not configurable from this plugin's settings. There is no pass-count or USD budget
   setting: under Claude subscription authentication `total_cost_usd` is commonly `0`, so a USD

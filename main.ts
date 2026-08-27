@@ -14,8 +14,6 @@ import {
   type TextComponent,
 } from "obsidian";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
 // Core is consumed by package name through its `exports` map — never a deep path.
 // It is a separate repository (mshish/shorthand-core), pinned by tag in package.json.
 import {
@@ -42,10 +40,6 @@ import {
   type PassOutcome,
 } from "shorthand-core";
 import {
-  MarkdownNoteSink,
-  ensureNoteScaffold,
-  linkTranscriptFrontmatter,
-  locateAiBlock,
   transcriptWikilink,
 } from "shorthand-core/markdown";
 import {
@@ -93,6 +87,13 @@ import { formatElapsed } from "./src/elapsed.js";
 import { createRequestUrlFetch } from "./src/request-url-fetch.js";
 import { deleteLlmCredentials, writeLlmCredentials } from "./src/llm-credentials-writer.js";
 import { LlmProfileCommitQueue } from "./src/llm-profile-commit-queue.js";
+import { ObsidianNoteSink } from "./src/obsidian-note-sink.js";
+import { ObsidianSidecarStore } from "./src/obsidian-sidecar-store.js";
+import {
+  ensureTranscriptLink,
+  preflightMarkers,
+  scaffoldAfterPreflight,
+} from "./src/obsidian-note-setup.js";
 import {
   EMPTY_LLM_PROFILE_DRAFT,
   missingLlmProfileFields,
@@ -129,9 +130,8 @@ const BEGIN_GRACE_MS = 1_500;
 const START_ACKNOWLEDGEMENT_MS = 3_000;
 
 type CaptureRuntime = {
-  notePath: string;
-  /** `undefined` when `writeTranscriptNote` is off: no sidecar file exists for this capture. */
-  sidecarPath: string | undefined;
+  /** The live Obsidian identity, retained across normal rename and move operations. */
+  noteFile: TFile;
   client: StreamClient;
   control: ShorthandControl;
   /**
@@ -318,50 +318,54 @@ export default class ShorthandPlugin extends Plugin {
     if (file === undefined) return;
     const vaultRoot = this.vaultRoot();
     if (vaultRoot === undefined) return;
-    const notePath = resolve(vaultRoot, file.path);
+    const noteSink = this.noteSink(file, vaultRoot);
 
     try {
-      if (!await this.ensureScaffold(notePath)) return;
-      let sidecarPath: string | undefined;
+      const markerPreflight = await preflightMarkers(noteSink);
+      if (markerPreflight.status === "error") {
+        this.fail(markerPreflight.message);
+        return;
+      }
+      // Do this before either frontmatter or marker writes. Starting capture is
+      // the only point at which we may ask the user to let Shorthand claim an
+      // unmarked note, and declining must leave every byte untouched.
+      if (markerPreflight.status === "needs-scaffold" && !await confirmScaffold(this.app)) return;
       let sidecar: SidecarWriter | undefined;
       if (this.settings.writeTranscriptNote) {
-        const noteContent = await readFile(notePath, "utf8");
-        const linked = transcriptWikilink(noteContent);
-        const relativeSidecar = linked === undefined
-          ? `${this.settings.sidecarDirectory}/${timestampName(new Date())}`
-          : addMarkdownExtension(linked);
-        const resolvedSidecarPath = resolve(vaultRoot, relativeSidecar);
-        if (!isInside(vaultRoot, resolvedSidecarPath) || samePath(notePath, resolvedSidecarPath)) {
-          this.fail("The configured transcript sidecar path is outside the vault or resolves to the meeting note.");
+        const noteContent = await noteSink.readContent();
+        if (!noteContent.ok) {
+          this.fail(noteContent.message);
           return;
         }
+        let linked = transcriptWikilink(noteContent.content);
         if (linked === undefined) {
-          const link = relative(vaultRoot, resolvedSidecarPath).replaceAll("\\", "/").replace(/\.md$/i, "");
-          const result = await linkTranscriptFrontmatter(notePath, link);
-          if (result.status === "note-locked") {
-            this.fail("The meeting note remained locked while adding its transcript link. Close competing file handles and retry.");
+          const candidate = `${this.settings.sidecarDirectory}/${timestampName(new Date()).replace(/\.md$/i, "")}`;
+          const linkedResult = await ensureTranscriptLink({
+            fileManager: this.app.fileManager,
+            metadataCache: this.app.metadataCache,
+          }, file, candidate);
+          if (linkedResult.status === "error") {
+            this.fail(`Could not add the transcript link: ${linkedResult.message}`);
             return;
           }
-          if (result.status === "retry") {
-            this.fail("The meeting note kept changing while adding its transcript link. Let Obsidian finish saving and retry.");
-            return;
-          }
-          if (result.status === "error") {
-            this.fail(result.error.message);
-            return;
-          }
+          linked = linkedResult.linkPath;
         }
-        sidecarPath = resolvedSidecarPath;
-        sidecar = new SidecarWriter(sidecarPath, { flushIntervalMs: DEFAULT_CONFIG.sidecarFlushIntervalMs });
+        const target = this.app.metadataCache.getFirstLinkpathDest(linked, file.path);
+        const store = this.sidecarStore(file, linked, target);
+        if (store === undefined) return;
+        sidecar = new SidecarWriter(store.describe, {
+          flushIntervalMs: DEFAULT_CONFIG.sidecarFlushIntervalMs,
+          store,
+        });
       }
+      if (!await this.ensureScaffold(noteSink)) return;
 
       const transcript = new TranscriptStore();
       let enhancer: EnhanceRunner | undefined;
       let enhancementUnavailable: string | undefined;
       try {
         enhancer = await this.createEnhancer(
-          notePath,
-          vaultRoot,
+          noteSink,
           DEFAULT_CONFIG.enhancement.timeoutMs,
         );
       } catch (error) {
@@ -402,8 +406,7 @@ export default class ShorthandPlugin extends Plugin {
         })
         : undefined;
       const runtime: CaptureRuntime = {
-        notePath,
-        sidecarPath,
+        noteFile: file,
         client,
         control,
         recorder,
@@ -630,18 +633,20 @@ export default class ShorthandPlugin extends Plugin {
     if (file === undefined) return;
     const vaultRoot = this.vaultRoot();
     if (vaultRoot === undefined) return;
-    const notePath = resolve(vaultRoot, file.path);
+    const noteSink = this.noteSink(file, vaultRoot);
     try {
       // Two separate facts, deliberately. A capture survives a failed createEnhancer, so
       // "is a capture running here" and "does it have a runner" are not the same question,
       // and collapsing them would let a second enhancer start on a note a capture still owns.
-      const captureOnThisNote = this.#capture?.notePath === notePath;
+      const captureOnThisNote = this.#capture?.noteFile === file;
       const liveEnhancer = captureOnThisNote ? this.#capture?.enhancer : undefined;
+      const noteContent = await noteSink.readContent();
+      if (!noteContent.ok) throw new Error(noteContent.message);
       const mode = resolveEnhanceMode({
         command,
         captureOnThisNote,
         captureEnhancerReady: liveEnhancer !== undefined,
-        transcriptLink: transcriptWikilink(await readFile(notePath, "utf8")),
+        transcriptLink: transcriptWikilink(noteContent.content),
         writeTranscriptNote: this.settings.writeTranscriptNote,
       });
       // Resolved before scaffolding, and returned here on refusal, so that a command which
@@ -652,7 +657,7 @@ export default class ShorthandPlugin extends Plugin {
         this.fail(mode.message);
         return;
       }
-      if (!await this.ensureScaffold(notePath)) return;
+      if (!await this.prepareScaffold(noteSink)) return;
       switch (mode.kind) {
         case "live-capture":
           // `liveEnhancer` is what made this mode reachable; re-checking is for the compiler.
@@ -660,24 +665,22 @@ export default class ShorthandPlugin extends Plugin {
           this.reportOutcome(await liveEnhancer.enhanceNow("link"), command);
           return;
         case "transcript": {
-          const sidecarPath = resolve(vaultRoot, addMarkdownExtension(mode.transcriptLink));
-          if (!isInside(vaultRoot, sidecarPath)) {
-            this.fail("The note's shorthand-transcript link resolves outside the vault.");
+          const sidecar = this.app.metadataCache.getFirstLinkpathDest(mode.transcriptLink, file.path);
+          if (sidecar === null || sidecar === file) {
+            this.fail("The note's shorthand-transcript link does not resolve to a separate vault note.");
             return;
           }
           const enhancer = await this.createEnhancer(
-            notePath,
-            vaultRoot,
+            noteSink,
             DEFAULT_CONFIG.enhancement.standaloneTimeoutMs,
           );
-          enhancer.appendTranscript(await readFile(sidecarPath, "utf8"));
+          enhancer.appendTranscript(await this.app.vault.read(sidecar));
           this.reportOutcome(await enhancer.enhanceNow("link"), command);
           return;
         }
         case "notes-only": {
           const enhancer = await this.createEnhancer(
-            notePath,
-            vaultRoot,
+            noteSink,
             DEFAULT_CONFIG.enhancement.standaloneTimeoutMs,
           );
           // No appendTranscript, and core's empty-transcript gate would decline forever
@@ -738,8 +741,7 @@ export default class ShorthandPlugin extends Plugin {
   }
 
   private async createEnhancer(
-    notePath: string,
-    vaultRoot: string,
+    sink: ObsidianNoteSink,
     timeoutMs: number,
   ): Promise<EnhanceRunner> {
     const backend = this.settings.backend;
@@ -796,7 +798,7 @@ export default class ShorthandPlugin extends Plugin {
     // the setting live for statuses would let the two streams disagree mid-capture.
     const debugLogging = this.settings.debugLogging;
     return new EnhanceRunner({
-      sink: new MarkdownNoteSink({ notePath, vaultRoot }),
+      sink,
       agent,
       minNewChars: this.settings.minNewChars,
       minIntervalMs: this.settings.minIntervalMs,
@@ -820,23 +822,20 @@ export default class ShorthandPlugin extends Plugin {
     });
   }
 
-  private async ensureScaffold(notePath: string): Promise<boolean> {
-    const located = locateAiBlock(await readFile(notePath, "utf8"));
-    if (located.ok) return true;
-    if (located.error.code !== "markers-missing") {
-      this.fail(located.error.message);
+  private async prepareScaffold(sink: ObsidianNoteSink): Promise<boolean> {
+    const preflight = await preflightMarkers(sink);
+    if (preflight.status === "error") {
+      this.fail(preflight.message);
       return false;
     }
-    if (!await confirmScaffold(this.app)) return false;
-    const result = await ensureNoteScaffold(notePath, resolveTemplateSections(this.settings.templateSectionText));
-    if (result.status === "written" || result.status === "unchanged") return true;
-    if (result.status === "note-locked") {
-      this.fail("The meeting note remained locked while adding Shorthand markers. Let Obsidian finish saving and retry.");
-    } else if (result.status === "retry") {
-      this.fail("The meeting note changed repeatedly while adding Shorthand markers. Retry after it settles.");
-    } else {
-      this.fail(result.error.message);
-    }
+    if (preflight.status === "needs-scaffold" && !await confirmScaffold(this.app)) return false;
+    return this.ensureScaffold(sink);
+  }
+
+  private async ensureScaffold(sink: ObsidianNoteSink): Promise<boolean> {
+    const result = await scaffoldAfterPreflight(sink, resolveTemplateSections(this.settings.templateSectionText));
+    if (result.ok) return true;
+    this.fail(result.message);
     return false;
   }
 
@@ -979,6 +978,49 @@ export default class ShorthandPlugin extends Plugin {
     if (file !== null && file !== undefined) return file;
     new Notice("Open a Markdown note before running Shorthand.");
     return undefined;
+  }
+
+  private noteSink(file: TFile, vaultRoot: string): ObsidianNoteSink {
+    return new ObsidianNoteSink({
+      file,
+      agentContext: { cwd: vaultRoot },
+      api: {
+        vault: this.app.vault,
+        activeEditor: () => {
+          const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+          return view?.file === null || view?.file === undefined
+            ? undefined
+            : { file: view.file, editor: view.editor };
+        },
+      },
+    });
+  }
+
+  /**
+   * Convert a wikilink into a Vault store, never an operating-system path.
+   * MetadataCache is authoritative for an existing target (including aliases
+   * and renamed files); only a missing generated target falls back to its
+   * vault-relative link text so Vault.create can make it on first flush.
+   */
+  private sidecarStore(note: TFile, link: string, resolved: TFile | null): ObsidianSidecarStore | undefined {
+    const path = resolved?.path ?? addMarkdownExtension(link);
+    if (!isVaultMarkdownPath(path) || resolved === note || path === note.path) {
+      this.fail("The shorthand-transcript link must name a separate Markdown note inside this vault.");
+      return undefined;
+    }
+    return new ObsidianSidecarStore({
+      api: {
+        vault: this.app.vault,
+        activeEditor: () => {
+          const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+          return view?.file === null || view?.file === undefined
+            ? undefined
+            : { file: view.file, editor: view.editor };
+        },
+      },
+      path,
+      ...(resolved === null ? {} : { file: resolved }),
+    });
   }
 
   /**
@@ -1645,13 +1687,12 @@ function addMarkdownExtension(path: string): string {
   return /\.md$/i.test(path) ? path : `${path}.md`;
 }
 
-function isInside(root: string, candidate: string): boolean {
-  const fromRoot = relative(resolve(root), resolve(candidate));
-  return fromRoot === "" || (!fromRoot.startsWith("..") && !isAbsolute(fromRoot));
-}
-
-function samePath(left: string, right: string): boolean {
-  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+function isVaultMarkdownPath(path: string): boolean {
+  const normalized = path.replaceAll("\\", "/");
+  return /\.md$/i.test(normalized)
+    && !normalized.startsWith("/")
+    && !/^[A-Za-z]:\//.test(normalized)
+    && normalized.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
 }
 
 function streamExitMessage(diagnosis: ExitDiagnosis): string {
