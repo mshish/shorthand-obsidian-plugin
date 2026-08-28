@@ -16,7 +16,8 @@
 
 Every task's requirements implicitly include these.
 
-- **This plan spans two repositories.** `shorthand-core` is at `D:/tools/shorthand-repos/shorthand-core`; the plugin is at `D:/tools/obsidian-shorthand` (outside the workspace tree). **Every task below names its repository. Reset the Codex session on every repository change** — a session carried across repos acts in the wrong tree.
+- **This plan spans two repositories.** `shorthand-core` is at `D:/tools/shorthand-repos/shorthand-core`; the plugin is at `D:/tools/obsidian-shorthand` (outside the workspace tree). **Every task below names its repository. Reset the Codex session on every repository change.**
+- **Codex's writable root is the shell's working directory at dispatch time, not the path in the brief.** Observed 2026-08-28: a Task 2 dispatch made while the shell sat in `D:/tools/obsidian-shorthand` came back "Blocked by workspace permissions… this session can only write under `D:\tools\obsidian-shorthand`", having changed nothing. It refuses rather than editing the wrong tree, which is the good failure — but it costs a round trip. **`cd` to the repository's parent before dispatching**, and confirm with `pwd`. For `shorthand-core` that means the workspace root `D:/tools/shorthand-repos`; for the plugin it means the plugin directory itself.
 - **Publication is irreversible.** No agent runs `gh repo edit --visibility`, `gh repo rename`, or `gh release edit --draft=false`. Those are Tasks 4, 5 and 6, executed by Claude after the user confirms each one individually.
 - **The secret scan is advisory to a human.** An agent may run the scanner and format its output. An agent may not decide a finding is a false positive.
 - **The plugin resolves core with npm, not bun.** `README.md:53-56` in core records why. Do not "fix" a plugin install by switching to bun.
