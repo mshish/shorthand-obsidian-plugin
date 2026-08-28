@@ -123,11 +123,27 @@ build — including each watch rebuild — copies `main.js`, `manifest.json` and
 git clone https://github.com/mshish/shorthand-obsidian-plugin.git
 cd shorthand-obsidian-plugin
 npm install
-export OBSIDIAN_PLUGIN_DIR="<vault>/.obsidian/plugins/shorthand"
-#   PowerShell: $env:OBSIDIAN_PLUGIN_DIR = "<vault>\.obsidian\plugins\shorthand"
-npm run build
-npm run dev
+
+# Set OBSIDIAN_PLUGIN_DIR per invocation, not in your shell profile — see below.
+OBSIDIAN_PLUGIN_DIR="<vault>/.obsidian/plugins/shorthand" npm run dev
+#   PowerShell: $env:OBSIDIAN_PLUGIN_DIR="<vault>\.obsidian\plugins\shorthand"; npm run dev
 ```
+
+**Set it per invocation. Do not export it from your shell profile.** Any build in any
+directory reads it, so a profile-level export means a throwaway clone, a bisect, or a
+colleague's branch you built to review all deliver into your live vault — silently, and
+with whatever code that tree happened to contain. Prefixing the one command that should
+deliver keeps `npm run build` a build.
+
+To verify a tree without touching a vault, clear it explicitly:
+
+```sh
+env -u OBSIDIAN_PLUGIN_DIR npm run build
+#   PowerShell: $env:OBSIDIAN_PLUGIN_DIR=$null; npm run build
+```
+
+A delivering build prints `delivered main.js, manifest.json and styles.css to <path>`. No
+such line means nothing was copied.
 
 `main.js` is still written to the repository root and copied across from there — releases attach
 that same file and the bundle-load test resolves it from the root. A failed rebuild copies

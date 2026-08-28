@@ -21,9 +21,12 @@ npx tsc --noEmit      # typecheck; tsconfig includes main.ts
 npm run build         # esbuild -> main.js
 ```
 
-`OBSIDIAN_PLUGIN_DIR` may be set in a developer's environment, in which case
-**every build copies straight into their live vault**. Be deliberate about when
-you build, and leave the vault holding a build from committed code.
+`OBSIDIAN_PLUGIN_DIR` is read from the environment, so **any build that sees it
+copies straight into a live vault** — from whatever directory it runs in. Set it
+per invocation on the one command that should deliver; never export it from a
+shell profile, or a throwaway clone or an unreviewed branch will install itself
+into the vault. Prefix verification builds with `env -u OBSIDIAN_PLUGIN_DIR`.
+Leave the vault holding a build from committed code.
 
 ## Pushing and merging your work
 
