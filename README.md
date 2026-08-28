@@ -1,6 +1,6 @@
 # Obsidian Shorthand
 
-Granola-style meeting notes for Obsidian, driven by [Shorthand](https://github.com/cjpais/Shorthand)'s
+Granola-style meeting notes for Obsidian, driven by [Shorthand](https://github.com/mshish/shorthand)'s
 `--follow-stream` CLI: Shorthand transcribes your microphone and system audio as separate
 speaker-labelled lanes, and this plugin keeps an AI-owned summary in the note while the meeting
 is still running.
@@ -95,9 +95,8 @@ Download `main.js`, `manifest.json` and `styles.css` from the [latest release](.
 
 ### With BRAT
 
-BRAT installs from a **release**, not from the repo tree. This repository is private, so BRAT
-needs a fine-grained personal access token with read-only **Contents** permission on it, added in
-BRAT's settings; then add `mshish/obsidian-shorthand` as a beta plugin.
+BRAT installs from a **release**, not from the repo tree. Add
+`mshish/shorthand-obsidian-plugin` as a beta plugin in BRAT's settings.
 
 ### From source — the standard Obsidian dev loop
 
@@ -108,7 +107,7 @@ documented by Obsidian; pick one.
 directly:
 
 ```sh
-git clone https://github.com/mshish/obsidian-shorthand.git \
+git clone https://github.com/mshish/shorthand-obsidian-plugin.git \
   "<vault>/.obsidian/plugins/shorthand"
 cd "<vault>/.obsidian/plugins/shorthand"
 npm install
@@ -121,8 +120,8 @@ build — including each watch rebuild — copies `main.js`, `manifest.json` and
 `node_modules/` and `.git/` out of a synced vault:
 
 ```sh
-git clone https://github.com/mshish/obsidian-shorthand.git
-cd obsidian-shorthand
+git clone https://github.com/mshish/shorthand-obsidian-plugin.git
+cd shorthand-obsidian-plugin
 npm install
 export OBSIDIAN_PLUGIN_DIR="<vault>/.obsidian/plugins/shorthand"
 #   PowerShell: $env:OBSIDIAN_PLUGIN_DIR = "<vault>\.obsidian\plugins\shorthand"
@@ -362,9 +361,9 @@ bump script creates it. Do not harmonise the two repos.
 
 `minAppVersion` is never bumped for you — raise it by hand in `manifest.json` first if a release
 needs a newer Obsidian, and the bump records that value against the new version in `versions.json`.
-`versions.json` lets an older Obsidian resolve the newest build it can still run; it is read from
-the repo's default branch, so it does nothing while this repo is private and is maintained purely
-so the history is correct if that changes.
+Once you list the plugin in the community directory, it reads `versions.json` from the default
+branch so an older Obsidian can resolve the newest build it can run. Until then, the bump script
+keeps the history correct.
 
 Release assets are attached manually for the same reason there is no CI.
 

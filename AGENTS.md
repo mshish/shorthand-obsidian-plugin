@@ -25,11 +25,11 @@ npm run build         # esbuild -> main.js
 **every build copies straight into their live vault**. Be deliberate about when
 you build, and leave the vault holding a build from committed code.
 
-## This repo is private, and pushing needs no permission
+## Pushing and merging your work
 
-Single-user private repo. Commit, push and merge as part of finishing the work;
-do not stop to ask. Confirm only before force-pushing or rewriting published
-history.
+This repository is public. You can commit, push and merge your own work as part
+of finishing the work; send work from outside the repository through a pull
+request. Confirm only before force-pushing or rewriting published history.
 
 That is permission to push *your* work. It is not permission to commit someone
 else's uncommitted changes — stage explicit paths, never `git add -A`, `git add .`
