@@ -582,11 +582,15 @@ Expected: `0.13.0`. A different version means npm resolved from cache — clear 
 
 - [ ] **Step 2: Build and test the clean clone**
 
+**`OBSIDIAN_PLUGIN_DIR` must be unset for this.** It is set in the user's shell profile, and `esbuild.config.mjs:37` reads it from the environment, so `npm run build` in *any* directory — a throwaway clone included — copies `main.js`, `manifest.json` and `styles.css` straight into the live vault. Observed 2026-08-28: a verification build from a temp clone silently overwrote the vault's plugin. Nothing was lost that time because the clone was of committed `HEAD`, but a verification step must not write to a real vault at all, and a clone of a *branch* would have installed unreviewed code into it.
+
 ```bash
-npx tsc --noEmit && npm run build && npm test
+env -u OBSIDIAN_PLUGIN_DIR npm run build && env -u OBSIDIAN_PLUGIN_DIR npm test
 ```
 
-Expected: all pass.
+Expected: all pass, and **no** "delivered main.js, manifest.json and styles.css to …" line in the output. If that line appears, the guard did not take — stop, and check the vault against `git -C <vault-plugin-dir> status` or a rebuild from committed `main`.
+
+Do not substitute `npx tsc --noEmit` for the typecheck here. `npm run build` already runs `tsc --noEmit` as its first step, and bare `npx tsc` fails outright against a bun-installed tree — bun writes `.exe`/`.bunx` shims into `node_modules/.bin` where npx expects scripts.
 
 - [ ] **Step 3: Confirm all three repositories' public status**
 
