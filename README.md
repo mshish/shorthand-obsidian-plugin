@@ -145,9 +145,11 @@ reload, Obsidian caches the bundle, so **toggle the plugin off and on** after ea
 otherwise you are still running the previous build, which looks exactly like your change having
 no effect.
 
-**npm, not bun.** Core is a private GitHub dependency: npm resolves `git+https://…#<tag>` by
-cloning through the `gh` credential helper, while bun rewrites GitHub dependencies to the API
-tarball endpoint and 404s on a private repo regardless of the token supplied.
+**npm, not bun.** bun installs this tree fine — its old failure was that it 404s on a private
+dependency, and that stopped applying when core went public on 2026-08-28. Keep to npm anyway:
+`package-lock.json` is the committed lockfile, and bun writes `.exe`/`.bunx` shims into
+`node_modules/.bin`, so `npx <tool>` fails against a bun-installed tree. `npm run build` itself
+works under either.
 
 ## Commands
 
@@ -329,9 +331,10 @@ vault note behind Obsidian's back.
 
 ## Verification — run this before every push
 
-There is **no CI in this repository yet**: a GitHub Actions default token cannot clone another
-private repository, so a workflow could not install core. CI arrives when core goes public. Until
-then this is the gate, and it is on you to run it:
+There is **no CI in this repository yet**. A GitHub Actions default token could not clone a
+private `shorthand-core`, so a workflow could not install it. That block lifted when core went
+public on 2026-08-28 — the workflow still has to be written. Until it is, this is the gate, and
+it is on you to run it:
 
 ```sh
 npm run build   # tsc --noEmit, then the production esbuild bundle
