@@ -21,6 +21,7 @@ Every task's requirements implicitly include these.
 - **The secret scan is advisory to a human.** An agent may run the scanner and format its output. An agent may not decide a finding is a false positive.
 - **The plugin resolves core with npm, not bun.** `README.md:53-56` in core records why. Do not "fix" a plugin install by switching to bun.
 - **Documentation corrections land before publication, not after.** Once a repository is public there is no private window in which to fix a wrong claim before anyone can read it.
+- **Shorthand's voice is not Handy's, and it applies to prose as well as UI.** `docs/settings-copy-style.md` is the source; it is scoped to the settings tab, so apply the rules that generalise and not the ones about controls. Binding on every edit in this plan: **rule 3** — describe the consequence, not the mechanism, and never let `shorthand-core`'s internal vocabulary ("tick pass", "link tier", "sidecar") reach a reader; **rule 7** — Obsidian's terminology is binding, so "folder" not "directory", "note" for a Markdown file, American spelling; **rule 8** — sentence case headings; **rule 9** — second person, present tense, active voice, no "we". Rule 1's ethos carries too: say it once, plainly, and link rather than inline the background. Rules 2, 4, 5 and 6 govern settings controls and do not apply here. When correcting an inherited sentence, rewrite it into this register rather than patching the wrong fact and leaving Handy's voice behind.
 - **Plugin id and name are `shorthand` and `Shorthand`.** Both are already correct and are not touched by the repository rename.
 - **Core's tags exist only as dependency pins.** There is no release workflow in core and there must not be one; the plugin's releases are cut from the plugin repository.
 
@@ -61,13 +62,14 @@ Neither gitleaks nor trufflehog is present on this machine. Verified available v
 winget install --id Gitleaks.Gitleaks --accept-source-agreements --accept-package-agreements
 ```
 
-Then confirm it is on PATH in a **new** shell:
+winget reports "Path environment variable modified; restart your shell." **In practice a fresh Git Bash from this harness does not pick it up** (observed 2026-08-28), so expect to use the absolute path rather than fighting PATH:
 
 ```bash
-gitleaks version
+GL="/c/Users/<user>/AppData/Local/Microsoft/WinGet/Packages/Gitleaks.Gitleaks_Microsoft.Winget.Source_8wekyb3d8bbwe/gitleaks.exe"
+"$GL" version
 ```
 
-Expected: `8.30.1` or later. If the command is not found, winget installed it outside PATH — locate it with `where.exe gitleaks` and use the absolute path for the rest of this task rather than fighting PATH.
+Expected: `8.30.1` or later. If that path does not exist, locate the binary with `find /c/Users/<user>/AppData/Local/Microsoft/WinGet -iname 'gitleaks*' -maxdepth 4` — the package directory name encodes the source and may differ.
 
 - [ ] **Step 2: Take bare clones of both repositories**
 
@@ -80,14 +82,28 @@ git clone --bare https://github.com/mshish/shorthand-core.git "$scan/core.git"
 git clone --bare https://github.com/mshish/obsidian-shorthand.git "$scan/plugin.git"
 ```
 
-Confirm the clones carry the refs the server has:
+Confirm the clones carry the refs the server has. **Compare ref names, not counts.** `git ls-remote` emits a second `refs/tags/X^{}` line for every annotated tag, so a count-versus-count check reports a false gap — core shows 34 remote lines against 19 real refs purely because 15 of its tags are annotated.
 
 ```bash
-git -C "$scan/core.git" for-each-ref --format='%(refname)' | wc -l
-git -C "$scan/plugin.git" for-each-ref --format='%(refname)' | wc -l
+for r in core:shorthand-core plugin:obsidian-shorthand; do
+  n=${r%%:*}; repo=${r##*:}
+  git ls-remote --heads --tags "https://github.com/mshish/$repo.git" \
+    | awk '{print $2}' | grep -v '\^{}' | sort > "$scan/$n-server.txt"
+  git -C "$scan/$n.git" for-each-ref --format='%(refname)' | sort > "$scan/$n-local.txt"
+  echo "=== $n ==="; diff "$scan/$n-server.txt" "$scan/$n-local.txt" && echo "complete"
+done
 ```
 
-Expected: core around 34, plugin around 2 (measured 2026-08-28 via `git ls-remote`). Re-derive rather than trusting these numbers — if either prints noticeably fewer refs than `git ls-remote --heads --tags <url> | wc -l` reports for the same repository, the clone is incomplete and the scan would be too.
+Expected: `complete` for both. Any line present on the server but missing locally is history the scan would not see.
+
+Also confirm the clone has no remote-tracking refs — a bare clone of a single-remote source has none, and anything here means the clone is not what it appears to be:
+
+```bash
+git -C "$scan/core.git" for-each-ref refs/remotes
+git -C "$scan/plugin.git" for-each-ref refs/remotes
+```
+
+Expected: no output from either.
 
 - [ ] **Step 3: Scan the full history of each**
 
