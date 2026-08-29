@@ -19,8 +19,7 @@ import { existsSync } from "node:fs";
 // Core is consumed by package name through its `exports` map — never a deep path.
 // It is a separate repository (mshish/shorthand-core), pinned by tag in package.json.
 import {
-  CLAUDE_EFFORT_LEVELS,
-  CODEX_REASONING_EFFORTS,
+  AgentCatalogError,
   ClaudeAgentClient,
   CodexAgentClient,
   DEFAULT_CONFIG,
@@ -29,6 +28,8 @@ import {
   detectCodexExecutable,
   detectShorthandExecutable,
   EnhanceRunner,
+  listClaudeModels,
+  listCodexModels,
   LlmAgentClient,
   llmCredentialsPath,
   readLlmCredentials,
@@ -37,6 +38,7 @@ import {
   StreamClient,
   TranscriptStore,
   enhancementDelta,
+  type AgentCatalog,
   type ControlResult,
   type ControlSignal,
   type EnhanceStatus,
@@ -69,12 +71,18 @@ import {
 import {
   apiKeyDescription,
   baseUrlDescription,
+  catalogFetchFailedDescription,
+  catalogLoadingDescription,
   claudeExecutableDescription,
   codexExecutableDescription,
+  decideEffortRow,
+  decideModelRow,
   newCharacterThresholdDescription,
   passIntervalDescription,
   shorthandExecutableDescription,
   transcriptFolderDescription,
+  type AgentBackendLabel,
+  type CatalogRowDecision,
   type StoredKeyState,
 } from "./src/settings-display.js";
 import {
@@ -1170,28 +1178,15 @@ class ShorthandSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings({ ...this.plugin.settings, backend: value });
           this.display();
         }));
-    if (this.plugin.settings.backend === "codex") {
-      // Codex authenticates through its own CLI and this plugin has no route into that flow.
-      // Without a row saying so, a user who has never run `codex login` learns about it from a
-      // failed enhancement pass mid-meeting, with nothing on this tab pointing at the cause.
-      // The sign-in is now the only Codex prerequisite this row has to name: core finds the
-      // binary on PATH, so the executable field in Advanced is an override like Claude's and
-      // does not need pointing at from up here.
-      new Setting(containerEl)
-        .setName("Codex sign-in")
-        .setDesc(createFragment((desc) => {
-          desc.appendText("Sign in with ");
-          desc.createEl("code", { text: "codex login" });
-          desc.appendText(" in a terminal first. Shorthand uses that sign-in and cannot start it for you.");
-        }));
-    }
+    // Each backend fetches its own catalog and renders its own sign-in row (shown only once
+    // `signedIn: false` comes back — see displayAgentCatalog), rather than an if/else on a
+    // shared block, for the reason recorded on the LLM-profile branch below: a third backend
+    // added later must not inherit a block written for a different one.
     if (this.plugin.settings.backend === "claude-agent-sdk") {
-      modelSetting(containerEl, this.plugin, "Claude model", "claudeModel");
-      effortSetting(containerEl, this.plugin, "Claude effort", "claudeEffort", CLAUDE_EFFORT_LEVELS);
+      this.displayAgentCatalog(containerEl, displayGeneration, "claude");
     }
     if (this.plugin.settings.backend === "codex") {
-      modelSetting(containerEl, this.plugin, "Codex model", "codexModel");
-      effortSetting(containerEl, this.plugin, "Codex effort", "codexEffort", CODEX_REASONING_EFFORTS);
+      this.displayAgentCatalog(containerEl, displayGeneration, "codex");
     }
     // Each half of this pair names its own backend rather than being an if/else, and that is
     // what keeps a third backend from inheriting a block written for a different one: Codex
@@ -1251,6 +1246,99 @@ class ShorthandSettingTab extends PluginSettingTab {
       .addButton((button) => button
         .setButtonText("Edit…")
         .onClick(() => new NotePromptModal(this.app, this.plugin, () => this.display()).open()));
+  }
+
+  /**
+   * The model and effort rows for one agent backend, plus the sign-in row that only appears
+   * once the fetched catalog says `signedIn: false`.
+   *
+   * The catalog is fetched lazily, here, rather than in `display()` — it spawns a subprocess
+   * and costs ~0.6-2.6s (see `CATALOG_TIMEOUT_MS`'s doc comment in core), so paying that cost
+   * for a backend the user has not selected would be wasted work on every tab open. The
+   * `isCurrentDisplay` guard follows the same pattern `displayLlmProfileControls` uses: the tab
+   * can be closed, or the backend switched, before the fetch resolves, and a resolved fetch
+   * must not write into a `Setting` row `display()` has already discarded.
+   */
+  private displayAgentCatalog(
+    containerEl: HTMLElement,
+    displayGeneration: number,
+    backend: "claude" | "codex",
+  ): void {
+    const isCurrentDisplay = (): boolean => this.#displayGeneration === displayGeneration;
+    const backendLabel: AgentBackendLabel = backend === "claude" ? "Claude" : "Codex";
+    const loginCommand = backend === "claude" ? "claude login" : "codex login";
+    const modelKey = backend === "claude" ? "claudeModel" : "codexModel";
+    const effortKey = backend === "claude" ? "claudeEffort" : "codexEffort";
+    let catalog: AgentCatalog | undefined;
+
+    // Reserved here, in the same position the old unconditional "Codex sign-in" row held, and
+    // hidden until the fetch resolves and says nobody is signed in — a hard fetch failure gets
+    // its own message on the rows below instead, per catalog.ts's AgentCatalog.signedIn doc:
+    // neither backend fails merely because nobody is signed in, so this is not the row a
+    // failed fetch uses.
+    const signInSetting = new Setting(containerEl)
+      .setName(`${backendLabel} sign-in`)
+      .setDesc(createFragment((desc) => {
+        desc.appendText("Sign in with ");
+        desc.createEl("code", { text: loginCommand });
+        desc.appendText(" in a terminal first. Shorthand uses that sign-in and cannot start it for you.");
+      }));
+    signInSetting.settingEl.hide();
+
+    let modelDropdown!: DropdownComponent;
+    const modelRow = new Setting(containerEl).setName(`${backendLabel} model`).setDesc(catalogLoadingDescription());
+    modelRow.addDropdown((dropdown) => {
+      modelDropdown = dropdown
+        .addOption("", "Provider default")
+        .setValue(this.plugin.settings[modelKey]);
+      dropdown.onChange(async (value) => {
+        // Preserve-and-flag, not clear-and-reset: whether `value`'s model still accepts the
+        // stored effort is exactly what `decideEffortRow` below already works out from
+        // `this.plugin.settings[effortKey]`, so the effort is left untouched here. A model
+        // switch that invalidates it does not lose it — the next render shows it selected,
+        // disabled, and described as unavailable, the same presentation `decideModelRow` uses
+        // for a stale model id, which is what forces a visible re-pick instead of a silent
+        // substitution.
+        await this.plugin.saveSettings({ ...this.plugin.settings, [modelKey]: value });
+        if (catalog !== undefined) renderEffortOptions(catalog);
+      });
+    });
+    modelRow.setDisabled(true);
+
+    let effortDropdown!: DropdownComponent;
+    const effortRow = new Setting(containerEl).setName(`${backendLabel} effort`).setDesc(catalogLoadingDescription());
+    effortRow.addDropdown((dropdown) => {
+      effortDropdown = dropdown.addOption("", "Provider default");
+      dropdown.onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, [effortKey]: value }));
+    });
+    effortRow.setDisabled(true);
+
+    const renderEffortOptions = (loadedCatalog: AgentCatalog): void => {
+      const decision = decideEffortRow(loadedCatalog, this.plugin.settings[modelKey], this.plugin.settings[effortKey]);
+      applyCatalogDecision(effortDropdown, effortRow, decision);
+    };
+
+    const executableOverride = this.plugin.settings[backend === "claude" ? "claudeExecutable" : "codexExecutable"];
+    const fetchCatalog = backend === "claude"
+      ? listClaudeModels(executableOverride.length === 0 ? {} : { executableOverride })
+      : listCodexModels(executableOverride.length === 0 ? {} : { codexPathOverride: executableOverride });
+
+    void fetchCatalog.then((loadedCatalog) => {
+      if (!isCurrentDisplay()) return;
+      catalog = loadedCatalog;
+      signInSetting.settingEl.toggle(!loadedCatalog.signedIn);
+
+      applyCatalogDecision(modelDropdown, modelRow, decideModelRow(loadedCatalog, this.plugin.settings[modelKey]));
+      renderEffortOptions(loadedCatalog);
+    }).catch((error: unknown) => {
+      if (!isCurrentDisplay()) return;
+      const message = catalogFetchFailedDescription(
+        backendLabel,
+        error instanceof AgentCatalogError ? error.reason : "protocol",
+      );
+      modelRow.setDesc(message).setDisabled(true);
+      effortRow.setDesc(message).setDisabled(true);
+    });
   }
 
   /**
@@ -1524,40 +1612,27 @@ class ShorthandSettingTab extends PluginSettingTab {
   }
 }
 
-function modelSetting(
-  container: HTMLElement,
-  plugin: ShorthandPlugin,
-  name: string,
-  key: "claudeModel" | "codexModel",
-): void {
-  new Setting(container)
-    .setName(name)
-    .addText((input) => input
-      .setPlaceholder("Provider default")
-      .setValue(plugin.settings[key])
-      .onChange(async (value) => plugin.saveSettings({ ...plugin.settings, [key]: value })));
-}
-
-function effortSetting(
-  container: HTMLElement,
-  plugin: ShorthandPlugin,
-  name: string,
-  key: "claudeEffort" | "codexEffort",
-  values: readonly string[],
-): void {
-  new Setting(container)
-    .setName(name)
-    .addDropdown((dropdown) => {
-      dropdown.addOption("", "Provider default");
-      for (const value of values) dropdown.addOption(value, sentenceCase(value));
-      dropdown.setValue(plugin.settings[key]).onChange(async (value) => {
-        await plugin.saveSettings({ ...plugin.settings, [key]: value });
-      });
-    });
-}
-
-function sentenceCase(value: string): string {
-  return value.length === 0 ? value : value[0]!.toUpperCase() + value.slice(1);
+/**
+ * Renders a `CatalogRowDecision` from `src/settings-display.ts` onto a model or effort
+ * dropdown and its `Setting` row — the thin, untested half of the pair described in that
+ * module's `decideModelRow`/`decideEffortRow` doc comments. All the branching lives in the
+ * decision; this only walks its `options` array.
+ *
+ * `DropdownComponent.addOption` has no `disabled` parameter, so a flagged option reaches the
+ * underlying `<select>` directly. A disabled `<option>` can still be the element's `.value`
+ * when set programmatically — browsers only refuse it as a *user* selection — which is what
+ * lets an unavailable stored id stay selected and visible instead of silently falling back to
+ * "Provider default".
+ */
+function applyCatalogDecision(dropdown: DropdownComponent, row: Setting, decision: CatalogRowDecision): void {
+  dropdown.selectEl.empty();
+  for (const option of decision.options) {
+    const optionEl = dropdown.selectEl.createEl("option", { value: option.value, text: option.label });
+    optionEl.disabled = option.disabled;
+  }
+  dropdown.setValue(decision.selected);
+  row.setDesc(decision.description);
+  row.setDisabled(decision.disabled);
 }
 
 function textSetting(
