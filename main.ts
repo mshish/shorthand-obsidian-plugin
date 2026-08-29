@@ -19,6 +19,8 @@ import { existsSync } from "node:fs";
 // Core is consumed by package name through its `exports` map — never a deep path.
 // It is a separate repository (mshish/shorthand-core), pinned by tag in package.json.
 import {
+  CLAUDE_EFFORT_LEVELS,
+  CODEX_REASONING_EFFORTS,
   ClaudeAgentClient,
   CodexAgentClient,
   DEFAULT_CONFIG,
@@ -51,7 +53,9 @@ import {
 } from "./src/enhance-mode.js";
 import {
   DEFAULT_PLUGIN_SETTINGS,
+  claudeAgentOptions,
   choosePromptFieldMode,
+  codexAgentOptions,
   defaultTemplateSectionText,
   initialPromptFieldState,
   isEnhancementBackend,
@@ -321,6 +325,7 @@ export default class ShorthandPlugin extends Plugin {
     const vaultRoot = this.vaultRoot();
     if (vaultRoot === undefined) return;
     const noteSink = this.noteSink(file, vaultRoot);
+    let unownedEnhancer: EnhanceRunner | undefined;
 
     try {
       const markerPreflight = await preflightMarkers(noteSink);
@@ -380,6 +385,7 @@ export default class ShorthandPlugin extends Plugin {
           noteSink,
           DEFAULT_CONFIG.enhancement.timeoutMs,
         );
+        unownedEnhancer = enhancer;
       } catch (error) {
         enhancementUnavailable = `${errorMessage(error)} Capture will continue with transcript only.`;
       }
@@ -431,6 +437,7 @@ export default class ShorthandPlugin extends Plugin {
         startedAt: Date.now(),
       };
       this.#capture = runtime;
+      unownedEnhancer = undefined;
       this.dispatch({ type: "capture-started" });
       if (enhancementUnavailable !== undefined) this.fail(enhancementUnavailable);
 
@@ -530,6 +537,11 @@ export default class ShorthandPlugin extends Plugin {
         });
       }
     } catch (error) {
+      // If setup failed after the agent client was created but before the runtime took
+      // ownership, there is no #capture for forceStopCapture() to dispose.
+      await unownedEnhancer?.dispose().catch((cleanupError: unknown) => {
+        this.fail(`Agent session cleanup failed: ${errorMessage(cleanupError)}`);
+      });
       this.fail(errorMessage(error));
       this.forceStopCapture();
     }
@@ -593,6 +605,11 @@ export default class ShorthandPlugin extends Plugin {
     if (runtime === undefined) return;
     runtime.stopping = true;
     runtime.enhancer?.stopLiveTicks();
+    // dispose() calls stop() synchronously before its first await, so no provider work can
+    // outlive unload even though Obsidian cannot await this hook.
+    void runtime.enhancer?.dispose().catch((error: unknown) => {
+      console.error(`[shorthand] Agent session cleanup failed: ${errorMessage(error)}`);
+    });
     runtime.client.forceStop();
     // `--cancel`, never a toggle: this runs during Obsidian's shutdown, where a toggle
     // would *start* a recording if Shorthand happened to be idle. `--cancel` can only ever
@@ -623,6 +640,9 @@ export default class ShorthandPlugin extends Plugin {
     runtime.client.forceStop();
     await runtime.settled;
     await runtime.sidecar?.close().catch(() => {});
+    await runtime.enhancer?.dispose().catch((error: unknown) => {
+      this.fail(`Agent session cleanup failed: ${errorMessage(error)}`);
+    });
     if (this.#capture === runtime) this.#capture = undefined;
     this.dispatch({ type: "capture-stopped" });
   }
@@ -686,8 +706,12 @@ export default class ShorthandPlugin extends Plugin {
             noteSink,
             DEFAULT_CONFIG.enhancement.standaloneTimeoutMs,
           );
-          enhancer.appendTranscript(await this.app.vault.read(sidecar));
-          this.reportOutcome(await enhancer.enhanceNow("link"), command);
+          try {
+            enhancer.appendTranscript(await this.app.vault.read(sidecar));
+            this.reportOutcome(await enhancer.enhanceNow("link"), command);
+          } finally {
+            await enhancer.dispose();
+          }
           return;
         }
         case "notes-only": {
@@ -695,9 +719,13 @@ export default class ShorthandPlugin extends Plugin {
             noteSink,
             DEFAULT_CONFIG.enhancement.standaloneTimeoutMs,
           );
-          // No appendTranscript, and core's empty-transcript gate would decline forever
-          // without the waiver. The note's own prose reaches the model as `user_notes`.
-          this.reportOutcome(await enhancer.enhanceNow("link", { allowEmptyTranscript: true }), command);
+          try {
+            // No appendTranscript, and core's empty-transcript gate would decline forever
+            // without the waiver. The note's own prose reaches the model as `user_notes`.
+            this.reportOutcome(await enhancer.enhanceNow("link", { allowEmptyTranscript: true }), command);
+          } finally {
+            await enhancer.dispose();
+          }
           return;
         }
         default: {
@@ -769,7 +797,7 @@ export default class ShorthandPlugin extends Plugin {
       if (claudeExecutable === undefined && process.platform === "win32") {
         throw new Error("claude.exe was not found. Install and log in to Claude CLI, or configure its full path in Shorthand settings.");
       }
-      agent = new ClaudeAgentClient();
+      agent = new ClaudeAgentClient(claudeAgentOptions(this.settings));
     } else if (backend === "codex") {
       // A path is always passed, even when the user configured none, because the SDK's own
       // lookup cannot work here: left to itself it resolves `@openai/codex` relative to the file
@@ -795,7 +823,10 @@ export default class ShorthandPlugin extends Plugin {
       if (!existsSync(codexExecutable)) {
         throw new Error(`Codex was not found at "${codexExecutable}". Update "Codex executable" in Shorthand settings, or clear it to find Codex on PATH.`);
       }
-      agent = new CodexAgentClient({ codexPathOverride: codexExecutable });
+      agent = new CodexAgentClient({
+        codexPathOverride: codexExecutable,
+        ...codexAgentOptions(this.settings),
+      });
     } else {
       const credentialsPath = llmCredentialsPath();
       const credentials = await readLlmCredentials(credentialsPath);
@@ -871,13 +902,17 @@ export default class ShorthandPlugin extends Plugin {
       }
     }
     try {
-      await runtime.sidecar?.close();
-      await runtime.enhancer?.waitForIdle();
-      if (reason === "stopped" && runtime.enhancer !== undefined) {
-        // Not issued from either command: this is capture's own finishing pass. "Enhance now"
-        // is still the right retry, since it is the command that resumes work on a note this
-        // capture already owns.
-        this.reportOutcome(await runtime.enhancer.enhanceNow("link"), "enhance-now");
+      try {
+        await runtime.sidecar?.close();
+        await runtime.enhancer?.waitForIdle();
+        if (reason === "stopped" && runtime.enhancer !== undefined) {
+          // Not issued from either command: this is capture's own finishing pass. "Enhance now"
+          // is still the right retry, since it is the command that resumes work on a note this
+          // capture already owns.
+          this.reportOutcome(await runtime.enhancer.enhanceNow("link"), "enhance-now");
+        }
+      } finally {
+        await runtime.enhancer?.dispose();
       }
       new Notice("Shorthand capture stopped.");
     } catch (error) {
@@ -1150,6 +1185,14 @@ class ShorthandSettingTab extends PluginSettingTab {
           desc.appendText(" in a terminal first. Shorthand uses that sign-in and cannot start it for you.");
         }));
     }
+    if (this.plugin.settings.backend === "claude-agent-sdk") {
+      modelSetting(containerEl, this.plugin, "Claude model", "claudeModel");
+      effortSetting(containerEl, this.plugin, "Claude effort", "claudeEffort", CLAUDE_EFFORT_LEVELS);
+    }
+    if (this.plugin.settings.backend === "codex") {
+      modelSetting(containerEl, this.plugin, "Codex model", "codexModel");
+      effortSetting(containerEl, this.plugin, "Codex effort", "codexEffort", CODEX_REASONING_EFFORTS);
+    }
     // Each half of this pair names its own backend rather than being an if/else, and that is
     // what keeps a third backend from inheriting a block written for a different one: Codex
     // wants neither the LLM profile rows nor the Claude executable field in Advanced. Turning
@@ -1232,6 +1275,17 @@ class ShorthandSettingTab extends PluginSettingTab {
     }
     if (this.plugin.settings.backend === "codex") {
       textSetting(containerEl, this.plugin, "Codex executable", codexExecutableDescription, "codexExecutable");
+    }
+    if (this.plugin.settings.backend === "claude-agent-sdk" || this.plugin.settings.backend === "codex") {
+      new Setting(containerEl)
+        .setName("Agent session history")
+        .setDesc("Keeps local Claude or Codex transcripts after a capture or one-off enhancement ends.")
+        .addToggle((toggle) => toggle
+          .setValue(this.plugin.settings.retainAgentSessionHistory)
+          .onChange(async (value) => this.plugin.saveSettings({
+            ...this.plugin.settings,
+            retainAgentSessionHistory: value,
+          })));
     }
     numberSetting(containerEl, this.plugin, "Minimum new characters", newCharacterThresholdDescription, "minNewChars");
     numberSetting(containerEl, this.plugin, "Minimum interval", passIntervalDescription, "minIntervalMs");
@@ -1468,6 +1522,42 @@ class ShorthandSettingTab extends PluginSettingTab {
       if (isCurrentDisplay()) renderMalformed(`The provider profile could not be loaded: ${errorMessage(error)}`);
     });
   }
+}
+
+function modelSetting(
+  container: HTMLElement,
+  plugin: ShorthandPlugin,
+  name: string,
+  key: "claudeModel" | "codexModel",
+): void {
+  new Setting(container)
+    .setName(name)
+    .addText((input) => input
+      .setPlaceholder("Provider default")
+      .setValue(plugin.settings[key])
+      .onChange(async (value) => plugin.saveSettings({ ...plugin.settings, [key]: value })));
+}
+
+function effortSetting(
+  container: HTMLElement,
+  plugin: ShorthandPlugin,
+  name: string,
+  key: "claudeEffort" | "codexEffort",
+  values: readonly string[],
+): void {
+  new Setting(container)
+    .setName(name)
+    .addDropdown((dropdown) => {
+      dropdown.addOption("", "Provider default");
+      for (const value of values) dropdown.addOption(value, sentenceCase(value));
+      dropdown.setValue(plugin.settings[key]).onChange(async (value) => {
+        await plugin.saveSettings({ ...plugin.settings, [key]: value });
+      });
+    });
+}
+
+function sentenceCase(value: string): string {
+  return value.length === 0 ? value : value[0]!.toUpperCase() + value.slice(1);
 }
 
 function textSetting(
