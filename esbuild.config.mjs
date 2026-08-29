@@ -31,8 +31,8 @@ const prod = process.argv[2] === "production";
  *
  * The build still writes `main.js` at the repository root and copies from there rather than
  * pointing `outfile` at the vault: the bundle-load test resolves it from the root and fails if
- * it is missing or stale, releases attach that same file, and the recorded byte baseline has to
- * keep meaning one file. Unset, nothing is copied and the build behaves as it always has.
+ * it is missing or stale, and releases attach that same file. Unset, nothing is copied and the
+ * build behaves as it always has.
  */
 const vaultPluginDirectory = process.env.OBSIDIAN_PLUGIN_DIR;
 
@@ -62,10 +62,16 @@ const context = await esbuild.context({
   target: "node18",
   format: "cjs",
   treeShaking: true,
-  // Inline in production too, unlike the sample. The bundle-load test asserts a recorded
-  // byte baseline; dropping the sourcemap only in prod would make that baseline mean two
-  // different things depending on which script produced main.js.
-  sourcemap: "inline",
+  // Watch builds get an inline sourcemap; production does not. The sourcemap is 9.4 MB of a
+  // 12.7 MB bundle, and Obsidian Sync refuses to sync a file over 5 MB — with it, every user
+  // syncing a vault silently stops receiving plugin updates. Without it the bundle is 3.3 MB.
+  // Debuggability survives: this build does not minify, so a production stack trace still
+  // carries real function names, just not original line numbers.
+  //
+  // An earlier comment here claimed prod had to match watch because "the bundle-load test
+  // asserts a recorded byte baseline". No such assertion exists, in that test or any other --
+  // plugin-bundle.test.ts stats main.js for its mtime, to check freshness, never its size.
+  sourcemap: prod ? false : "inline",
   // The Claude Agent SDK is ESM. Bundled into CJS, esbuild shims `import.meta` as an
   // empty object, so the SDK's `createRequire(import.meta.url)` receives undefined and
   // the plugin throws on load. Point it at a real file URL derived from __filename.
