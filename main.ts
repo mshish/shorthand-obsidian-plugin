@@ -1217,7 +1217,7 @@ class ShorthandSettingTab extends PluginSettingTab {
         );
         desc.createEl("a", {
           text: "Driving Shorthand's recorder",
-          href: "https://github.com/mshish/obsidian-shorthand#driving-shorthands-recorder",
+          href: "https://github.com/mshish/shorthand-obsidian-plugin#driving-shorthands-recorder",
         });
         desc.appendText(".");
       }))
@@ -1747,7 +1747,7 @@ class NotePromptModal extends Modal {
         );
         desc.createEl("a", {
           text: "Note writing",
-          href: "https://github.com/mshish/obsidian-shorthand#note-writing",
+          href: "https://github.com/mshish/shorthand-obsidian-plugin#note-writing",
         });
         desc.appendText(".");
       }),
