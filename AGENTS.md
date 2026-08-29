@@ -52,10 +52,27 @@ against the real dependency and `main` stays buildable from a clean checkout at
 every commit. Do not reach for a junction, an `overrides` entry or a `file:`
 dep — core is free to publish, and a real tag is simpler than any of them.
 
-[README.md](README.md#bumping-core) documents the bump procedure and the three
-traps in it. The one that wastes the most time: `npm install` can report success
-while leaving the lockfile on the old commit and `node_modules` on the old
-version. Verify the installed version rather than trusting the install.
+The bump is: change the tag, run `npm install`, commit the refreshed
+`package-lock.json` alongside `package.json`, then run the verification gate
+above. Three things bite if a step is skipped, and all three have.
+
+- **`npm install` alone can leave the lockfile naming the previous commit.** npm
+  reuses its cached git resolution, so `package.json` moves and the lockfile does
+  not. `npm ci` — what a CI workflow runs — then fails on the disagreement with a
+  "lockfile out of sync" error that reads like a corrupt lockfile rather than a
+  wrong tag. If the `resolved` commit does not move, re-run naming the tag
+  explicitly: `npm install "shorthand-core@github:mshish/shorthand-core#<tag>"`.
+  **Verify the installed version rather than trusting the install.**
+- **`test/plugin-bundle.test.ts` fails when `main.js` is missing or older than
+  its sources**, so run `npm run build` after bumping the pin. It will not
+  silently exercise a bundle built against the old core — which means the first
+  `npm test` after a bump fails for a reason that has nothing to do with core.
+- **A core change can break the bundle-*load* test long before it breaks a
+  type**, so `npm test` is not optional after a bump and a clean `tsc` is not
+  evidence.
+
+This lived in `README.md` until that file became user-facing. It is maintainer
+procedure, so it belongs here.
 
 ## The settings surface
 
