@@ -90,11 +90,11 @@ The three recorder commands remain available as manual controls. They control Sh
 
 **Follow Shorthand's recordings** is off by default. Turn it on and starting a Meetings or Assisted notes recording with Shorthand's own hotkey also starts a capture on the note you have open in Obsidian.
 
-While it is on, the plugin keeps a connection to Shorthand open so it can see those recordings. Dictation is never followed.
+While it is on, the plugin keeps a connection to Shorthand open so it can see those recordings — reopening it roughly every 30 seconds, indefinitely, whenever Shorthand is not running. Dictation is never followed.
 
 A capture started this way does not stop Shorthand's recording when you stop it, because it was not the one that started it. Stop the recording the way you started it.
 
-This needs a Shorthand build that reports which mode a recording is. An older build tells the plugin a recording started but not what kind, and the plugin does nothing rather than guess.
+This needs a Shorthand build that reports which mode a recording is. **No shipped build does this yet** — the `shorthand-app` half that reports it is on an unmerged pull request — so today the plugin always sees a recording started but not what kind, and does nothing rather than guess. Turning the setting on has no effect until that build ships.
 
 ## Note writing
 

@@ -227,7 +227,7 @@ in the same way.
   control and disrupts the regular row rhythm of the tab". The note-taking prompt and the
   starting sections are edited in `NotePromptModal` for that reason.
 - **Command names carry no plugin name.** Obsidian prefixes them in the palette, so **Enhance
-  now** appears as "Shorthand: Enhance now"; see `README.md` § Commands. The two recorder
+  now** appears as "Shorthand: Enhance now"; see `README.md` § Commands. The three recorder
   commands name Shorthand because they drive the external recorder, not because they name the
   plugin.
 - **No hardcoded styling.** "Hardcoding the styling in the plugin code makes it impossible to

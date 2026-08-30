@@ -170,9 +170,13 @@ export function reducePluginState(state: PluginUiState, event: PluginUiEvent): P
         enhancementDepth: state.enhancementDepth + 1,
       };
     case "enhancement-finished": {
-      // Floored at zero rather than trusted: `reportOutcome` and `onEnhanceStatus` both
-      // dispatch "finished", so a single pass can report twice, and a negative depth would
-      // strand the mode in `enhancing` for the rest of the session.
+      // Floored at zero rather than trusted: a terminal status is not guaranteed to be paired
+      // with the "started" that would have incremented for it. `enhancement-ended` below is
+      // the concrete case — core can fail a meeting-note read before ever reporting a pass
+      // started, and still emits a terminal status for it — but the guard is kept here too
+      // rather than relying on which specific event type a future core change routes an
+      // unpaired terminal status through. An unpaired decrement would go negative and strand
+      // the mode in `enhancing` for the rest of the session.
       const depth = Math.max(0, state.enhancementDepth - 1);
       return {
         mode: depth > 0 ? "enhancing" : restingMode(state),
@@ -309,18 +313,21 @@ export const STATE_TRANSITIONS: readonly Readonly<{
   { from: "enhancement-stopped", event: "capture-starting", to: "starting" },
   { from: "enhancement-stopped", event: "capture-started", to: "capturing" },
   { from: "enhancement-stopped", event: "enhancement-started", to: "enhancing" },
-  // Unpaired: this mode is entered only by an enhancement pass already having stopped,
-  // so a "finished" reaching it is a second dispatch for the same pass (see the doubled-
-  // dispatch comment on the "enhancement-finished" case). It floors the depth at zero
-  // and, because it does not look at the mode it started from, releases the sticky
-  // "enhancement-stopped" mode back to "capturing" rather than leaving it stuck.
+  // Reachable without any double dispatch: this mode is entered by one pass reporting
+  // "expired" or "disabled-for-read-failures", but `enhancementDepth` is shared by every
+  // `EnhanceRunner` this session created — a capture's own passes and any standalone
+  // "Enhance now" / "Clean up this note" pass all report into this one reducer (see the
+  // "starting" self-loop comments above) — so a *different* pass's "finished" can land here
+  // right behind the one that set the mode. It floors the depth at zero and, because it does
+  // not look at the mode it started from, releases the sticky "enhancement-stopped" mode back
+  // to "capturing" rather than leaving it stuck.
   { from: "enhancement-stopped", event: "enhancement-finished", to: "capturing" },
   { from: "enhancement-stopped", event: "error", to: "error" },
   { from: "error", event: "capture-starting", to: "starting" },
   { from: "error", event: "capture-started", to: "capturing" },
   { from: "error", event: "enhancement-started", to: "enhancing" },
-  // Same unpairing as above: an error is cleared by a completed pass, and
-  // "enhancement-finished" clears it even when no pass this reducer saw start caused it.
+  // Same story as above: an error is cleared by a completed pass, and "enhancement-finished"
+  // clears it even when the pass that finished is a different one from whichever raised it.
   { from: "error", event: "enhancement-finished", to: "capturing" },
   { from: "error", event: "enhancement-stopped", to: "enhancement-stopped" },
 ]);
