@@ -623,20 +623,32 @@ export default class ShorthandPlugin extends Plugin {
           this.#render();
         });
         // Claims whatever the idle listener buffered for this session before this handler
-        // existed, and replays it through the exact same handler via `client.emit` — not a
-        // second ingestion path that could drift from the one above. Zero `await` since
-        // `adopted` was computed, by construction (nothing between here and there yields):
-        // an `await` inserted anywhere in that stretch would let a real record slip in
-        // ahead of this drain with nothing watching for it, reopening the hole
-        // `#idlePendingAttachSession` exists to close. Keep it that way if this code moves.
+        // existed. The claim itself stays unconditional on `attachToSession` alone: that is
+        // what keeps a 4,000-record array from outliving a refused or aborted attempt (see
+        // the `finally` in `onAppRecordingBegan`). The *replay*, though, is gated on
+        // `adopted`, not on `attachToSession` — the same distinction Important 1 above
+        // exists for, and confused a second time here would undo it: buffered records carry
+        // the *adopted* client's connection generation, and `TranscriptStore` keys a session
+        // by `${generation}:${session}`. Replaying them onto a *freshly built* fallback
+        // client (adoption failed — the idle follower emitted `settled` mid-setup) would
+        // file them under a generation `markConnectionEnded` will never close, sitting
+        // `active` forever; if the app then replays the still-live session onto the new
+        // connection, the same speech is written twice, under two different keys.
+        //
+        // Zero `await` since `adopted` was computed, by construction (nothing between here
+        // and there yields): an `await` inserted anywhere in that stretch would let a real
+        // record slip in ahead of this drain with nothing watching for it, reopening the
+        // hole `#idlePendingAttachSession` exists to close. Keep it that way if this moves.
         if (options.attachToSession !== undefined) {
           const pending = this.drainPendingAttachBuffer(options.attachToSession);
-          for (const buffered of pending.records) client.emit("event", buffered);
-          if (pending.droppedCount > 0) {
-            console.warn(
-              `[shorthand] Dropped ${pending.droppedCount} transcript record(s) for a followed `
-              + "recording: more arrived than this build buffers while the capture was starting up.",
-            );
+          if (adopted !== undefined) {
+            for (const buffered of pending.records) client.emit("event", buffered);
+            if (pending.droppedCount > 0) {
+              console.warn(
+                `[shorthand] Dropped ${pending.droppedCount} transcript record(s) for a followed `
+                + "recording: more arrived than this build buffers while the capture was starting up.",
+              );
+            }
           }
         }
         client.on("disconnect", ({ generation }) => {
@@ -741,8 +753,14 @@ export default class ShorthandPlugin extends Plugin {
           // running by this point: adoption happens, and clears `#idleFollower`, before the
           // runtime object exists. Nothing else owns that client in this branch, so it must
           // be stopped directly here, or it leaks — a detached child process outliving the
-          // plugin instance that spawned it, doing nothing, forever.
+          // plugin instance that spawned it, doing nothing, forever. And the same re-sync
+          // the `handedOff` branch above needs, needs it here too: `adoptIdleFollower()`
+          // already cleared `#idleFollower` and its retry timer, so nothing else is left to
+          // reschedule the idle follower — without this, "follow" would go silently dead
+          // until the next `saveSettings()` or a plugin reload, same symptom as the sibling
+          // branch. `#capture` is `undefined` here, so the sync does the right thing.
           adoptedFollower?.forceStop();
+          this.syncIdleFollower();
         }
       }
     } finally {
@@ -996,10 +1014,11 @@ export default class ShorthandPlugin extends Plugin {
    * starting up, and claims it — clearing the pending fields so the `finally` in
    * `onAppRecordingBegan` knows this attach reached adoption and does not also discard it.
    *
-   * Must be called with no `await` since the idle listener last ran (i.e. right after
-   * `adoptIdleFollower()`, before the capture's own listener is registered): an `await`
-   * inserted anywhere in between would let a real record slip in ahead of this call with
-   * nothing watching for it — the exact hole `#idlePendingAttachSession` exists to close.
+   * Must be called with no `await` since the idle listener last ran — i.e. right after the
+   * capture's own `client.on("event", …)` handler is registered, which the call site also
+   * replays this buffer through. An `await` inserted anywhere in that stretch would let a
+   * real record slip in ahead of this call with nothing watching for it — the exact hole
+   * `#idlePendingAttachSession` exists to close.
    */
   private drainPendingAttachBuffer(session: number): PendingAttachBuffer {
     if (this.#idlePendingAttachSession !== session) return EMPTY_PENDING_ATTACH_BUFFER;
