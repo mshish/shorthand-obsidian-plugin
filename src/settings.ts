@@ -1,4 +1,15 @@
-import { DEFAULT_CONFIG, MAX_GUIDANCE_CHARACTERS, parseTemplateSections, type Section } from "shorthand-core";
+import {
+  CLAUDE_EFFORT_LEVELS,
+  CODEX_REASONING_EFFORTS,
+  DEFAULT_CONFIG,
+  MAX_GUIDANCE_CHARACTERS,
+  parseTemplateSections,
+  type ClaudeAgentClientOptions,
+  type ClaudeEffort,
+  type CodexAgentClientOptions,
+  type CodexReasoningEffort,
+  type Section,
+} from "shorthand-core";
 
 /**
  * Every stored enhancement-backend identifier, and the one source the union below is derived
@@ -20,6 +31,9 @@ export type ShorthandPluginSettings = Readonly<{
   backend: EnhancementBackend;
   shorthandExecutable: string;
   claudeExecutable: string;
+  /** Blank values inherit the installed Claude CLI/SDK defaults. */
+  claudeModel: string;
+  claudeEffort: ClaudeEffort | "";
   /**
    * Path to the Codex program, or blank to let core find it. Blank is the working default, as it
    * is for `claudeExecutable`: `detectCodexExecutable` searches PATH and hands the SDK an
@@ -30,6 +44,9 @@ export type ShorthandPluginSettings = Readonly<{
    * here overrides that search, for a Codex off PATH or for naming one specific build.
    */
   codexExecutable: string;
+  /** Blank values inherit the installed Codex CLI defaults. */
+  codexModel: string;
+  codexEffort: CodexReasoningEffort | "";
   sidecarDirectory: string;
   minNewChars: number;
   minIntervalMs: number;
@@ -57,6 +74,8 @@ export type ShorthandPluginSettings = Readonly<{
    * to one that is idle. Snapshotted per capture, so it applies to the next one.
    */
   debugLogging: boolean;
+  /** Advanced opt-in; local Claude/Codex history is deleted when false. */
+  retainAgentSessionHistory: boolean;
   /** One heading per line. Empty means core's `DEFAULT_CONFIG.templateSections`, for the same reason. */
   templateSectionText: string;
 }>;
@@ -65,7 +84,11 @@ export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
   backend: "claude-agent-sdk",
   shorthandExecutable: "",
   claudeExecutable: "",
+  claudeModel: "",
+  claudeEffort: "",
   codexExecutable: "",
+  codexModel: "",
+  codexEffort: "",
   sidecarDirectory: DEFAULT_CONFIG.sidecarDirectory.replaceAll("\\", "/"),
   minNewChars: DEFAULT_CONFIG.thresholds.enhancementNewCharacters,
   minIntervalMs: DEFAULT_CONFIG.thresholds.enhancementIntervalMs,
@@ -73,6 +96,7 @@ export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
   controlShorthandRecording: true,
   writeTranscriptNote: false,
   debugLogging: false,
+  retainAgentSessionHistory: false,
   noteTakingGuidance: "",
   templateSectionText: "",
 });
@@ -85,7 +109,11 @@ export function normalizePluginSettings(input: unknown): ShorthandPluginSettings
       stringValue(value.shorthandExecutable, DEFAULT_PLUGIN_SETTINGS.shorthandExecutable),
     ),
     claudeExecutable: stringValue(value.claudeExecutable, DEFAULT_PLUGIN_SETTINGS.claudeExecutable),
+    claudeModel: stringValue(value.claudeModel, DEFAULT_PLUGIN_SETTINGS.claudeModel),
+    claudeEffort: enumValue(value.claudeEffort, CLAUDE_EFFORT_LEVELS, DEFAULT_PLUGIN_SETTINGS.claudeEffort),
     codexExecutable: stringValue(value.codexExecutable, DEFAULT_PLUGIN_SETTINGS.codexExecutable),
+    codexModel: stringValue(value.codexModel, DEFAULT_PLUGIN_SETTINGS.codexModel),
+    codexEffort: enumValue(value.codexEffort, CODEX_REASONING_EFFORTS, DEFAULT_PLUGIN_SETTINGS.codexEffort),
     sidecarDirectory: vaultRelativeDirectory(value.sidecarDirectory, DEFAULT_PLUGIN_SETTINGS.sidecarDirectory),
     minNewChars: finiteInteger(value.minNewChars, DEFAULT_PLUGIN_SETTINGS.minNewChars, 1),
     minIntervalMs: finiteInteger(value.minIntervalMs, DEFAULT_PLUGIN_SETTINGS.minIntervalMs, 0),
@@ -101,8 +129,33 @@ export function normalizePluginSettings(input: unknown): ShorthandPluginSettings
     debugLogging: typeof value.debugLogging === "boolean"
       ? value.debugLogging
       : DEFAULT_PLUGIN_SETTINGS.debugLogging,
+    retainAgentSessionHistory: typeof value.retainAgentSessionHistory === "boolean"
+      ? value.retainAgentSessionHistory
+      : DEFAULT_PLUGIN_SETTINGS.retainAgentSessionHistory,
     noteTakingGuidance: guidanceText(value.noteTakingGuidance, DEFAULT_PLUGIN_SETTINGS.noteTakingGuidance),
     templateSectionText: headingListText(value.templateSectionText, DEFAULT_PLUGIN_SETTINGS.templateSectionText),
+  };
+}
+
+/** Snapshot the provider choices that belong to one Claude client lifetime. */
+export function claudeAgentOptions(
+  settings: ShorthandPluginSettings,
+): ClaudeAgentClientOptions {
+  return {
+    ...(settings.claudeModel.length === 0 ? {} : { model: settings.claudeModel }),
+    ...(settings.claudeEffort === "" ? {} : { effort: settings.claudeEffort }),
+    retainSessionHistory: settings.retainAgentSessionHistory,
+  };
+}
+
+/** Snapshot the provider choices that belong to one Codex client lifetime. */
+export function codexAgentOptions(
+  settings: ShorthandPluginSettings,
+): Pick<CodexAgentClientOptions, "model" | "modelReasoningEffort" | "retainSessionHistory"> {
+  return {
+    ...(settings.codexModel.length === 0 ? {} : { model: settings.codexModel }),
+    ...(settings.codexEffort === "" ? {} : { modelReasoningEffort: settings.codexEffort }),
+    retainSessionHistory: settings.retainAgentSessionHistory,
   };
 }
 
@@ -230,6 +283,17 @@ function finiteInteger(value: unknown, fallback: number, minimum: number): numbe
 
 function stringValue(value: unknown, fallback: string): string {
   return typeof value === "string" ? value.trim() : fallback;
+}
+
+function enumValue<const Values extends readonly string[]>(
+  value: unknown,
+  values: Values,
+  fallback: Values[number] | "",
+): Values[number] | "" {
+  if (value === "") return "";
+  return typeof value === "string" && (values as readonly string[]).includes(value)
+    ? value as Values[number]
+    : fallback;
 }
 
 /**

@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_PLUGIN_SETTINGS,
+  claudeAgentOptions,
   choosePromptFieldMode,
+  codexAgentOptions,
   defaultTemplateSectionText,
   initialPromptFieldState,
   isEnhancementBackend,
@@ -44,7 +46,11 @@ describe("plugin settings normalization", () => {
       backend: "llm",
       shorthandExecutable: "  C:\\Apps\\shorthand.exe ",
       claudeExecutable: " C:\\Apps\\claude.exe ",
+      claudeModel: " claude-opus-4-6 ",
+      claudeEffort: "high",
       codexExecutable: "  C:\\Apps\\codex.exe\t",
+      codexModel: " gpt-5.4 ",
+      codexEffort: "xhigh",
       sidecarDirectory: "./Calls\\Transcripts/",
       minNewChars: 42.9,
       minIntervalMs: 0,
@@ -52,13 +58,18 @@ describe("plugin settings normalization", () => {
       controlShorthandRecording: false,
       writeTranscriptNote: true,
       debugLogging: true,
+      retainAgentSessionHistory: true,
       noteTakingGuidance: "  Write terse bullets.  ",
       templateSectionText: " Agenda \n\n Decisions ",
     })).toEqual({
       backend: "llm",
       shorthandExecutable: "C:\\Apps\\shorthand.exe",
       claudeExecutable: "C:\\Apps\\claude.exe",
+      claudeModel: "claude-opus-4-6",
+      claudeEffort: "high",
       codexExecutable: "C:\\Apps\\codex.exe",
+      codexModel: "gpt-5.4",
+      codexEffort: "xhigh",
       sidecarDirectory: "Calls/Transcripts",
       minNewChars: 42,
       minIntervalMs: 0,
@@ -66,6 +77,7 @@ describe("plugin settings normalization", () => {
       controlShorthandRecording: false,
       writeTranscriptNote: true,
       debugLogging: true,
+      retainAgentSessionHistory: true,
       noteTakingGuidance: "Write terse bullets.",
       templateSectionText: "Agenda \n\n Decisions",
     });
@@ -75,6 +87,46 @@ describe("plugin settings normalization", () => {
     expect(normalizePluginSettings({ backend: "llm" }).backend).toBe("llm");
     expect(normalizePluginSettings({ backend: "claude-agent-sdk" }).backend).toBe("claude-agent-sdk");
     expect(normalizePluginSettings({ backend: "codex" }).backend).toBe("codex");
+  });
+
+  test("agent model, effort, and history settings default without pinning provider choices", () => {
+    expect(normalizePluginSettings({})).toMatchObject({
+      claudeModel: "",
+      claudeEffort: "",
+      codexModel: "",
+      codexEffort: "",
+      retainAgentSessionHistory: false,
+    });
+  });
+
+  test("rejects unsupported effort values from persisted data", () => {
+    expect(normalizePluginSettings({ claudeEffort: "ultra", codexEffort: "maximum" }))
+      .toMatchObject({ claudeEffort: "", codexEffort: "" });
+    expect(normalizePluginSettings({ claudeEffort: "max", codexEffort: "ultra" }))
+      .toMatchObject({ claudeEffort: "max", codexEffort: "ultra" });
+  });
+
+  test("maps blank choices to provider defaults and filled choices to SDK options", () => {
+    expect(claudeAgentOptions(DEFAULT_PLUGIN_SETTINGS)).toEqual({ retainSessionHistory: false });
+    expect(codexAgentOptions(DEFAULT_PLUGIN_SETTINGS)).toEqual({ retainSessionHistory: false });
+
+    const settings = normalizePluginSettings({
+      claudeModel: "claude-opus-4-6",
+      claudeEffort: "high",
+      codexModel: "gpt-5.4",
+      codexEffort: "xhigh",
+      retainAgentSessionHistory: true,
+    });
+    expect(claudeAgentOptions(settings)).toEqual({
+      model: "claude-opus-4-6",
+      effort: "high",
+      retainSessionHistory: true,
+    });
+    expect(codexAgentOptions(settings)).toEqual({
+      model: "gpt-5.4",
+      modelReasoningEffort: "xhigh",
+      retainSessionHistory: true,
+    });
   });
 
   test("defaults an absent backend to Claude Agent SDK, preserving existing behavior", () => {
