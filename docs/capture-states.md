@@ -98,6 +98,20 @@ note finishing while this one is mid-setup must not be able to drop the mode out
 `restingMode` said, which was `idle`), fixed by having `restingMode` treat `starting`
 as outranking every other resting mode.
 
+That fix alone was not enough. `error` and `enhancement-stopped` set `mode`
+unconditionally — deliberately, so the user sees what went wrong or what stopped
+— and neither one consults `restingMode`, so an error or a stopped pass raised
+mid-setup still walked the *mode* away from `starting` (to `error` or
+`enhancement-stopped`), even though the reducer's own diagram still shows those
+as edges out of `starting`. `PluginUiState.starting` is a second, independent
+boolean carrying the same fact through that overwrite — the same pattern as
+`stopping` below, and for the same reason: `canStartCapture` gates on the flag,
+not the mode, so a sticky `error` (the plugin's most likely start-time failure —
+`main.ts` calls `fail()` for an unavailable enhancer *after* the runtime is
+already live, and on the Assisted Notes path *instead of* the deferred
+`capture-started`) can no longer reopen the window a second start would exploit.
+The mode still shows `error`; the flag silently keeps the door shut underneath it.
+
 **`capture-start-failed` is not `capture-stopped`.** Assisted Notes waits up to three
 seconds for Shorthand to acknowledge the recording it asked for, and may never get it.
 Walking that back as a stopped capture would tell the user a capture had run when none
@@ -106,8 +120,10 @@ ever did.
 **`enhancementDepth` is a count, not a flag.** "Enhance now" on a note the capture
 does not own builds a second `EnhanceRunner`, and both report into this reducer.
 Whichever finished first used to end the state while the other was still writing.
-The count only goes down for `enhancement-finished` (a pass that completed — the one
+The count goes down for `enhancement-finished` (a pass that completed — the one
 event that also clears a sticky `error`/`enhancement-stopped`, since a completed pass
-is the work the "no clear-error" rule is waiting for) and `enhancement-ended` (a pass
+is the work the "no clear-error" rule is waiting for), `enhancement-ended` (a pass
 that ended without completing — core's `error`, `skipped`, `requeued` and `timed-out`
-statuses, none of which fix anything, so none of which may clear a sticky mode).
+statuses, none of which fix anything, so none of which may clear a sticky mode), and
+`enhancement-stopped` itself (the pass that stopped releases its own slot on the same
+dispatch that raises the sticky mode).

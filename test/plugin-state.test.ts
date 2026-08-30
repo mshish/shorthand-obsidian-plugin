@@ -74,7 +74,7 @@ describe("plugin status state machine", () => {
     const capturing = reducePluginState(INITIAL_PLUGIN_STATE, { type: "capture-started" });
     const enhancing = reducePluginState(capturing, { type: "enhancement-started" });
     expect(reducePluginState(enhancing, { type: "enhancement-finished" }))
-      .toEqual({ mode: "capturing", captureActive: true, stopping: false, enhancementDepth: 0 });
+      .toEqual({ mode: "capturing", captureActive: true, stopping: false, starting: false, enhancementDepth: 0 });
   });
 
   test("keeps capture active when enhancement stops after the maximum capture window", () => {
@@ -85,6 +85,7 @@ describe("plugin status state machine", () => {
       mode: "enhancement-stopped",
       captureActive: true,
       stopping: false,
+      starting: false,
       enhancementDepth: 0,
       message: "Enhancement stopped after the maximum capture window",
     });
@@ -96,7 +97,7 @@ describe("plugin status state machine", () => {
     const capturing = reducePluginState(INITIAL_PLUGIN_STATE, { type: "capture-started" });
     const failed = reducePluginState(capturing, { type: "error", message: "locked" });
     expect(reducePluginState(failed, { type: "enhancement-finished" }))
-      .toEqual({ mode: "capturing", captureActive: true, stopping: false, enhancementDepth: 0 });
+      .toEqual({ mode: "capturing", captureActive: true, stopping: false, starting: false, enhancementDepth: 0 });
   });
 
   // Stopping is not instant: it can spend a control timeout plus the whole drain budget
@@ -105,9 +106,11 @@ describe("plugin status state machine", () => {
   test("a stop request is visible before the capture has finished stopping", () => {
     const capturing = reducePluginState(INITIAL_PLUGIN_STATE, { type: "capture-started" });
     const stopping = reducePluginState(capturing, { type: "capture-stopping" });
-    expect(stopping).toEqual({ mode: "stopping", captureActive: true, stopping: true, enhancementDepth: 0 });
+    expect(stopping).toEqual({
+      mode: "stopping", captureActive: true, stopping: true, starting: false, enhancementDepth: 0,
+    });
     expect(reducePluginState(stopping, { type: "capture-stopped" }))
-      .toEqual({ mode: "idle", captureActive: false, stopping: false, enhancementDepth: 0 });
+      .toEqual({ mode: "idle", captureActive: false, stopping: false, starting: false, enhancementDepth: 0 });
   });
 
   // The final link-tier pass runs inside the stop window, so its own started/finished
@@ -118,7 +121,7 @@ describe("plugin status state machine", () => {
     const enhancing = reducePluginState(stopping, { type: "enhancement-started" });
     expect(enhancing.stopping).toBe(true);
     expect(reducePluginState(enhancing, { type: "enhancement-finished" }))
-      .toEqual({ mode: "stopping", captureActive: true, stopping: true, enhancementDepth: 0 });
+      .toEqual({ mode: "stopping", captureActive: true, stopping: true, starting: false, enhancementDepth: 0 });
   });
 
   // The other half of "no dismiss event": the error is documented as staying visible until a
@@ -135,7 +138,9 @@ describe("plugin status state machine", () => {
     const starting = reducePluginState(failed, { type: "capture-starting" });
     expect(starting.message).toBeUndefined();
     const restarted = reducePluginState(starting, { type: "capture-started" });
-    expect(restarted).toEqual({ mode: "capturing", captureActive: true, stopping: false, enhancementDepth: 0 });
+    expect(restarted).toEqual({
+      mode: "capturing", captureActive: true, stopping: false, starting: false, enhancementDepth: 0,
+    });
     expect(restarted.message).toBeUndefined();
   });
 
@@ -144,11 +149,11 @@ describe("plugin status state machine", () => {
     const failed = reducePluginState(capturing, { type: "error", message: "locked" });
     const stopping = reducePluginState(failed, { type: "capture-stopping" });
     expect(stopping).toEqual({
-      mode: "error", captureActive: true, stopping: true, enhancementDepth: 0, message: "locked",
+      mode: "error", captureActive: true, stopping: true, starting: false, enhancementDepth: 0, message: "locked",
     });
     // And the message survives the capture ending, so the user still sees why it failed.
     expect(reducePluginState(stopping, { type: "capture-stopped" })).toEqual({
-      mode: "error", captureActive: false, stopping: false, enhancementDepth: 0, message: "locked",
+      mode: "error", captureActive: false, stopping: false, starting: false, enhancementDepth: 0, message: "locked",
     });
   });
 
@@ -170,14 +175,19 @@ describe("plugin status state machine", () => {
     // Reporting that as a stopped capture tells the user something ran when nothing did.
     const starting = reducePluginState(INITIAL_PLUGIN_STATE, { type: "capture-starting" });
     const failed = reducePluginState(starting, { type: "capture-start-failed" });
-    expect(failed).toEqual({ mode: "idle", captureActive: false, stopping: false, enhancementDepth: 0 });
+    expect(failed).toEqual({
+      mode: "idle", captureActive: false, stopping: false, starting: false, enhancementDepth: 0,
+    });
   });
 
   test("capturing is only claimed once the capture actually exists", () => {
     const starting = reducePluginState(INITIAL_PLUGIN_STATE, { type: "capture-starting" });
     expect(starting.captureActive).toBe(false);
+    expect(starting.starting).toBe(true);
     const started = reducePluginState(starting, { type: "capture-started" });
-    expect(started).toEqual({ mode: "capturing", captureActive: true, stopping: false, enhancementDepth: 0 });
+    expect(started).toEqual({
+      mode: "capturing", captureActive: true, stopping: false, starting: false, enhancementDepth: 0,
+    });
   });
 
   test("counts overlapping enhancement passes instead of toggling", () => {
@@ -270,9 +280,47 @@ describe("plugin status state machine", () => {
     const flagged = reducePluginState(starting, { type: "error", message: "enhancer unavailable" });
     const started = reducePluginState(flagged, { type: "capture-started" });
     expect(started).toEqual({
-      mode: "capturing", captureActive: true, stopping: false, enhancementDepth: 0,
+      mode: "capturing", captureActive: true, stopping: false, starting: false, enhancementDepth: 0,
       message: "enhancer unavailable",
     });
+  });
+
+  test("an error raised mid-setup cannot release the starting guard either", () => {
+    // `error`'s case sets `mode` unconditionally — deliberately, so the user sees what
+    // went wrong — and never consults `restingMode`, so round 1's fix (which only taught
+    // `restingMode` about `starting`) cannot reach it. This is the more reachable sibling of
+    // the two "cannot release the starting guard" tests above: `main.ts` calls `fail()` for
+    // an unavailable enhancer *after* `#capture` is assigned and, on the Assisted Notes path,
+    // *instead of* the deferred `capture-started` — so this is not a rare cross-note timing
+    // coincidence, it is the plugin's most likely start-time failure landing squarely inside
+    // the guarded window.
+    const starting = reducePluginState(INITIAL_PLUGIN_STATE, { type: "capture-starting" });
+    const flagged = reducePluginState(starting, { type: "error", message: "enhancer unavailable" });
+    expect(flagged.mode).toBe("error");
+    expect(canStartCapture(flagged)).toBe(false);
+  });
+
+  test("enhancement-stopped mid-setup cannot release the starting guard either", () => {
+    const starting = reducePluginState(INITIAL_PLUGIN_STATE, { type: "capture-starting" });
+    const stopped = reducePluginState(starting, { type: "enhancement-stopped", message: "out of time" });
+    expect(stopped.mode).toBe("enhancement-stopped");
+    expect(canStartCapture(stopped)).toBe(false);
+  });
+
+  test("the guard still releases once a setup error actually ends the attempt", () => {
+    // The flag is not one-way: this is the exact failure the try/finally in
+    // `startCaptureOnActiveNote` exists to prevent, now routed through a second mechanism.
+    // A sticky error must block a second start for as long as *this* attempt is still live,
+    // and no longer than that.
+    const starting = reducePluginState(INITIAL_PLUGIN_STATE, { type: "capture-starting" });
+    const flagged = reducePluginState(starting, { type: "error", message: "enhancer unavailable" });
+    expect(canStartCapture(flagged)).toBe(false);
+    const failed = reducePluginState(flagged, { type: "capture-start-failed" });
+    expect(canStartCapture(failed)).toBe(true);
+    // The sticky error itself is untouched by the flag clearing — it is still the mode's
+    // job to show the user what went wrong.
+    expect(failed.mode).toBe("error");
+    expect(failed.message).toBe("enhancer unavailable");
   });
 
   // Two directions, and the second is the one that matters. Checking only that each
