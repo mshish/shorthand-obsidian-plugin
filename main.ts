@@ -97,7 +97,7 @@ import {
   type HelloInfo,
   type RecorderPhase,
 } from "./src/recorder.js";
-import { formatElapsed } from "./src/elapsed.js";
+import { describeStatus } from "./src/status-text.js";
 import { createRequestUrlFetch } from "./src/request-url-fetch.js";
 import { deleteLlmCredentials, writeLlmCredentials } from "./src/llm-credentials-writer.js";
 import { LlmProfileCommitQueue } from "./src/llm-profile-commit-queue.js";
@@ -228,6 +228,14 @@ export default class ShorthandPlugin extends Plugin {
   async onload(): Promise<void> {
     this.settings = normalizePluginSettings(await this.loadData());
     this.#statusBar = this.addStatusBarItem();
+    // Clickable, and stop-only. The item is hidden while idle (see describeStatus),
+    // so there is never a moment where a click could mean "start" — starting lives on
+    // the ribbon icon and in the side panel.
+    this.#statusBar.addClass("mod-clickable");
+    this.registerDomEvent(this.#statusBar, "click", () => {
+      if (this.#capture === undefined) return;
+      void this.stopCapture().catch((error: unknown) => this.fail(errorMessage(error)));
+    });
     this.#renderStatus();
     // The elapsed-time display is otherwise only refreshed from a transcript-delta handler
     // and from dispatch(), so between utterances it would visibly freeze. A ticking interval
@@ -1123,22 +1131,21 @@ export default class ShorthandPlugin extends Plugin {
 
   #renderStatus(): void {
     if (this.#statusBar === undefined) return;
-    // Show progress toward the next tick. Without this the plugin looks broken while it is
-    // simply below the character gate — the exact confusion this feature was added to fix.
-    const pending = this.#capture?.enhancer?.state.pendingCharacters;
-    const progress = pending === undefined
-      ? ""
-      : ` · ${pending}/${this.settings.minNewChars} chars`;
-    const elapsed = this.#capture === undefined
-      ? ""
-      : ` · ${formatElapsed(Date.now() - this.#capture.startedAt)}`;
-    this.#statusBar.setText(`Shorthand: ${this.#state.mode}${elapsed}${progress}`);
-    this.#statusBar.setAttribute(
-      "title",
-      this.#state.message ?? (pending === undefined
-        ? "Shorthand status"
-        : `${pending} of ${this.settings.minNewChars} characters toward the next enhancement pass. "Shorthand: Enhance now" runs one immediately.`),
-    );
+    const display = describeStatus({
+      state: this.#state,
+      elapsedMs: this.#capture === undefined ? undefined : Date.now() - this.#capture.startedAt,
+      pendingCharacters: this.#capture?.enhancer?.state.pendingCharacters,
+      minNewChars: this.settings.minNewChars,
+    });
+    // `hide()`/`show()` rather than clearing the text: an item holding "" still
+    // occupies its separator, which is the space this change exists to reclaim.
+    if (!display.visible) {
+      this.#statusBar.hide();
+      return;
+    }
+    this.#statusBar.show();
+    this.#statusBar.setText(display.text);
+    this.#statusBar.setAttribute("title", display.tooltip);
   }
 }
 
