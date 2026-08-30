@@ -46,6 +46,16 @@ export type PluginUiEvent =
   | Readonly<{ type: "capture-stopped" }>
   | Readonly<{ type: "enhancement-started" }>
   | Readonly<{ type: "enhancement-finished" }>
+  /**
+   * A pass ended without completing — core reported `error`, `skipped`, `requeued` or
+   * `timed-out`. Distinct from `enhancement-finished`: that event both releases a slot
+   * *and* clears a sticky `error`/`enhancement-stopped`, because a completed pass is the
+   * work the "no clear-error" rule below is waiting for. A pass that did not complete
+   * earns neither — it must still release its slot (core's terminal statuses were going
+   * undecremented, leaving `enhancementDepth` positive forever once one fired), but it
+   * must not wipe a sticky mode it did nothing to fix.
+   */
+  | Readonly<{ type: "enhancement-ended" }>
   | Readonly<{ type: "enhancement-stopped"; message: string }>
   // There is deliberately no "clear-error": an error stays visible until the work that
   // could have fixed it succeeds (a completed enhancement pass) or a new capture starts.
@@ -92,7 +102,25 @@ export function reducePluginState(state: PluginUiState, event: PluginUiEvent): P
         ? { mode: "idle", captureActive: false, stopping: false, enhancementDepth: 0 }
         : { ...state, captureActive: false, stopping: false };
     case "capture-started":
-      return { mode: "capturing", captureActive: true, stopping: false, enhancementDepth: 0 };
+      // Not gated on `state.mode`: only `error` and `enhancement-stopped` ever set
+      // `message`, and both unconditionally overwrite `mode` away from `starting` — so a
+      // `state.mode === "starting"` check here could never fire, on any input. What makes
+      // preserving the message safe instead is `capture-starting` above: its case is a
+      // literal reset that unconditionally drops any message left over from a *previous*
+      // capture the instant a new one begins. So whatever is still present by the time
+      // this dispatches can only have arisen during *this* start's own setup — enhancer
+      // unavailable, or a connection error before Assisted Notes' acknowledgement landed
+      // (up to `START_ACKNOWLEDGEMENT_MS` later) — never a stale leftover, and it must
+      // survive onto the capture it belongs to rather than being wiped by the very dispatch
+      // that confirms it. `exactOptionalPropertyTypes` is why this is a conditional spread
+      // rather than `message: state.message`, which would assign `undefined` explicitly.
+      return {
+        mode: "capturing",
+        captureActive: true,
+        stopping: false,
+        enhancementDepth: 0,
+        ...(state.message !== undefined ? { message: state.message } : {}),
+      };
     case "capture-stopping":
       return state.mode === "error" || state.mode === "enhancement-stopped"
         ? { ...state, stopping: true }
@@ -125,6 +153,16 @@ export function reducePluginState(state: PluginUiState, event: PluginUiEvent): P
         enhancementDepth: depth,
       };
     }
+    case "enhancement-ended": {
+      // A pass that did not complete. It releases its slot but earns nothing: unlike
+      // `enhancement-finished` it must not clear a sticky error, because no work that
+      // could have fixed the error actually succeeded.
+      const depth = Math.max(0, state.enhancementDepth - 1);
+      const settled = state.mode === "error" || state.mode === "enhancement-stopped"
+        ? state.mode
+        : restingMode(state);
+      return { ...state, mode: depth > 0 ? "enhancing" : settled, enhancementDepth: depth };
+    }
     case "enhancement-stopped":
       return {
         mode: "enhancement-stopped",
@@ -147,6 +185,11 @@ export function reducePluginState(state: PluginUiState, event: PluginUiEvent): P
 
 /** Where the status returns to once a transient mode ends. */
 function restingMode(state: PluginUiState): PluginMode {
+  // `starting` outranks the rest: a capture being set up is not a resting state, and a
+  // pass belonging to some *other* note must not be able to end it. Dropping out of
+  // `starting` here is dropping the only guard against a second start — `canStartCapture`
+  // is now the sole gate, the old `#capture` test having gone.
+  if (state.mode === "starting") return "starting";
   if (state.stopping) return "stopping";
   return state.captureActive ? "capturing" : "idle";
 }
@@ -179,10 +222,17 @@ export const STATE_TRANSITIONS: readonly Readonly<{
   { from: "starting", event: "capture-stopping", to: "stopping" },
   { from: "starting", event: "capture-stopped", to: "idle" },
   { from: "starting", event: "enhancement-started", to: "enhancing" },
-  // A finish or stop with nothing running still resolves to a mode: "finished" rests
-  // wherever `restingMode` says (idle, since `starting` carries no active capture), and
-  // "stopped" always lands on its own sticky mode regardless of what was in flight.
-  { from: "starting", event: "enhancement-finished", to: "idle" },
+  // Self-loops, not omissions: a pass belonging to some *other* note reports into this same
+  // reducer (every `EnhanceRunner`, capture-owned or standalone, shares one `onStatus`), and
+  // without `restingMode`'s `starting` special case both of these used to drop to `idle`,
+  // reopening the guard `capture-starting` exists to hold shut. Listed explicitly so the
+  // diagram shows the guard surviving rather than an edge quietly not being drawn.
+  { from: "starting", event: "enhancement-finished", to: "starting" },
+  { from: "starting", event: "enhancement-ended", to: "starting" },
+  // "Stopped" always lands on its own sticky mode regardless of what was in flight, since
+  // its case sets `mode: "enhancement-stopped"` unconditionally rather than consulting
+  // `restingMode` — unlike `enhancement-finished`/`enhancement-ended`, this one is not
+  // guarded, and a standalone pass can still walk `starting` forward here.
   { from: "starting", event: "enhancement-stopped", to: "enhancement-stopped" },
   { from: "starting", event: "error", to: "error" },
   { from: "capturing", event: "capture-stopping", to: "stopping" },
@@ -198,6 +248,10 @@ export const STATE_TRANSITIONS: readonly Readonly<{
   { from: "stopping", event: "enhancement-stopped", to: "enhancement-stopped" },
   { from: "stopping", event: "error", to: "error" },
   { from: "enhancing", event: "enhancement-finished", to: "capturing" },
+  // Unlike "finished", "ended" checks the incoming mode for a sticky error/enhancement-
+  // stopped before falling back to `restingMode` — but `enhancing` is neither, so the two
+  // agree here and both land on "capturing".
+  { from: "enhancing", event: "enhancement-ended", to: "capturing" },
   { from: "enhancing", event: "enhancement-stopped", to: "enhancement-stopped" },
   { from: "enhancing", event: "capture-starting", to: "starting" },
   { from: "enhancing", event: "capture-started", to: "capturing" },

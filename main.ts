@@ -570,6 +570,14 @@ export default class ShorthandPlugin extends Plugin {
           // proof instead of firing unconditionally.
           void recorder.start(attached).then(async (outcome) => {
             if (outcome === "started") {
+              // `recorder.start()`'s own race can settle "ack" — and so resolve `"started"`
+              // here — even after `requestStop()` flipped its stop flag, if the acknowledgement
+              // and the stop request land in the same microtask window; see `#runStart`'s
+              // acknowledgement race in recorder.ts. That would reset `stopping: false` while a
+              // stop is tearing this same runtime down. Left alone deliberately: the ordinary
+              // path (`requestStop()` synchronous with the call site) never races this way, and
+              // whichever order wins, `finishRuntime` dispatches `capture-stopped` right behind
+              // it and the mode self-heals.
               this.dispatch({ type: "capture-started" });
               new Notice(`Shorthand capture started: ${file.path}`);
               return;
@@ -1025,15 +1033,26 @@ export default class ShorthandPlugin extends Plugin {
         return;
       case "error":
       case "skipped":
+        // Dispatched before `fail()`, not after: `fail()` dispatches its own sticky
+        // `error`, and this pass's slot has to be released without disturbing it.
+        // `enhancement-finished` would also release the slot, but it additionally clears
+        // a sticky `error`/`enhancement-stopped` via `restingMode` — the reward for a pass
+        // that actually completed. This pass didn't, so nothing here may fix what `fail()`
+        // is about to report as broken.
+        this.dispatch({ type: "enhancement-ended" });
         this.fail(status.message);
         return;
       case "requeued":
-        // Only a target that asked for a backoff is actionable. A plain re-queue means
-        // the note kept changing under the writer — i.e. the user is typing during the
-        // meeting — which self-heals on the next pass and must stay silent.
+        // `enhancement-ended` fires on both branches below, including the silent one: a
+        // plain re-queue (no `retryAfterMs`) is the routine case — the note kept changing
+        // under the writer, i.e. the user typing during the meeting — and it still has to
+        // release the slot `started` claimed, or the depth never returns to zero and the
+        // status bar reads "· writing" for the rest of the capture. Only a target that
+        // asked for a backoff is actionable as a `Notice`.
         //
-        // Writing through Obsidian, the note itself is never the busy party, so this
-        // reports the delay without advising a remedy that would not apply.
+        // Writing through Obsidian, the note itself is never the busy party, so the
+        // `Notice` reports the delay without advising a remedy that would not apply.
+        this.dispatch({ type: "enhancement-ended" });
         if (status.retryAfterMs !== undefined) {
           this.fail(`${status.message} Shorthand will retry on the next pass.`);
         }
@@ -1041,6 +1060,8 @@ export default class ShorthandPlugin extends Plugin {
       case "timed-out":
         // Self-healing like a re-queue: the transcript is kept and retried. Only the
         // eventual drop at the re-queue limit loses data, and that arrives as `error`.
+        // Still releases the slot `started` claimed — see the `requeued` comment above.
+        this.dispatch({ type: "enhancement-ended" });
         return;
       case "declined":
         // Fires whenever a gate holds, which is most stream events. Never user-facing.

@@ -15,7 +15,8 @@ const ALL_MODES = [
 
 const ALL_EVENT_TYPES = [
   "capture-starting", "capture-start-failed", "capture-started", "capture-stopping",
-  "capture-stopped", "enhancement-started", "enhancement-finished", "enhancement-stopped", "error",
+  "capture-stopped", "enhancement-started", "enhancement-finished", "enhancement-ended",
+  "enhancement-stopped", "error",
 ] as const satisfies readonly PluginUiEvent["type"][];
 
 /** A state parked in `mode`, built only through the reducer so it is always reachable. */
@@ -38,15 +39,33 @@ function stateInMode(mode: PluginMode): PluginUiState {
   }
 }
 
-/** A representative event of each type, for driving the transition table. */
+/**
+ * A representative event of each type, for driving the transition table.
+ *
+ * Exhaustive by hand, like `stateInMode` above and for the same reason: a `default` branch
+ * would compile for any new payload-less event and let it silently miss `ALL_EVENT_TYPES`,
+ * which is exactly the vacuous-pass failure the "table lists every transition" test exists
+ * to catch, just on the event axis instead of the mode axis.
+ */
 function eventOfType(type: PluginUiEvent["type"]): PluginUiEvent {
   switch (type) {
+    case "capture-starting":
+    case "capture-start-failed":
+    case "capture-started":
+    case "capture-stopping":
+    case "capture-stopped":
+    case "enhancement-started":
+    case "enhancement-finished":
+    case "enhancement-ended":
+      return { type };
     case "enhancement-stopped":
       return { type, message: "out of time" };
     case "error":
       return { type, message: "boom" };
-    default:
-      return { type };
+    default: {
+      const unhandled: never = type;
+      throw new Error(`Unhandled event type: ${JSON.stringify(unhandled)}`);
+    }
   }
 }
 
@@ -103,13 +122,19 @@ describe("plugin status state machine", () => {
   });
 
   // The other half of "no dismiss event": the error is documented as staying visible until a
-  // completed pass or a *new capture*. Every other test drives `capture-started` from the
-  // initial state, which carries no message, so a `capture-started` that retained one was
-  // indistinguishable from one that cleared it.
+  // completed pass or a *new capture*. The clearing happens at `capture-starting`, not at
+  // `capture-started` — its case is a literal reset that drops any message unconditionally
+  // — because every real start dispatches `capture-starting` first, synchronously, before
+  // `capture-started` can ever follow. Routed through both here to match that real sequence:
+  // a version of this test that skipped straight to `capture-started` would demonstrate
+  // nothing, since `capture-started` alone cannot tell a stale message from a fresh one (see
+  // its case comment) and only preserves what is still there when it fires.
   test("starting a new capture clears an error left over from the last one", () => {
     const failed = reducePluginState(INITIAL_PLUGIN_STATE, { type: "error", message: "locked" });
     expect(failed.message).toBe("locked");
-    const restarted = reducePluginState(failed, { type: "capture-started" });
+    const starting = reducePluginState(failed, { type: "capture-starting" });
+    expect(starting.message).toBeUndefined();
+    const restarted = reducePluginState(starting, { type: "capture-started" });
     expect(restarted).toEqual({ mode: "capturing", captureActive: true, stopping: false, enhancementDepth: 0 });
     expect(restarted.message).toBeUndefined();
   });
@@ -183,6 +208,71 @@ describe("plugin status state machine", () => {
     const stopped = reducePluginState(one, { type: "enhancement-stopped", message: "out of time" });
     expect(stopped.enhancementDepth).toBe(0);
     expect(stopped.mode).toBe("enhancement-stopped");
+  });
+
+  test("a pass belonging to some other note cannot release the starting guard", () => {
+    // `enhancement-finished` never reads `state.mode` — it floors the depth and rests
+    // wherever `restingMode` says. "Enhance now" on a note the capture does not own builds
+    // its own `EnhanceRunner`, wired to the same `onEnhanceStatus`, so its "finished" reaches
+    // this reducer too. Without `restingMode`'s own `starting` guard, that unrelated pass
+    // finishing while a second capture was mid-setup dropped the mode to `idle` and reopened
+    // exactly the re-entrancy window `capture-starting` exists to hold shut.
+    const starting = reducePluginState(INITIAL_PLUGIN_STATE, { type: "capture-starting" });
+    const stillStarting = reducePluginState(starting, { type: "enhancement-finished" });
+    expect(stillStarting.mode).toBe("starting");
+    expect(canStartCapture(stillStarting)).toBe(false);
+  });
+
+  test("a pass that ends without completing also cannot release the starting guard", () => {
+    const starting = reducePluginState(INITIAL_PLUGIN_STATE, { type: "capture-starting" });
+    const stillStarting = reducePluginState(starting, { type: "enhancement-ended" });
+    expect(stillStarting.mode).toBe("starting");
+    expect(canStartCapture(stillStarting)).toBe(false);
+  });
+
+  test("started, error, started, finished lands on capturing — not stuck in enhancing", () => {
+    // Mirrors `onEnhanceStatus`'s fixed dispatch order for a pass that ends in core's
+    // `error` status: it now fires `enhancement-ended` (releasing the slot) *before*
+    // `fail()` (which dispatches the sticky `error`) — see the ordering comment there.
+    // Before this fix, `onEnhanceStatus` dispatched nothing at all for a pass ending in
+    // `error`, `skipped`, `requeued` or `timed-out`, so the slot the first pass held was
+    // never released: a second pass's own "finished" only brought the count from 2 down to
+    // 1, and the mode stayed pinned on "enhancing" for the rest of the capture — the old
+    // boolean did not have this failure, only the counter does.
+    const capturing = reducePluginState(INITIAL_PLUGIN_STATE, { type: "capture-started" });
+    const started = reducePluginState(capturing, { type: "enhancement-started" });
+    const ended = reducePluginState(started, { type: "enhancement-ended" });
+    const flagged = reducePluginState(ended, { type: "error", message: "connection reset" });
+    const startedAgain = reducePluginState(flagged, { type: "enhancement-started" });
+    const finished = reducePluginState(startedAgain, { type: "enhancement-finished" });
+    expect(finished.mode).toBe("capturing");
+    expect(finished.enhancementDepth).toBe(0);
+  });
+
+  test("an ended pass does not clear a sticky error the way a finished one does", () => {
+    // The pass is still the one running when the error landed — no intervening "started" —
+    // so when it too ends without completing, the error it did nothing to fix must stand.
+    const capturing = reducePluginState(INITIAL_PLUGIN_STATE, { type: "capture-started" });
+    const started = reducePluginState(capturing, { type: "enhancement-started" });
+    const flagged = reducePluginState(started, { type: "error", message: "connection reset" });
+    const stillFlagged = reducePluginState(flagged, { type: "enhancement-ended" });
+    expect(stillFlagged.mode).toBe("error");
+    expect(stillFlagged.message).toBe("connection reset");
+    expect(stillFlagged.enhancementDepth).toBe(0);
+  });
+
+  test("a start that raised its own error keeps it once Assisted Notes confirms the capture", () => {
+    // The Assisted Notes acknowledgement can land up to `START_ACKNOWLEDGEMENT_MS` after
+    // `#capture` is assigned, so an error raised in that window (enhancer unavailable, a
+    // connection error) predates the `capture-started` dispatch that confirms the runtime.
+    // `capture-started` returning a fresh object with no `message` erased it.
+    const starting = reducePluginState(INITIAL_PLUGIN_STATE, { type: "capture-starting" });
+    const flagged = reducePluginState(starting, { type: "error", message: "enhancer unavailable" });
+    const started = reducePluginState(flagged, { type: "capture-started" });
+    expect(started).toEqual({
+      mode: "capturing", captureActive: true, stopping: false, enhancementDepth: 0,
+      message: "enhancer unavailable",
+    });
   });
 
   // Two directions, and the second is the one that matters. Checking only that each
