@@ -973,7 +973,7 @@ export default class ShorthandPlugin extends Plugin {
     const decision = decideFollow({
       mode,
       state: this.#state,
-      hasActiveNote: this.hasActiveMarkdownFile(),
+      hasActiveNote: this.hasActiveNote(),
       followEnabled: this.settings.followAppRecording,
       appAdvertisesMode: this.#idleAppAdvertisesMode,
     });
@@ -1421,9 +1421,19 @@ export default class ShorthandPlugin extends Plugin {
     }
   }
 
+  /**
+   * `getActiveFile()`, not `getActiveViewOfType(MarkdownView)?.file`: this resolves the file
+   * a start actually captures into, and a start can be triggered from the panel — a sidebar
+   * view, which becomes the active *leaf* the moment it is revealed. Resolving through the
+   * active leaf would then answer "no note is open" while a note plainly sits in the main
+   * pane. `getActiveFile()` tracks the active file independent of which leaf has focus, which
+   * is exactly what a panel-initiated (or follow-initiated) start needs. `openEditor()`
+   * already searches all markdown leaves by file rather than by view, so nothing downstream
+   * of this depends on the active view either.
+   */
   private activeMarkdownFile(): TFile | undefined {
-    const file = this.app.workspace.getActiveViewOfType(MarkdownView)?.file;
-    if (file !== null && file !== undefined) return file;
+    const file = this.app.workspace.getActiveFile();
+    if (file !== null && file.extension === "md") return file;
     new Notice("Open a Markdown note before running Shorthand.");
     return undefined;
   }
@@ -1491,6 +1501,22 @@ export default class ShorthandPlugin extends Plugin {
   private hasActiveMarkdownFile(): boolean {
     const file = this.app.workspace.getActiveViewOfType(MarkdownView)?.file;
     return file !== null && file !== undefined;
+  }
+
+  /**
+   * The panel and follow predicate. Silent, like `hasActiveMarkdownFile`, but built on
+   * `getActiveFile()` rather than the active view: both callers ask this from a context that
+   * is never the note's own leaf — the panel is a sidebar view that becomes the active leaf
+   * the instant it is revealed, and `onAppRecordingBegan` fires from a stream event, not a
+   * user action on any leaf — so resolving through the active leaf would answer the wrong
+   * question (see `activeMarkdownFile`'s comment). `hasActiveMarkdownFile` stays as it is for
+   * the command palette: opening the palette does not move the active leaf, so it asks the
+   * right question already, and churning a predicate that is correct and well-commented would
+   * only cost review time.
+   */
+  private hasActiveNote(): boolean {
+    const file = this.app.workspace.getActiveFile();
+    return file !== null && file.extension === "md";
   }
 
   private vaultRoot(): string | undefined {
