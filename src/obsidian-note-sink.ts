@@ -181,7 +181,7 @@ export class ObsidianNoteSink implements NoteSink {
     if (update.status === "error") return { status: "error", error: update.error };
     if (update.status === "stale") return { status: "stale" };
     if (update.status === "written") {
-      editor.replaceRange(update.edit.replacement, editor.offsetToPos(update.edit.from), editor.offsetToPos(update.edit.to));
+      applyPreservingViewport(editor, update.edit);
       await open.save();
     }
     return { status: update.status, revision: update.revision };
@@ -195,7 +195,7 @@ export class ObsidianNoteSink implements NoteSink {
     const scaffold = scaffoldMarkdownDocument(editor.getValue(), sections);
     if (scaffold.status === "error") return { status: "error", message: scaffold.error.message };
     if (scaffold.status === "written") {
-      editor.replaceRange(scaffold.edit.replacement, editor.offsetToPos(scaffold.edit.from), editor.offsetToPos(scaffold.edit.to));
+      applyPreservingViewport(editor, scaffold.edit);
       await open.save();
     }
     return { status: scaffold.status };
@@ -208,6 +208,34 @@ export class ObsidianNoteSink implements NoteSink {
     return this.#api.vault.getFileByPath(this.#file.path) === this.#file ? this.#file : undefined;
   }
 
+}
+
+/**
+ * Apply an owned-range edit without moving the reader.
+ *
+ * The person whose note this is did not ask for this edit and is usually reading
+ * the note while a meeting runs. Replacing the whole AI block re-measures every
+ * heading and list inside it, and the editor does not reliably keep its scroll
+ * anchor across a change that size — the note jumped to the top on every
+ * enhancement pass, roughly twice a minute, which is what made live capture
+ * unusable to watch. Nothing else restores the viewport: `replaceRange` maps the
+ * selection but says nothing about scroll.
+ *
+ * Capture and restore are deliberately synchronous with no `await` between them.
+ * An `await` there would open a window in which the user scrolls on their own and
+ * is then yanked back to where they were before — a worse bug than this one, and
+ * the reason the restore does not also span the `save()` that follows.
+ *
+ * The selection is left alone on purpose: the editor already maps it through the
+ * change, and restoring a captured copy would fight a user typing during the write.
+ */
+function applyPreservingViewport(
+  editor: Editor,
+  edit: Readonly<{ from: number; to: number; replacement: string }>,
+): void {
+  const scroll = editor.getScrollInfo();
+  editor.replaceRange(edit.replacement, editor.offsetToPos(edit.from), editor.offsetToPos(edit.to));
+  editor.scrollTo(scroll.left, scroll.top);
 }
 
 function missingTarget(): Readonly<{ ok: false; error: ReturnType<typeof sinkError> }> {
