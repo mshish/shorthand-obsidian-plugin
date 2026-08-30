@@ -17,7 +17,7 @@ jobs:
       # Both runtimes are required: the toolchain and lockfile are npm's, while the test
       # script is `bun test`.
       - name: Use Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
 
