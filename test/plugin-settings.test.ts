@@ -41,6 +41,31 @@ describe("plugin settings normalization", () => {
     }
   });
 
+  test("does not follow the app's recordings until asked", () => {
+    // It holds a child process open for the life of the plugin.
+    expect(DEFAULT_PLUGIN_SETTINGS.followAppRecording).toBe(false);
+    expect(normalizePluginSettings({}).followAppRecording).toBe(false);
+    expect(normalizePluginSettings({ followAppRecording: true }).followAppRecording).toBe(true);
+    expect(normalizePluginSettings({ followAppRecording: "yes" }).followAppRecording).toBe(false);
+  });
+
+  test("scaffolds automatically by default", () => {
+    expect(DEFAULT_PLUGIN_SETTINGS.autoScaffold).toBe(true);
+    expect(normalizePluginSettings({}).autoScaffold).toBe(true);
+  });
+
+  test("respects an explicit opt-out", () => {
+    expect(normalizePluginSettings({ autoScaffold: false }).autoScaffold).toBe(false);
+  });
+
+  test("falls back to the default for a malformed value", () => {
+    // normalizePluginSettings is the trust boundary for data.json, which is
+    // user-editable and may be hand-written. Every key validates and falls back.
+    expect(normalizePluginSettings({ autoScaffold: "yes" }).autoScaffold).toBe(true);
+    expect(normalizePluginSettings({ autoScaffold: null }).autoScaffold).toBe(true);
+    expect(normalizePluginSettings({ autoScaffold: 0 }).autoScaffold).toBe(true);
+  });
+
   test("normalizes valid persisted values", () => {
     expect(normalizePluginSettings({
       backend: "llm",
@@ -57,10 +82,12 @@ describe("plugin settings normalization", () => {
       enableLiveEnhancement: false,
       controlShorthandRecording: false,
       writeTranscriptNote: true,
+      autoScaffold: false,
       debugLogging: true,
       retainAgentSessionHistory: true,
       noteTakingGuidance: "  Write terse bullets.  ",
       templateSectionText: " Agenda \n\n Decisions ",
+      followAppRecording: true,
     })).toEqual({
       backend: "llm",
       shorthandExecutable: "C:\\Apps\\shorthand.exe",
@@ -76,10 +103,12 @@ describe("plugin settings normalization", () => {
       enableLiveEnhancement: false,
       controlShorthandRecording: false,
       writeTranscriptNote: true,
+      autoScaffold: false,
       debugLogging: true,
       retainAgentSessionHistory: true,
       noteTakingGuidance: "Write terse bullets.",
       templateSectionText: "Agenda \n\n Decisions",
+      followAppRecording: true,
     });
   });
 

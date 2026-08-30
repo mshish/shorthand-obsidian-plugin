@@ -14,7 +14,7 @@ describe("ObsidianNoteSink", () => {
     const vault = memoryVault(original);
     const file = vault.add("Meeting.md");
     const open = openEditor(original);
-    const sink = new ObsidianNoteSink({ file, api: vault.api(() => open) });
+    const sink = new ObsidianNoteSink({ file, api: vault.api(() => open), scheduleFrame: frameRunner(open) });
 
     const before = await sink.read();
     expect(before.ok).toBe(true);
@@ -26,6 +26,47 @@ describe("ObsidianNoteSink", () => {
     // Without the save, a later background write would read a file still holding
     // the old block and mistake our own edit for someone else's.
     expect(open.saves).toBe(1);
+  });
+
+  test("leaves the reader where they were when it rewrites the block", async () => {
+    // The note jumped to the top on every enhancement pass — roughly twice a minute
+    // during a meeting — because replacing the whole AI block re-measures everything
+    // inside it and the editor does not keep its scroll anchor across a change that
+    // size. The person reading the note did not ask for the edit and must not be moved.
+    const vault = memoryVault(original);
+    const file = vault.add("Meeting.md");
+    const open = openEditor(original, { top: 420, left: 0 });
+    const sink = new ObsidianNoteSink({ file, api: vault.api(() => open), scheduleFrame: frameRunner(open) });
+
+    const before = await sink.read();
+    expect(before.ok).toBe(true);
+    if (!before.ok) return;
+    expect(await sink.write(revised, before.value.revision)).toMatchObject({ status: "written" });
+
+    // Twice, and both matter. CodeMirror measures layout in a frame it schedules
+    // itself, so a synchronous-only restore lands before that phase and is
+    // overwritten by it; a scheduled-only restore leaves the jump visible for one
+    // frame. See applyPreservingViewport.
+    expect(open.scrollTos).toEqual([{ top: 420, left: 0 }, { top: 420, left: 0 }]);
+    expect(open.scrolledAfterFrame).toBe(true);
+    // Restoring before the edit would be a no-op dressed as a fix.
+    expect(open.scrolledBeforeEdit).toBe(false);
+  });
+
+  test("does not touch the viewport when it writes nothing", async () => {
+    // An unchanged block must not produce a scroll call at all: every restore is a
+    // chance to fight a user who scrolled themselves.
+    const vault = memoryVault(original);
+    const file = vault.add("Meeting.md");
+    const open = openEditor(original, { top: 420, left: 0 });
+    const sink = new ObsidianNoteSink({ file, api: vault.api(() => open), scheduleFrame: frameRunner(open) });
+
+    const before = await sink.read();
+    expect(before.ok).toBe(true);
+    if (!before.ok) return;
+    const unchanged: readonly Section[] = [{ heading: "Summary", markdown: "Old summary" }];
+    expect(await sink.write(unchanged, before.value.revision)).toMatchObject({ status: "unchanged" });
+    expect(open.scrollTos).toEqual([]);
   });
 
   test("asks about the note it owns, not about whichever note has focus", async () => {
@@ -227,13 +268,30 @@ function fakeFile(path: string): TFile {
   return { path } as unknown as TFile;
 }
 
-function openEditor(initial: string): OpenMarkdownEditor & { saves: number } {
+function openEditor(
+  initial: string,
+  scroll: Readonly<{ top: number; left: number }> = { top: 0, left: 0 },
+): OpenMarkdownEditor & { saves: number; scrollTos: readonly { top: number; left: number }[]; scrolledBeforeEdit: boolean; scrolledAfterFrame: boolean; markFramed(): void } {
   let value = initial;
   let saves = 0;
+  let edited = false;
+  const scrollTos: { top: number; left: number }[] = [];
+  // True if any scroll was restored before the edit landed, which would mean the
+  // restore is not bracketing the change at all.
+  let scrolledBeforeEdit = false;
+  let scrolledAfterFrame = false;
+  let framed = false;
   const editor = {
     getValue: () => value,
     offsetToPos: (offset: number) => ({ line: 0, ch: offset }),
+    getScrollInfo: () => ({ ...scroll }),
+    scrollTo: (left?: number | null, top?: number | null) => {
+      if (!edited) scrolledBeforeEdit = true;
+      if (framed) scrolledAfterFrame = true;
+      scrollTos.push({ left: left ?? 0, top: top ?? 0 });
+    },
     replaceRange: (replacement: string, from: { ch: number }, to: { ch: number }) => {
+      edited = true;
       value = value.slice(0, from.ch) + replacement + value.slice(to.ch);
     },
   } as unknown as Editor;
@@ -241,5 +299,18 @@ function openEditor(initial: string): OpenMarkdownEditor & { saves: number } {
     editor,
     save: async () => { saves += 1; },
     get saves() { return saves; },
+    get scrollTos() { return scrollTos; },
+    get scrolledBeforeEdit() { return scrolledBeforeEdit; },
+    get scrolledAfterFrame() { return scrolledAfterFrame; },
+    markFramed() { framed = true; },
   };
+}
+
+/**
+ * Runs the scheduled restore immediately, so a test need not wait a real frame,
+ * marking the boundary first so the mock can tell a synchronous restore from the
+ * one that has to survive CodeMirror's measure phase.
+ */
+function frameRunner(open: { markFramed(): void }): (run: () => void) => void {
+  return (run) => { open.markFramed(); run(); };
 }

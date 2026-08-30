@@ -1,5 +1,6 @@
 import {
   FileSystemAdapter,
+  ItemView,
   MarkdownView,
   Modal,
   Notice,
@@ -14,6 +15,7 @@ import {
   normalizePath,
   type Editor,
   type TextComponent,
+  type WorkspaceLeaf,
 } from "obsidian";
 import { existsSync } from "node:fs";
 // Core is consumed by package name through its `exports` map — never a deep path.
@@ -53,6 +55,7 @@ import {
   resolveEnhanceMode,
   type EnhanceCommandId,
 } from "./src/enhance-mode.js";
+import { COMMAND_NAMES } from "./src/commands.js";
 import {
   DEFAULT_PLUGIN_SETTINGS,
   claudeAgentOptions,
@@ -87,17 +90,26 @@ import {
 } from "./src/settings-display.js";
 import {
   INITIAL_PLUGIN_STATE,
+  canStartCapture,
   reducePluginState,
   type PluginUiEvent,
   type PluginUiState,
 } from "./src/state.js";
+import {
+  EMPTY_PENDING_ATTACH_BUFFER,
+  decideFollow,
+  endsSession,
+  pushPendingAttachRecord,
+  type PendingAttachBuffer,
+} from "./src/follow-policy.js";
 import {
   ShorthandRecorder,
   shorthandProvenDown,
   type HelloInfo,
   type RecorderPhase,
 } from "./src/recorder.js";
-import { formatElapsed } from "./src/elapsed.js";
+import { describeStatus } from "./src/status-text.js";
+import { describePanel, SHORTHAND_PANEL_VIEW, type PanelButtonId, type PanelModel } from "./src/panel-model.js";
 import { createRequestUrlFetch } from "./src/request-url-fetch.js";
 import { deleteLlmCredentials, writeLlmCredentials } from "./src/llm-credentials-writer.js";
 import { LlmProfileCommitQueue } from "./src/llm-profile-commit-queue.js";
@@ -142,6 +154,14 @@ const BEGIN_GRACE_MS = 1_500;
  * has to absorb Shorthand raising its window before it can even evaluate the flag.
  */
 const START_ACKNOWLEDGEMENT_MS = 3_000;
+
+/**
+ * How long to wait before re-spawning an idle follower whose Shorthand was not running.
+ * Deliberately slow: this is a poll for an app that may not be launched for hours and
+ * every attempt spawns a process, so a tight retry is a spinning child-process loop in an
+ * otherwise idle vault.
+ */
+const IDLE_FOLLOWER_RETRY_MS = 30_000;
 
 type CaptureRuntime = {
   /** The live Obsidian identity, retained across normal rename and move operations. */
@@ -190,8 +210,8 @@ type CaptureRuntime = {
  *
  * `start` is not among these: which manual command can resume the capture depends on which
  * signal it was trying to send, so it is a function of that signal instead — see
- * `START_NOT_RUNNING`. A manual recovery that always named "Toggle Shorthand recording" would
- * start a *Meeting* on a capture that was trying to start Assisted Notes.
+ * `START_NOT_RUNNING`. A manual recovery that always named "Toggle Shorthand meeting recording"
+ * would start a *Meeting* on a capture that was trying to start Assisted Notes.
  */
 const NOT_RUNNING_NOTICES: Record<Exclude<RecorderPhase, "start"> | "manual", string> = {
   recall: "Shorthand did not confirm the cancel for the recording this capture had just started. Check that Shorthand is not still recording.",
@@ -201,7 +221,11 @@ const NOT_RUNNING_NOTICES: Record<Exclude<RecorderPhase, "start"> | "manual", st
 };
 
 const START_NOT_RUNNING = (signal: ControlSignal): string =>
-  `Shorthand was not running, so this capture did not start a recording; Shorthand is starting now. Once it is up, start the recording with Shorthand's shortcut or "${signal === "toggle-assisted-notes" ? "Toggle Shorthand assisted notes" : "Toggle Shorthand recording"}" — the capture is already running and will pick it up.`;
+  `Shorthand was not running, so this capture did not start a recording; Shorthand is starting now. Once it is up, start the recording with Shorthand's shortcut or "${
+    signal === "toggle-assisted-notes"
+      ? COMMAND_NAMES["toggle-shorthand-assisted-notes"]
+      : COMMAND_NAMES["toggle-shorthand-recording"]
+  }" — the capture is already running and will pick it up.`;
 
 /**
  * Assisted Notes' three capability-gated ways to fail to start, named by
@@ -224,27 +248,76 @@ export default class ShorthandPlugin extends Plugin {
   // assigning `undefined` to an optional property, and both are cleared on teardown.
   #statusBar: HTMLElement | undefined = undefined;
   #capture: CaptureRuntime | undefined = undefined;
+  /**
+   * A follower held open while no capture owns one, so a recording started with
+   * Shorthand's hotkey is seen at all. Adopted by an attached capture rather than
+   * replaced — see `adoptIdleFollower`.
+   */
+  #idleFollower: StreamClient | undefined = undefined;
+  /**
+   * Whether the connected app's `hello` listed `begin-mode`. Reset whenever the idle
+   * follower (re)connects or stops — not on attach: the capability was negotiated on this
+   * connection and stays valid regardless of who is currently consuming its events, so
+   * handing the client to a capture must not touch it.
+   */
+  #idleAppAdvertisesMode = false;
+  /** So the "update Shorthand" notice fires once per plugin load, not once per recording. */
+  #warnedAboutAppVersion = false;
+  /** Backoff timer for reconnecting the idle follower. Cleared on unload. */
+  #idleRetry: number | undefined = undefined;
+  /**
+   * The session `onAppRecordingBegan` just decided to attach to, set for exactly the
+   * window between that decision and the capture's own listener taking over. Marker
+   * preflight, a possible confirmation modal, sidecar setup and `createEnhancer` all run in
+   * between, and the recording's audio keeps flowing through all of it. The idle listener
+   * is the only thing attached for that whole window, so it is the only place that can see
+   * those records land — including, if the recording is short enough, the terminal one; see
+   * the "event" handler in `syncIdleFollower` and `#idlePendingAttachBuffer` below.
+   */
+  #idlePendingAttachSession: number | undefined = undefined;
+  /**
+   * Every record that same idle listener saw for `#idlePendingAttachSession` before the
+   * capture's own listener could attach. Replayed through that listener — via
+   * `client.emit("event", …)`, the exact path a live record takes — once
+   * `drainPendingAttachBuffer` claims it, so the opening of a followed recording is not
+   * silently lost to however long setup happens to take. Bounded: see
+   * `PENDING_ATTACH_BUFFER_CAP`'s own comment for why "unbounded" is not safe either.
+   */
+  #idlePendingAttachBuffer: PendingAttachBuffer = EMPTY_PENDING_ATTACH_BUFFER;
 
   async onload(): Promise<void> {
     this.settings = normalizePluginSettings(await this.loadData());
     this.#statusBar = this.addStatusBarItem();
-    this.#renderStatus();
+    // Clickable, and stop-only. The item is hidden while idle (see describeStatus),
+    // so there is never a moment where a click could mean "start" — starting lives on
+    // the ribbon icon and in the side panel.
+    this.#statusBar.addClass("mod-clickable");
+    this.registerDomEvent(this.#statusBar, "click", () => {
+      if (this.#capture === undefined) return;
+      void this.stopCapture().catch((error: unknown) => this.fail(errorMessage(error)));
+    });
+    this.#render();
     // The elapsed-time display is otherwise only refreshed from a transcript-delta handler
     // and from dispatch(), so between utterances it would visibly freeze. A ticking interval
     // keeps it advancing during silence; registerInterval auto-clears it on unload.
-    this.registerInterval(window.setInterval(() => this.#renderStatus(), 1_000));
+    this.registerInterval(window.setInterval(() => this.#render(), 1_000));
     this.addSettingTab(new ShorthandSettingTab(this.app, this));
 
-    // Command names carry no plugin prefix and are sentence case, per Obsidian's plugin
-    // guidelines: the command palette already renders these as "Shorthand: Start capture
-    // on this note". Spelling it out here produced "Shorthand: Shorthand: start capture…".
-    // checkCallback, not callback: Obsidian hides a command whose check returns false, which
-    // is its prescribed way to express "needs an open Markdown note". Matches the two
-    // enhancement commands. The check runs on every palette render, so it must not fire a
-    // Notice — hence hasActiveMarkdownFile rather than activeMarkdownFile.
+    this.registerView(SHORTHAND_PANEL_VIEW, (leaf) => new ShorthandPanelView(leaf, this));
+    this.addRibbonIcon("mic", "Open Shorthand panel", () => { void this.revealPanel(); });
+
+    // Names come from src/commands.ts so they are covered by bun test; main.ts cannot
+    // be imported under it. They carry no plugin prefix and are sentence case, per
+    // Obsidian's plugin guidelines: the palette already renders these as "Shorthand:
+    // Start meeting capture on this note". Spelling it out here produced "Shorthand:
+    // Shorthand: start capture…".
+    // checkCallback, not callback: Obsidian hides a command whose check returns false,
+    // which is its prescribed way to express "needs an open Markdown note". The check
+    // runs on every palette render, so it must not fire a Notice — hence
+    // hasActiveMarkdownFile rather than activeMarkdownFile.
     this.addCommand({
       id: "start-capture-this-note",
-      name: "Start capture on this note",
+      name: COMMAND_NAMES["start-capture-this-note"],
       checkCallback: (checking: boolean) => {
         if (!this.hasActiveMarkdownFile()) return false;
         if (checking) return true;
@@ -254,7 +327,7 @@ export default class ShorthandPlugin extends Plugin {
     });
     this.addCommand({
       id: "start-assisted-notes-capture-this-note",
-      name: "Start assisted notes capture on this note",
+      name: COMMAND_NAMES["start-assisted-notes-capture-this-note"],
       checkCallback: (checking: boolean) => {
         if (!this.hasActiveMarkdownFile()) return false;
         if (checking) return true;
@@ -264,12 +337,12 @@ export default class ShorthandPlugin extends Plugin {
     });
     this.addCommand({
       id: "stop-capture",
-      name: "Stop capture",
+      name: COMMAND_NAMES["stop-capture"],
       callback: () => { void this.stopCapture().catch((error: unknown) => this.fail(errorMessage(error))); },
     });
     this.addCommand({
       id: "enhance-now",
-      name: "Enhance now",
+      name: COMMAND_NAMES["enhance-now"],
       checkCallback: (checking: boolean) => {
         if (!this.hasActiveMarkdownFile()) return false;
         if (!checking) void this.enhanceActiveNote();
@@ -278,7 +351,7 @@ export default class ShorthandPlugin extends Plugin {
     });
     this.addCommand({
       id: "clean-up-this-note",
-      name: "Clean up this note",
+      name: COMMAND_NAMES["clean-up-this-note"],
       checkCallback: (checking: boolean) => {
         if (!this.hasActiveMarkdownFile()) return false;
         if (!checking) void this.cleanUpActiveNote();
@@ -289,269 +362,421 @@ export default class ShorthandPlugin extends Plugin {
     // toggle and an unconditional cancel, neither of which touches the capture itself.
     this.addCommand({
       id: "toggle-shorthand-recording",
-      name: "Toggle Shorthand recording",
+      name: COMMAND_NAMES["toggle-shorthand-recording"],
       callback: () => { this.fireControl("toggle-transcription"); },
     });
-    // Not decoration: a manual recovery that named "Toggle Shorthand recording" would start a
-    // *Meeting*. The Assisted Notes recovery path has to select the same mode it was trying to
-    // start — see START_NOT_RUNNING, which points here for that signal.
+    // Not decoration: a manual recovery that named "Toggle Shorthand meeting recording" would
+    // start a *Meeting*. The Assisted Notes recovery path has to select the same mode it was
+    // trying to start — see START_NOT_RUNNING, which points here for that signal.
     this.addCommand({
       id: "toggle-shorthand-assisted-notes",
-      name: "Toggle Shorthand assisted notes",
+      name: COMMAND_NAMES["toggle-shorthand-assisted-notes"],
       callback: () => { this.fireControl("toggle-assisted-notes"); },
     });
     this.addCommand({
       id: "cancel-shorthand-recording",
-      name: "Cancel Shorthand recording",
+      name: COMMAND_NAMES["cancel-shorthand-recording"],
       callback: () => { this.fireControl("cancel"); },
+    });
+    this.addCommand({
+      id: "open-panel",
+      name: COMMAND_NAMES["open-panel"],
+      callback: () => { void this.revealPanel(); },
     });
 
     // StreamClient owns the child process. These hooks synchronously signal it
-    // before Obsidian tears down the plugin or application.
-    this.registerDomEvent(window, "beforeunload", () => this.forceStopCapture());
-    this.registerEvent(this.app.workspace.on("quit", () => this.forceStopCapture()));
+    // before Obsidian tears down the plugin or application. The idle follower is a second,
+    // independent child process and needs the same backstop: without `stopIdleFollower()`
+    // here too, a follower running with no capture active (the ordinary idle state) would
+    // never be told to exit on this path, only on `onunload`.
+    this.registerDomEvent(window, "beforeunload", () => { this.stopIdleFollower(); this.forceStopCapture(); });
+    this.registerEvent(this.app.workspace.on("quit", () => { this.stopIdleFollower(); this.forceStopCapture(); }));
+
+    this.syncIdleFollower();
   }
 
   onunload(): void {
+    this.stopIdleFollower();
     this.forceStopCapture();
   }
 
   async saveSettings(candidate: unknown): Promise<void> {
     this.settings = normalizePluginSettings(candidate);
     await this.saveData(this.settings);
+    this.syncIdleFollower();
   }
 
   async startCaptureOnActiveNote(
     recordingSignal: ControlSignal = "toggle-transcription",
+    options: Readonly<{ attachToSession?: number }> = {},
   ): Promise<void> {
-    if (this.#capture !== undefined) {
+    // Synchronous, before any await. The guard this replaces tested `#capture`, which is
+    // assigned further down — so two starts fired inside the setup window both passed it,
+    // and the second orphaned the first's follower, control and enhancer.
+    if (!canStartCapture(this.#state)) {
       new Notice("Shorthand is already capturing. Stop it before starting another note.");
       return;
     }
-    const file = this.activeMarkdownFile();
-    if (file === undefined) return;
-    const vaultRoot = this.vaultRoot();
-    if (vaultRoot === undefined) return;
-    const noteSink = this.noteSink(file, vaultRoot);
+    this.dispatch({ type: "capture-starting" });
     let unownedEnhancer: EnhanceRunner | undefined;
+    // "Handed off" means something else now owns this runtime's lifecycle — not that a
+    // capture started. Set immediately after `#capture = runtime` below, before either
+    // dispatch that could follow it: from that assignment on, `finishRuntime`,
+    // `forceStopCapture`, `captureSettled` and `abortAssistedNotesStart` are all reachable
+    // and each dispatches its own terminal event, so this `finally` must not also fire.
+    let handedOff = false;
+    // Mirrors `adopted` inside the try below, at a scope the `catch` can also see (a
+    // `const` declared inside `try` is not visible in its `catch`). Needed only for the
+    // narrow window between a successful adoption and `handedOff` becoming true: nothing
+    // else owns that client until the runtime object exists, so a throw in between would
+    // otherwise leak it — see the `catch` block.
+    let adoptedFollower: StreamClient | undefined;
 
     try {
-      const markerPreflight = await preflightMarkers(noteSink);
-      if (markerPreflight.status === "error") {
-        this.fail(markerPreflight.message);
-        return;
-      }
-      // Do this before either frontmatter or marker writes. Starting capture is
-      // the only point at which we may ask the user to let Shorthand claim an
-      // unmarked note, and declining must leave every byte untouched.
-      if (markerPreflight.status === "needs-scaffold" && !await confirmScaffold(this.app)) return;
-      let sidecar: SidecarWriter | undefined;
-      if (this.settings.writeTranscriptNote) {
-        const noteContent = await noteSink.readContent();
-        if (!noteContent.ok) {
-          this.fail(noteContent.message);
+      try {
+        // `file` and `vaultRoot` moved inside this try along with everything after them:
+        // both can fail, and a failure here is exactly the kind of exit the outer `finally`
+        // exists to catch. Leaving them ahead of the guard would dispatch "starting" and
+        // then abandon it on the very first early return.
+        const file = this.activeMarkdownFile();
+        if (file === undefined) return;
+        const vaultRoot = this.vaultRoot();
+        if (vaultRoot === undefined) return;
+        const noteSink = this.noteSink(file, vaultRoot);
+        const markerPreflight = await preflightMarkers(noteSink);
+        if (markerPreflight.status === "error") {
+          this.fail(markerPreflight.message);
           return;
         }
-        let linked = transcriptWikilink(noteContent.content);
-        if (linked === undefined) {
-          const candidate = `${this.settings.sidecarDirectory}/${timestampName(new Date()).replace(/\.md$/i, "")}`;
-          // A folder named `Notes [2026]` is legal in Obsidian but cannot survive
-          // a round trip through `[[...]]`: every later capture would fail to
-          // read the link back and would generate another sidecar.
-          if (/[[\]|#^]/.test(candidate)) {
-            this.fail(
-              `The transcript folder "${this.settings.sidecarDirectory}" contains a character a wikilink cannot hold `
-              + "([, ], |, # or ^). Rename the folder or change the transcript folder setting.",
-            );
+        // Do this before either frontmatter or marker writes. Starting capture is
+        // the only point at which we may ask the user to let Shorthand claim an
+        // unmarked note, and declining must leave every byte untouched.
+        if (markerPreflight.status === "needs-scaffold"
+          && !this.settings.autoScaffold
+          && !await confirmScaffold(this.app)) return;
+        let sidecar: SidecarWriter | undefined;
+        if (this.settings.writeTranscriptNote) {
+          const noteContent = await noteSink.readContent();
+          if (!noteContent.ok) {
+            this.fail(noteContent.message);
             return;
           }
-          const linkedResult = await ensureTranscriptLink({
-            fileManager: this.app.fileManager,
-            metadataCache: this.app.metadataCache,
-          }, file, candidate);
-          if (linkedResult.status === "error") {
-            this.fail(`Could not add the transcript link: ${linkedResult.message}`);
-            return;
+          let linked = transcriptWikilink(noteContent.content);
+          if (linked === undefined) {
+            const candidate = `${this.settings.sidecarDirectory}/${timestampName(new Date()).replace(/\.md$/i, "")}`;
+            // A folder named `Notes [2026]` is legal in Obsidian but cannot survive
+            // a round trip through `[[...]]`: every later capture would fail to
+            // read the link back and would generate another sidecar.
+            if (/[[\]|#^]/.test(candidate)) {
+              this.fail(
+                `The transcript folder "${this.settings.sidecarDirectory}" contains a character a wikilink cannot hold `
+                + "([, ], |, # or ^). Rename the folder or change the transcript folder setting.",
+              );
+              return;
+            }
+            const linkedResult = await ensureTranscriptLink({
+              fileManager: this.app.fileManager,
+              metadataCache: this.app.metadataCache,
+            }, file, candidate);
+            if (linkedResult.status === "error") {
+              this.fail(`Could not add the transcript link: ${linkedResult.message}`);
+              return;
+            }
+            linked = linkedResult.linkPath;
           }
-          linked = linkedResult.linkPath;
+          const target = this.app.metadataCache.getFirstLinkpathDest(linkTarget(linked), file.path);
+          const store = this.sidecarStore(file, linked, target);
+          if (store === undefined) return;
+          sidecar = new SidecarWriter(store.describe, {
+            flushIntervalMs: DEFAULT_CONFIG.sidecarFlushIntervalMs,
+            store,
+          });
         }
-        const target = this.app.metadataCache.getFirstLinkpathDest(linkTarget(linked), file.path);
-        const store = this.sidecarStore(file, linked, target);
-        if (store === undefined) return;
-        sidecar = new SidecarWriter(store.describe, {
-          flushIntervalMs: DEFAULT_CONFIG.sidecarFlushIntervalMs,
-          store,
-        });
-      }
-      if (!await this.ensureScaffold(noteSink)) return;
+        if (!await this.ensureScaffold(noteSink)) return;
 
-      const transcript = new TranscriptStore();
-      let enhancer: EnhanceRunner | undefined;
-      let enhancementUnavailable: string | undefined;
-      try {
-        enhancer = await this.createEnhancer(
-          noteSink,
-          DEFAULT_CONFIG.enhancement.timeoutMs,
-        );
-        unownedEnhancer = enhancer;
-      } catch (error) {
-        enhancementUnavailable = `${errorMessage(error)} Capture will continue with transcript only.`;
-      }
-      const command = this.shorthandCommand();
-      const client = new StreamClient({
-        command,
-        args: DEFAULT_CONFIG.followStreamArgs,
-        maxReconnectAttempts: DEFAULT_CONFIG.reconnect.maxAttempts,
-        backoffMs: DEFAULT_CONFIG.reconnect.backoffMs,
-        drainTimeoutMs: DEFAULT_CONFIG.drainTimeoutMs,
-      });
-      const settled = new Promise<ExitDiagnosis>((resolveSettled) => client.once("settled", resolveSettled));
-      const control = new ShorthandControl({ command });
-      // Resolved with the follower's parsed `hello` record; `ShorthandRecorder.start()` explains
-      // why the start toggle waits on it, and Assisted Notes additionally gates the toggle on
-      // the record's advertised `capabilities`.
-      let markAttached = (_info: HelloInfo): void => {};
-      const attached = new Promise<HelloInfo>((resolveAttached) => { markAttached = resolveAttached; });
-      const recorder = this.settings.controlShorthandRecording
-        ? new ShorthandRecorder({
-          control,
-          recordingSignal,
-          report: (phase, result) => this.reportControl(phase, result, recordingSignal),
-          // The recorder's wait for the terminal record replaces the follower's own drain
-          // rather than preceding it, so it gets the same budget.
-          finalizeTimeoutMs: DEFAULT_CONFIG.drainTimeoutMs,
-          attachGraceMs: ATTACH_GRACE_MS,
-          beginGraceMs: BEGIN_GRACE_MS,
-          // Only Assisted Notes needs the capability gate and the bounded acknowledgement: an
-          // older app would otherwise parse-fail the flag mid-capture, and Shorthand's
-          // disabled-mode refusal exits the forwarding process 0 with nothing to say a
-          // recording never actually began. Meeting keeps the plain fire-and-forget contract.
-          ...(recordingSignal === "toggle-assisted-notes"
-            ? { requiredCapability: "toggle-assisted-notes", startAcknowledgementMs: START_ACKNOWLEDGEMENT_MS }
-            : {}),
-        })
-        : undefined;
-      const runtime: CaptureRuntime = {
-        noteFile: file,
-        client,
-        control,
-        recorder,
-        shorthandDown: false,
-        helloEver: false,
-        sidecar,
-        enhancer,
-        settled,
-        stopping: false,
-        startedAt: Date.now(),
-      };
-      this.#capture = runtime;
-      unownedEnhancer = undefined;
-      this.dispatch({ type: "capture-started" });
-      if (enhancementUnavailable !== undefined) this.fail(enhancementUnavailable);
-
-      client.on("event", ({ generation, record }) => {
-        // The recorder's whole view of Shorthand's session state comes from here — this
-        // handler already sees every record Shorthand sends, and unlike StreamClient's own
-        // session set it is never reset behind the plugin's back by a reconnect.
-        // `observe()` takes session-scoped records only; `hello` is the sole session-less
-        // record that reaches this event at all (a connection-level `error` is emitted as
-        // `connectionError`, never here), and it has its own entry point.
-        if (record.t === "hello") {
-          runtime.helloEver = true;
-          recorder?.noteAttached();
-          // `record.capabilities`, when present, already passed core's own defensive parsing
-          // (`stringArrayField`): a malformed field is dropped before this event ever fires, so
-          // it is not re-validated here.
-          markAttached({ capabilities: record.capabilities });
-        } else recorder?.observe(record);
-        const update = transcript.ingest(generation, record);
-        if (update === null) return;
-        sidecar?.apply(update);
-        const delta = enhancementDelta(update);
-        if (delta.length === 0) return;
-        enhancer?.appendTranscript(delta);
-        if (enhancer !== undefined && this.settings.enableLiveEnhancement) {
-          enhancer.requestTick();
-          console.log(
-            `[shorthand] transcript +${delta.length} chars; pending ${enhancer.state.pendingCharacters}/${this.settings.minNewChars} toward next pass`,
+        const transcript = new TranscriptStore();
+        let enhancer: EnhanceRunner | undefined;
+        let enhancementUnavailable: string | undefined;
+        try {
+          enhancer = await this.createEnhancer(
+            noteSink,
+            DEFAULT_CONFIG.enhancement.timeoutMs,
           );
+          unownedEnhancer = enhancer;
+        } catch (error) {
+          enhancementUnavailable = `${errorMessage(error)} Capture will continue with transcript only.`;
         }
-        this.#renderStatus();
-      });
-      client.on("disconnect", ({ generation }) => {
-        for (const update of transcript.markConnectionEnded(generation)) sidecar?.apply(update);
-      });
-      client.on("reconnect", ({ generation, gap }) => {
-        if (gap) sidecar?.addReconnectWarning(generation);
-      });
-      client.on("connectionError", ({ record }) => this.fail(`Shorthand connection error (${record.code}): ${record.message}`));
-      client.on("protocolError", ({ error }) => this.fail(error.message));
-      client.on("processError", ({ error, command: attempted, fatal }) => {
-        // ENOENT is the follower telling us there is no Shorthand binary at all, which is also
-        // the answer for every control spawn this capture might still make.
-        if (fatal) runtime.shorthandDown = true;
-        this.fail(`Could not start "${attempted}". Check the shorthand.exe path in Shorthand settings. ${error.message}`);
-      });
-      client.on("giveUp", ({ attempts }) => this.fail(`Shorthand stream disconnected repeatedly; gave up after ${attempts} reconnect attempts.`));
-      client.on("drainTimeout", () => this.fail("Shorthand did not finish the active transcript before the drain timeout; the child was stopped."));
-      sidecar?.on("writeError", ({ error }) => this.fail(`Transcript sidecar write failed: ${error.message}`));
-      // Registered before anything else awaits `settled`, so `shorthandDown` is already set by
-      // the time `stopCapture()` resumes and decides whether a control spawn is safe.
-      void settled.then(
-        (diagnosis) => {
-          // Not `diagnosis.code === 2`: that code is ambiguous, and reading it as proof is
-          // what left Shorthand recording with no follower. `shorthandProvenDown` says why.
-          if (shorthandProvenDown({
-            exitCode: diagnosis.code,
-            helloEver: runtime.helloEver,
-            observedSession: recorder?.observedSession ?? false,
-            // The one piece of evidence that is not follower-derived, and the strongest:
-            // a control signal Shorthand confirmed cannot have been forwarded to a Shorthand that
-            // was not running. Without it, a capture whose follower was refused (streaming
-            // off, slot taken) concluded "Shorthand is down" while its own start sequence had
-            // just put that same Shorthand into recording.
-            controlConfirmed: recorder?.controlConfirmed ?? false,
-          })) runtime.shorthandDown = true;
-          return this.captureSettled(runtime, diagnosis);
-        },
-      ).catch((error: unknown) => {
-        // Nothing else is watching this chain; an unhandled rejection here would take the
-        // failure out of the user's sight entirely.
-        this.fail(`Capture shutdown failed: ${errorMessage(error)}`);
-      });
-      client.start();
-      if (recorder === undefined || recordingSignal !== "toggle-assisted-notes") {
-        // Meeting's existing contract, unchanged: not awaited here — the capture is live
-        // either way — but the promise is retained by the recorder itself, which is what lets
-        // a stop sequence wait for it.
-        void recorder?.start(attached);
-        new Notice(`Shorthand capture started: ${file.path}`);
-      } else {
-        // Assisted Notes opts into the bounded acknowledgement: a `sent` toggle is not proof
-        // Shorthand actually started recording (see `START_ACKNOWLEDGEMENT_MS`), so the
-        // "capture started" notice waits for that proof instead of firing unconditionally.
-        void recorder.start(attached).then(async (outcome) => {
-          if (outcome === "started") {
-            new Notice(`Shorthand capture started: ${file.path}`);
-            return;
-          }
-          if (outcome === "stopped") {
-            // A concurrent stop/quit already owns its own notices and teardown.
-            return;
-          }
-          const reason = recorder.startFailure;
-          if (reason !== undefined) new Notice(ASSISTED_NOTES_START_FAILURE_NOTICES[reason], 10_000);
-          await this.abortAssistedNotesStart(runtime);
+        const command = this.shorthandCommand();
+        // Adopted, not replaced, when attaching. The app replays a session only while it is
+        // still active, and this setup can spend a whole confirmation modal — so a short
+        // recording could end before a freshly spawned follower ever attached, leaving the
+        // capture permanently empty. The capture's own `TranscriptStore` does not need the
+        // `begin` it missed: `ingest` falls back to an implicit session for one whose `begin`
+        // it never saw, which is what makes adoption cheap.
+        //
+        // `adopted` is kept apart from `client` deliberately: adoption can fail even when
+        // attaching, if the idle follower emitted `settled` during one of this function's own
+        // `await`s (Shorthand quit or died between the `begin` and here). `options
+        // .attachToSession === undefined` answers "is this an attach", not "did adoption
+        // succeed", and the two differ exactly in that case — using it below to decide whether
+        // to `start()` the client left a capture holding a freshly built, never-spawned child.
+        const adopted = options.attachToSession === undefined ? undefined : this.adoptIdleFollower();
+        adoptedFollower = adopted;
+        const client = adopted ?? new StreamClient({
+          command,
+          args: DEFAULT_CONFIG.followStreamArgs,
+          maxReconnectAttempts: DEFAULT_CONFIG.reconnect.maxAttempts,
+          backoffMs: DEFAULT_CONFIG.reconnect.backoffMs,
+          drainTimeoutMs: DEFAULT_CONFIG.drainTimeoutMs,
         });
+        const settled = new Promise<ExitDiagnosis>((resolveSettled) => client.once("settled", resolveSettled));
+        const control = new ShorthandControl({ command });
+        // Resolved with the follower's parsed `hello` record; `ShorthandRecorder.start()` explains
+        // why the start toggle waits on it, and Assisted Notes additionally gates the toggle on
+        // the record's advertised `capabilities`.
+        let markAttached = (_info: HelloInfo): void => {};
+        const attached = new Promise<HelloInfo>((resolveAttached) => { markAttached = resolveAttached; });
+        // No recorder when attaching to a recording Shorthand already started: the recorder
+        // exists to send the start toggle, and a toggle against a live recording stops it.
+        // The cost is that this capture cannot finalize Shorthand's recording either, so the
+        // user stops it the way they started it — see README, "Following Shorthand's
+        // recordings".
+        const recorder = this.settings.controlShorthandRecording && options.attachToSession === undefined
+          ? new ShorthandRecorder({
+            control,
+            recordingSignal,
+            report: (phase, result) => this.reportControl(phase, result, recordingSignal),
+            // The recorder's wait for the terminal record replaces the follower's own drain
+            // rather than preceding it, so it gets the same budget.
+            finalizeTimeoutMs: DEFAULT_CONFIG.drainTimeoutMs,
+            attachGraceMs: ATTACH_GRACE_MS,
+            beginGraceMs: BEGIN_GRACE_MS,
+            // Only Assisted Notes needs the capability gate and the bounded acknowledgement: an
+            // older app would otherwise parse-fail the flag mid-capture, and Shorthand's
+            // disabled-mode refusal exits the forwarding process 0 with nothing to say a
+            // recording never actually began. Meeting keeps the plain fire-and-forget contract.
+            ...(recordingSignal === "toggle-assisted-notes"
+              ? { requiredCapability: "toggle-assisted-notes", startAcknowledgementMs: START_ACKNOWLEDGEMENT_MS }
+              : {}),
+          })
+          : undefined;
+        const runtime: CaptureRuntime = {
+          noteFile: file,
+          client,
+          control,
+          recorder,
+          shorthandDown: false,
+          helloEver: false,
+          sidecar,
+          enhancer,
+          settled,
+          stopping: false,
+          startedAt: Date.now(),
+        };
+        this.#capture = runtime;
+        handedOff = true;
+        unownedEnhancer = undefined;
+        // Meeting is fire-and-forget: a sent toggle is proof enough, so it goes straight to
+        // capturing. Assisted Notes waits — see the acknowledgement branch below, and
+        // START_ACKNOWLEDGEMENT_MS for why a sent toggle is not proof there.
+        if (recordingSignal !== "toggle-assisted-notes" || recorder === undefined) {
+          this.dispatch({ type: "capture-started" });
+        }
+        if (enhancementUnavailable !== undefined) this.fail(enhancementUnavailable);
+
+        client.on("event", ({ generation, record }) => {
+          // The recorder's whole view of Shorthand's session state comes from here — this
+          // handler already sees every record Shorthand sends, and unlike StreamClient's own
+          // session set it is never reset behind the plugin's back by a reconnect.
+          // `observe()` takes session-scoped records only; `hello` is the sole session-less
+          // record that reaches this event at all (a connection-level `error` is emitted as
+          // `connectionError`, never here), and it has its own entry point.
+          if (record.t === "hello") {
+            runtime.helloEver = true;
+            recorder?.noteAttached();
+            // `record.capabilities`, when present, already passed core's own defensive parsing
+            // (`stringArrayField`): a malformed field is dropped before this event ever fires, so
+            // it is not re-validated here.
+            markAttached({ capabilities: record.capabilities });
+          } else recorder?.observe(record);
+          // An attached capture has no recorder to notice the recording ending, and
+          // StreamClient kills its child on a terminal record only once stopAfterDrain has
+          // been requested. Without this, stopping the recording in Shorthand leaves the
+          // Obsidian capture running until the user stops it by hand. A no-op for a capture
+          // that started its own recording: `endsSession` is always false when there is no
+          // `attachToSession` to match against.
+          if (endsSession(record, options.attachToSession)) {
+            void this.stopCapture().catch((error: unknown) => this.fail(errorMessage(error)));
+          }
+          const update = transcript.ingest(generation, record);
+          if (update === null) return;
+          sidecar?.apply(update);
+          const delta = enhancementDelta(update);
+          if (delta.length === 0) return;
+          enhancer?.appendTranscript(delta);
+          if (enhancer !== undefined && this.settings.enableLiveEnhancement) {
+            enhancer.requestTick();
+            console.log(
+              `[shorthand] transcript +${delta.length} chars; pending ${enhancer.state.pendingCharacters}/${this.settings.minNewChars} toward next pass`,
+            );
+          }
+          this.#render();
+        });
+        // Claims whatever the idle listener buffered for this session before this handler
+        // existed. The claim itself stays unconditional on `attachToSession` alone: that is
+        // what keeps a 4,000-record array from outliving a refused or aborted attempt (see
+        // the `finally` in `onAppRecordingBegan`). The *replay*, though, is gated on
+        // `adopted`, not on `attachToSession` — the same distinction Important 1 above
+        // exists for, and confused a second time here would undo it: buffered records carry
+        // the *adopted* client's connection generation, and `TranscriptStore` keys a session
+        // by `${generation}:${session}`. Replaying them onto a *freshly built* fallback
+        // client (adoption failed — the idle follower emitted `settled` mid-setup) would
+        // file them under a generation `markConnectionEnded` will never close, sitting
+        // `active` forever; if the app then replays the still-live session onto the new
+        // connection, the same speech is written twice, under two different keys.
+        //
+        // Zero `await` since `adopted` was computed, by construction (nothing between here
+        // and there yields): an `await` inserted anywhere in that stretch would let a real
+        // record slip in ahead of this drain with nothing watching for it, reopening the
+        // hole `#idlePendingAttachSession` exists to close. Keep it that way if this moves.
+        if (options.attachToSession !== undefined) {
+          const pending = this.drainPendingAttachBuffer(options.attachToSession);
+          if (adopted !== undefined) {
+            for (const buffered of pending.records) client.emit("event", buffered);
+            if (pending.droppedCount > 0) {
+              console.warn(
+                `[shorthand] Dropped ${pending.droppedCount} transcript record(s) for a followed `
+                + "recording: more arrived than this build buffers while the capture was starting up.",
+              );
+            }
+          }
+        }
+        client.on("disconnect", ({ generation }) => {
+          for (const update of transcript.markConnectionEnded(generation)) sidecar?.apply(update);
+        });
+        client.on("reconnect", ({ generation, gap }) => {
+          if (gap) sidecar?.addReconnectWarning(generation);
+        });
+        client.on("connectionError", ({ record }) => this.fail(`Shorthand connection error (${record.code}): ${record.message}`));
+        client.on("protocolError", ({ error }) => this.fail(error.message));
+        client.on("processError", ({ error, command: attempted, fatal }) => {
+          // ENOENT is the follower telling us there is no Shorthand binary at all, which is also
+          // the answer for every control spawn this capture might still make.
+          if (fatal) runtime.shorthandDown = true;
+          this.fail(`Could not start "${attempted}". Check the shorthand.exe path in Shorthand settings. ${error.message}`);
+        });
+        client.on("giveUp", ({ attempts }) => this.fail(`Shorthand stream disconnected repeatedly; gave up after ${attempts} reconnect attempts.`));
+        client.on("drainTimeout", () => this.fail("Shorthand did not finish the active transcript before the drain timeout; the child was stopped."));
+        sidecar?.on("writeError", ({ error }) => this.fail(`Transcript sidecar write failed: ${error.message}`));
+        // Registered before anything else awaits `settled`, so `shorthandDown` is already set by
+        // the time `stopCapture()` resumes and decides whether a control spawn is safe.
+        void settled.then(
+          (diagnosis) => {
+            // Not `diagnosis.code === 2`: that code is ambiguous, and reading it as proof is
+            // what left Shorthand recording with no follower. `shorthandProvenDown` says why.
+            if (shorthandProvenDown({
+              exitCode: diagnosis.code,
+              helloEver: runtime.helloEver,
+              observedSession: recorder?.observedSession ?? false,
+              // The one piece of evidence that is not follower-derived, and the strongest:
+              // a control signal Shorthand confirmed cannot have been forwarded to a Shorthand that
+              // was not running. Without it, a capture whose follower was refused (streaming
+              // off, slot taken) concluded "Shorthand is down" while its own start sequence had
+              // just put that same Shorthand into recording.
+              controlConfirmed: recorder?.controlConfirmed ?? false,
+            })) runtime.shorthandDown = true;
+            return this.captureSettled(runtime, diagnosis);
+          },
+        ).catch((error: unknown) => {
+          // Nothing else is watching this chain; an unhandled rejection here would take the
+          // failure out of the user's sight entirely.
+          this.fail(`Capture shutdown failed: ${errorMessage(error)}`);
+        });
+        // Gated on `adopted`, not on `attachToSession`: only a client we did NOT adopt needs
+        // starting. Gating this on "is this an attach" instead conflates that question with
+        // "did adoption succeed", and an idle follower that died mid-setup (see `adopted`'s
+        // own comment above) makes those differ — the freshly built fallback client would
+        // then never be told to start, leaving the capture holding a child that was never
+        // spawned: no `hello`, no records, no `settled`, capturing forever.
+        if (adopted === undefined) client.start();
+        if (recorder === undefined || recordingSignal !== "toggle-assisted-notes") {
+          // Meeting's existing contract, unchanged: not awaited here — the capture is live
+          // either way — but the promise is retained by the recorder itself, which is what lets
+          // a stop sequence wait for it.
+          void recorder?.start(attached);
+          new Notice(`Shorthand capture started: ${file.path}`);
+        } else {
+          // Assisted Notes opts into the bounded acknowledgement: a `sent` toggle is not proof
+          // Shorthand actually started recording (see `START_ACKNOWLEDGEMENT_MS`), so the
+          // "capture started" notice — and the dispatch that claims capturing — wait for that
+          // proof instead of firing unconditionally.
+          void recorder.start(attached).then(async (outcome) => {
+            if (outcome === "started") {
+              // `recorder.start()`'s own race can settle "ack" — and so resolve `"started"`
+              // here — even after `requestStop()` flipped its stop flag, if the acknowledgement
+              // and the stop request land in the same microtask window; see `#runStart`'s
+              // acknowledgement race in recorder.ts. That would reset `stopping: false` while a
+              // stop is tearing this same runtime down. Left alone deliberately: the ordinary
+              // path (`requestStop()` synchronous with the call site) never races this way, and
+              // whichever order wins, `finishRuntime` dispatches `capture-stopped` right behind
+              // it and the mode self-heals.
+              this.dispatch({ type: "capture-started" });
+              new Notice(`Shorthand capture started: ${file.path}`);
+              return;
+            }
+            if (outcome === "stopped") {
+              // A concurrent stop/quit already owns its own notices and teardown.
+              return;
+            }
+            const reason = recorder.startFailure;
+            if (reason !== undefined) new Notice(ASSISTED_NOTES_START_FAILURE_NOTICES[reason], 10_000);
+            await this.abortAssistedNotesStart(runtime);
+          }).catch((error: unknown) => {
+            // Nothing else is watching this chain (same reasoning as the `settled` chain
+            // above). This `.then` body is the sole clearer of `starting` on the Assisted
+            // Notes path: a throw here — before it reaches `abortAssistedNotesStart` on its
+            // own — would otherwise leave `starting` stuck true for the rest of the session,
+            // refusing every later start with "already capturing" until a plugin reload.
+            this.fail(`Assisted Notes start failed: ${errorMessage(error)}`);
+            void this.abortAssistedNotesStart(runtime);
+          });
+        }
+      } catch (error) {
+        await unownedEnhancer?.dispose().catch((cleanupError: unknown) => {
+          this.fail(`Agent session cleanup failed: ${errorMessage(cleanupError)}`);
+        });
+        this.fail(errorMessage(error));
+        if (handedOff) {
+          // The runtime already took ownership, so `forceStopCapture()` tears down a real,
+          // live capture here — unlike its three other call sites (`beforeunload`, `quit`,
+          // `onunload`), which are all shutdown paths and deliberately do not re-sync the
+          // idle follower afterward (see that method's own comment). This one is not a
+          // shutdown: without the explicit re-sync below, the "follow" feature would go
+          // silently dead until the next `saveSettings()` or a plugin reload.
+          this.forceStopCapture();
+          this.syncIdleFollower();
+        } else {
+          // Setup failed before the runtime took ownership, so `forceStopCapture()` would be
+          // a no-op (`#capture` was never assigned) — but an *adopted* client can already be
+          // running by this point: adoption happens, and clears `#idleFollower`, before the
+          // runtime object exists. Nothing else owns that client in this branch, so it must
+          // be stopped directly here, or it leaks — a detached child process outliving the
+          // plugin instance that spawned it, doing nothing, forever. And the same re-sync
+          // the `handedOff` branch above needs, needs it here too: `adoptIdleFollower()`
+          // already cleared `#idleFollower` and its retry timer, so nothing else is left to
+          // reschedule the idle follower — without this, "follow" would go silently dead
+          // until the next `saveSettings()` or a plugin reload, same symptom as the sibling
+          // branch. `#capture` is `undefined` here, so the sync does the right thing.
+          adoptedFollower?.forceStop();
+          this.syncIdleFollower();
+        }
       }
-    } catch (error) {
-      // If setup failed after the agent client was created but before the runtime took
-      // ownership, there is no #capture for forceStopCapture() to dispose.
-      await unownedEnhancer?.dispose().catch((cleanupError: unknown) => {
-        this.fail(`Agent session cleanup failed: ${errorMessage(cleanupError)}`);
-      });
-      this.fail(errorMessage(error));
-      this.forceStopCapture();
+    } finally {
+      // Any path that left without handing ownership to a live runtime has to release
+      // `starting`, or the plugin refuses every later start with "already capturing".
+      // `capture-start-failed` returns to idle only from `starting`, so a setup error
+      // that already dispatched a sticky `error` keeps its message.
+      if (!handedOff) this.dispatch({ type: "capture-start-failed" });
     }
   }
 
@@ -630,6 +855,13 @@ export default class ShorthandPlugin extends Plugin {
     void runtime.sidecar?.close().catch(() => {});
     this.#capture = undefined;
     this.dispatch({ type: "capture-stopped" });
+    // Deliberately no `syncIdleFollower()` here, unlike `finishRuntime` and
+    // `abortAssistedNotesStart`: three of this method's four call sites — `beforeunload`,
+    // `quit`, `onunload` — are shutdown paths that already call `stopIdleFollower()` of
+    // their own accord. Syncing here would spawn a brand-new follower process on the way
+    // out the door, with nothing left running to ever stop it. The fourth call site — the
+    // `catch` in `startCaptureOnActiveNote`, for a post-handoff setup failure — is not a
+    // shutdown, and re-syncs explicitly right after calling this, for exactly that reason.
   }
 
   /**
@@ -652,7 +884,156 @@ export default class ShorthandPlugin extends Plugin {
       this.fail(`Agent session cleanup failed: ${errorMessage(error)}`);
     });
     if (this.#capture === runtime) this.#capture = undefined;
-    this.dispatch({ type: "capture-stopped" });
+    // Not `capture-stopped`: this path exists precisely because no recording ever
+    // started, and reporting a stopped capture tells the user something ran.
+    this.dispatch({ type: "capture-start-failed" });
+    this.syncIdleFollower();
+  }
+
+  /** Start or stop the idle follower to match the setting and the capture state. */
+  private syncIdleFollower(): void {
+    const wanted = this.settings.followAppRecording && this.#capture === undefined;
+    if (!wanted) { this.stopIdleFollower(); return; }
+    if (this.#idleFollower !== undefined) return;
+    const client = new StreamClient({
+      command: this.shorthandCommand(),
+      args: DEFAULT_CONFIG.followStreamArgs,
+      maxReconnectAttempts: DEFAULT_CONFIG.reconnect.maxAttempts,
+      backoffMs: DEFAULT_CONFIG.reconnect.backoffMs,
+      drainTimeoutMs: DEFAULT_CONFIG.drainTimeoutMs,
+    });
+    this.#idleFollower = client;
+    this.#idleAppAdvertisesMode = false;
+    client.on("event", ({ generation, record }) => {
+      if (record.t === "hello") {
+        this.#idleAppAdvertisesMode = record.capabilities?.includes("begin-mode") === true;
+        return;
+      }
+      // Deliberately no `return` here: `onAppRecordingBegan` decides synchronously, so by
+      // the time control reaches the buffering check below, `#idlePendingAttachSession` is
+      // already set if this `begin` is one to attach to — and the `begin` itself is worth
+      // buffering too, not just what follows it. Core's `ingest()` can reconstruct a session
+      // it never saw `begin` for, but only with an ordering floor of zero; replaying the
+      // real `begin` gives it the real one.
+      if (record.t === "begin") this.onAppRecordingBegan(record.mode, record.session);
+      // Buffers every record for the session `onAppRecordingBegan` just decided to attach
+      // to, for exactly the window before the capture's own listener takes over — see
+      // `#idlePendingAttachSession`'s and `#idlePendingAttachBuffer`'s own comments. A no-op
+      // whenever nothing is pending, which is true for almost every record this follower
+      // ever sees: only that one window buffers anything at all.
+      if (this.#idlePendingAttachSession !== undefined) {
+        this.#idlePendingAttachBuffer = pushPendingAttachRecord(
+          this.#idlePendingAttachBuffer,
+          this.#idlePendingAttachSession,
+          { generation, record },
+        );
+      }
+    });
+    // `settled`, not `processError`/`giveUp`. A Shorthand that is not running exits the
+    // follower with code 2 before any hello, which StreamClient treats as terminal: it
+    // deactivates and emits only this — never `processError` or `giveUp`. A follower
+    // listening only for those two would be silently dead after its first attempt, and
+    // "open Obsidian, start Shorthand later" is the ordinary order users hit this in.
+    client.once("settled", () => {
+      if (this.#idleFollower !== client) return;
+      this.#idleFollower = undefined;
+      this.#idleAppAdvertisesMode = false;
+      this.scheduleIdleRetry();
+    });
+    // Deliberately quiet otherwise: an idle follower failing means Shorthand is not
+    // running, which is the normal state of a vault that is not in a meeting. A Notice
+    // would fire at a user who asked for nothing. Capture reports its own failures.
+    client.start();
+  }
+
+  private scheduleIdleRetry(): void {
+    if (this.#idleRetry !== undefined) return;
+    if (!this.settings.followAppRecording || this.#capture !== undefined) return;
+    this.#idleRetry = window.setTimeout(() => {
+      this.#idleRetry = undefined;
+      this.syncIdleFollower();
+    }, IDLE_FOLLOWER_RETRY_MS);
+  }
+
+  private stopIdleFollower(): void {
+    if (this.#idleRetry !== undefined) { window.clearTimeout(this.#idleRetry); this.#idleRetry = undefined; }
+    this.#idleFollower?.forceStop();
+    this.#idleFollower = undefined;
+    this.#idleAppAdvertisesMode = false;
+  }
+
+  /**
+   * Release the idle follower for a capture to adopt, without stopping it. The idle
+   * listeners come off first, so the capture's own handler is the only one left.
+   */
+  private adoptIdleFollower(): StreamClient | undefined {
+    const client = this.#idleFollower;
+    if (client === undefined) return undefined;
+    client.removeAllListeners("event");
+    client.removeAllListeners("settled");
+    this.#idleFollower = undefined;
+    if (this.#idleRetry !== undefined) { window.clearTimeout(this.#idleRetry); this.#idleRetry = undefined; }
+    return client;
+  }
+
+  /** `mode` is whatever the wire carried; `decideFollow` is what validates it. */
+  private onAppRecordingBegan(mode: unknown, session: number | undefined): void {
+    const decision = decideFollow({
+      mode,
+      state: this.#state,
+      hasActiveNote: this.hasActiveNote(),
+      followEnabled: this.settings.followAppRecording,
+      appAdvertisesMode: this.#idleAppAdvertisesMode,
+    });
+    if (decision.kind === "needs-newer-app") {
+      if (this.#warnedAboutAppVersion) return;
+      this.#warnedAboutAppVersion = true;
+      new Notice(
+        "This Shorthand build does not say which mode a recording is, so Obsidian cannot follow it. Update Shorthand and try again.",
+        10_000,
+      );
+      return;
+    }
+    if (decision.kind === "ignore") return;
+    this.#idlePendingAttachSession = session;
+    this.#idlePendingAttachBuffer = EMPTY_PENDING_ATTACH_BUFFER;
+    // Conditional spread, not `{ attachToSession: session }`: `exactOptionalPropertyTypes`
+    // forbids assigning an explicit `undefined` to `attachToSession`, and `session` here can
+    // be `undefined` in principle even though a real `begin` record always carries one.
+    void this.startCaptureOnActiveNote(
+      decision.signal,
+      session === undefined ? {} : { attachToSession: session },
+    ).finally(() => {
+      // A successful attach already claimed and cleared this via `drainPendingAttachBuffer`
+      // — see the zero-`await` note at its call site for why that claim cannot be beaten by
+      // a record arriving late. If the field still names this session, the attempt never
+      // got that far (`canStartCapture` refused it, or it aborted or threw before adoption),
+      // and whatever accumulated has nowhere to go: discard it rather than let it leak into
+      // whatever attach happens next.
+      if (this.#idlePendingAttachSession === session) {
+        this.#idlePendingAttachSession = undefined;
+        this.#idlePendingAttachBuffer = EMPTY_PENDING_ATTACH_BUFFER;
+      }
+    });
+  }
+
+  /**
+   * Hands back whatever the idle listener buffered for `session` while this capture was
+   * starting up, and claims it — clearing the pending fields so the `finally` in
+   * `onAppRecordingBegan` knows this attach reached adoption and does not also discard it.
+   *
+   * Must be called with no `await` since the idle listener last ran — i.e. right after the
+   * capture's own `client.on("event", …)` handler is registered, which the call site also
+   * replays this buffer through. An `await` inserted anywhere in that stretch would let a
+   * real record slip in ahead of this call with nothing watching for it — the exact hole
+   * `#idlePendingAttachSession` exists to close.
+   */
+  private drainPendingAttachBuffer(session: number): PendingAttachBuffer {
+    if (this.#idlePendingAttachSession !== session) return EMPTY_PENDING_ATTACH_BUFFER;
+    const buffer = this.#idlePendingAttachBuffer;
+    this.#idlePendingAttachSession = undefined;
+    this.#idlePendingAttachBuffer = EMPTY_PENDING_ATTACH_BUFFER;
+    return buffer;
   }
 
   async enhanceActiveNote(): Promise<void> {
@@ -879,7 +1260,9 @@ export default class ShorthandPlugin extends Plugin {
       this.fail(preflight.message);
       return false;
     }
-    if (preflight.status === "needs-scaffold" && !await confirmScaffold(this.app)) return false;
+    if (preflight.status === "needs-scaffold"
+      && !this.settings.autoScaffold
+      && !await confirmScaffold(this.app)) return false;
     return this.ensureScaffold(sink);
   }
 
@@ -928,6 +1311,7 @@ export default class ShorthandPlugin extends Plugin {
     } finally {
       if (this.#capture === runtime) this.#capture = undefined;
       this.dispatch({ type: "capture-stopped" });
+      this.syncIdleFollower();
     }
   }
 
@@ -977,15 +1361,26 @@ export default class ShorthandPlugin extends Plugin {
         return;
       case "error":
       case "skipped":
+        // Dispatched before `fail()`, not after: `fail()` dispatches its own sticky
+        // `error`, and this pass's slot has to be released without disturbing it.
+        // `enhancement-finished` would also release the slot, but it additionally clears
+        // a sticky `error`/`enhancement-stopped` via `restingMode` — the reward for a pass
+        // that actually completed. This pass didn't, so nothing here may fix what `fail()`
+        // is about to report as broken.
+        this.dispatch({ type: "enhancement-ended" });
         this.fail(status.message);
         return;
       case "requeued":
-        // Only a target that asked for a backoff is actionable. A plain re-queue means
-        // the note kept changing under the writer — i.e. the user is typing during the
-        // meeting — which self-heals on the next pass and must stay silent.
+        // `enhancement-ended` fires on both branches below, including the silent one: a
+        // plain re-queue (no `retryAfterMs`) is the routine case — the note kept changing
+        // under the writer, i.e. the user typing during the meeting — and it still has to
+        // release the slot `started` claimed, or the depth never returns to zero and the
+        // status bar reads "· writing" for the rest of the capture. Only a target that
+        // asked for a backoff is actionable as a `Notice`.
         //
-        // Writing through Obsidian, the note itself is never the busy party, so this
-        // reports the delay without advising a remedy that would not apply.
+        // Writing through Obsidian, the note itself is never the busy party, so the
+        // `Notice` reports the delay without advising a remedy that would not apply.
+        this.dispatch({ type: "enhancement-ended" });
         if (status.retryAfterMs !== undefined) {
           this.fail(`${status.message} Shorthand will retry on the next pass.`);
         }
@@ -993,6 +1388,8 @@ export default class ShorthandPlugin extends Plugin {
       case "timed-out":
         // Self-healing like a re-queue: the transcript is kept and retried. Only the
         // eventual drop at the re-queue limit loses data, and that arrives as `error`.
+        // Still releases the slot `started` claimed — see the `requeued` comment above.
+        this.dispatch({ type: "enhancement-ended" });
         return;
       case "declined":
         // Fires whenever a gate holds, which is most stream events. Never user-facing.
@@ -1014,12 +1411,13 @@ export default class ShorthandPlugin extends Plugin {
    */
   private reportOutcome(outcome: PassOutcome, command: EnhanceCommandId): void {
     if (outcome.status === "completed") {
-      this.dispatch({ type: "enhancement-finished" });
+      // No `enhancement-finished` here: core emitted a `finished` status before
+      // returning this outcome, and `onEnhanceStatus` already dispatched for it.
+      // Both firing double-decrements the pass counter, which ends the `enhancing`
+      // state while a second, overlapping pass is still writing.
       new Notice(outcome.written ? "Shorthand updated the AI block." : "The AI block was already up to date.");
     } else if (outcome.status === "expired") {
-      const message = "Enhancement stopped after the maximum capture window; capture continues.";
-      this.dispatch({ type: "enhancement-stopped", message });
-      new Notice(message, 8_000);
+      // Same reason: `onEnhanceStatus`'s `expired` arm owns the dispatch and the Notice.
     } else if (outcome.status === "requeued") {
       this.fail(outcome.retryAfterMs === undefined
         ? `Enhancement was safely re-queued (${outcome.reason}).`
@@ -1031,9 +1429,19 @@ export default class ShorthandPlugin extends Plugin {
     }
   }
 
+  /**
+   * `getActiveFile()`, not `getActiveViewOfType(MarkdownView)?.file`: this resolves the file
+   * a start actually captures into, and a start can be triggered from the panel — a sidebar
+   * view, which becomes the active *leaf* the moment it is revealed. Resolving through the
+   * active leaf would then answer "no note is open" while a note plainly sits in the main
+   * pane. `getActiveFile()` tracks the active file independent of which leaf has focus, which
+   * is exactly what a panel-initiated (or follow-initiated) start needs. `openEditor()`
+   * already searches all markdown leaves by file rather than by view, so nothing downstream
+   * of this depends on the active view either.
+   */
   private activeMarkdownFile(): TFile | undefined {
-    const file = this.app.workspace.getActiveViewOfType(MarkdownView)?.file;
-    if (file !== null && file !== undefined) return file;
+    const file = this.app.workspace.getActiveFile();
+    if (file !== null && file.extension === "md") return file;
     new Notice("Open a Markdown note before running Shorthand.");
     return undefined;
   }
@@ -1103,6 +1511,22 @@ export default class ShorthandPlugin extends Plugin {
     return file !== null && file !== undefined;
   }
 
+  /**
+   * The panel and follow predicate. Silent, like `hasActiveMarkdownFile`, but built on
+   * `getActiveFile()` rather than the active view: both callers ask this from a context that
+   * is never the note's own leaf — the panel is a sidebar view that becomes the active leaf
+   * the instant it is revealed, and `onAppRecordingBegan` fires from a stream event, not a
+   * user action on any leaf — so resolving through the active leaf would answer the wrong
+   * question (see `activeMarkdownFile`'s comment). `hasActiveMarkdownFile` stays as it is for
+   * the command palette: opening the palette does not move the active leaf, so it asks the
+   * right question already, and churning a predicate that is correct and well-commented would
+   * only cost review time.
+   */
+  private hasActiveNote(): boolean {
+    const file = this.app.workspace.getActiveFile();
+    return file !== null && file.extension === "md";
+  }
+
   private vaultRoot(): string | undefined {
     const adapter = this.app.vault.adapter;
     if (adapter instanceof FileSystemAdapter) return adapter.getBasePath();
@@ -1118,27 +1542,77 @@ export default class ShorthandPlugin extends Plugin {
 
   private dispatch(event: PluginUiEvent): void {
     this.#state = reducePluginState(this.#state, event);
+    this.#render();
+  }
+
+  /** The panel's whole view of the world, assembled from the same facts the status bar uses. */
+  panelModel(): PanelModel {
+    return describePanel({
+      state: this.#state,
+      elapsedMs: this.#capture === undefined ? undefined : Date.now() - this.#capture.startedAt,
+      pendingCharacters: this.#capture?.enhancer?.state.pendingCharacters,
+      minNewChars: this.settings.minNewChars,
+      noteName: this.#capture?.noteFile.basename,
+      hasActiveNote: this.hasActiveNote(),
+      hasCapture: this.#capture !== undefined,
+    });
+  }
+
+  runPanelAction(id: PanelButtonId): void {
+    if (id === "stop") {
+      void this.stopCapture().catch((error: unknown) => this.fail(errorMessage(error)));
+      return;
+    }
+    void this.startCaptureOnActiveNote(id === "start-assisted-notes" ? "toggle-assisted-notes" : "toggle-transcription");
+  }
+
+  #renderPanel(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(SHORTHAND_PANEL_VIEW)) {
+      const view = leaf.view;
+      if (view instanceof ShorthandPanelView) view.render();
+    }
+  }
+
+  /**
+   * Reveal the panel, creating it if the workspace has none. `getRightLeaf(false)` can
+   * return null on a workspace with no right sidebar, which is why this is guarded rather
+   * than chained.
+   */
+  private async revealPanel(): Promise<void> {
+    const existing = this.app.workspace.getLeavesOfType(SHORTHAND_PANEL_VIEW);
+    const leaf = existing[0] ?? this.app.workspace.getRightLeaf(false);
+    if (leaf === null || leaf === undefined) return;
+    if (existing.length === 0) await leaf.setViewState({ type: SHORTHAND_PANEL_VIEW, active: true });
+    this.app.workspace.revealLeaf(leaf);
+  }
+
+  /**
+   * Both surfaces, always together. Deliberately not `#renderPanel()` appended to
+   * `#renderStatus()`: that method returns early when the status bar is hidden, which
+   * is exactly the idle transition the panel most needs to hear about.
+   */
+  #render(): void {
     this.#renderStatus();
+    this.#renderPanel();
   }
 
   #renderStatus(): void {
     if (this.#statusBar === undefined) return;
-    // Show progress toward the next tick. Without this the plugin looks broken while it is
-    // simply below the character gate — the exact confusion this feature was added to fix.
-    const pending = this.#capture?.enhancer?.state.pendingCharacters;
-    const progress = pending === undefined
-      ? ""
-      : ` · ${pending}/${this.settings.minNewChars} chars`;
-    const elapsed = this.#capture === undefined
-      ? ""
-      : ` · ${formatElapsed(Date.now() - this.#capture.startedAt)}`;
-    this.#statusBar.setText(`Shorthand: ${this.#state.mode}${elapsed}${progress}`);
-    this.#statusBar.setAttribute(
-      "title",
-      this.#state.message ?? (pending === undefined
-        ? "Shorthand status"
-        : `${pending} of ${this.settings.minNewChars} characters toward the next enhancement pass. "Shorthand: Enhance now" runs one immediately.`),
-    );
+    const display = describeStatus({
+      state: this.#state,
+      elapsedMs: this.#capture === undefined ? undefined : Date.now() - this.#capture.startedAt,
+      pendingCharacters: this.#capture?.enhancer?.state.pendingCharacters,
+      minNewChars: this.settings.minNewChars,
+    });
+    // `hide()`/`show()` rather than clearing the text: an item holding "" still
+    // occupies its separator, which is the space this change exists to reclaim.
+    if (!display.visible) {
+      this.#statusBar.hide();
+      return;
+    }
+    this.#statusBar.show();
+    this.#statusBar.setText(display.text);
+    this.#statusBar.setAttribute("title", display.tooltip);
   }
 }
 
@@ -1208,6 +1682,12 @@ class ShorthandSettingTab extends PluginSettingTab {
     if (this.plugin.settings.writeTranscriptNote) {
       textSetting(containerEl, this.plugin, "Transcript folder", transcriptFolderDescription, "sidecarDirectory");
     }
+    new Setting(containerEl)
+      .setName("Automatic note scaffolding")
+      .setDesc("Shorthand adds its section markers to a note that has none, instead of asking you first.")
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.autoScaffold)
+        .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, autoScaffold: value })));
     new Setting(containerEl)
       .setName("Control Shorthand recording")
       .setDesc(createFragment((desc) => {
@@ -1383,6 +1863,21 @@ class ShorthandSettingTab extends PluginSettingTab {
       .addToggle((toggle) => toggle
         .setValue(this.plugin.settings.enableLiveEnhancement)
         .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, enableLiveEnhancement: value })));
+    new Setting(containerEl)
+      .setName("Follow Shorthand's recordings")
+      .setDesc(createFragment((desc) => {
+        desc.appendText(
+          "Starting a recording with Shorthand's own hotkey also starts a capture on the note you have open — see ",
+        );
+        desc.createEl("a", {
+          text: "Following Shorthand's recordings",
+          href: "https://github.com/mshish/shorthand-obsidian-plugin#following-shorthands-recordings",
+        });
+        desc.appendText(".");
+      }))
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.followAppRecording)
+        .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, followAppRecording: value })));
     new Setting(containerEl)
       .setName("Debug logging")
       .setDesc("Logs enhancement activity to the developer console. Turn this on if a note stops updating during capture.")
@@ -1673,6 +2168,100 @@ function numberSetting(
       setting.setDesc(describe(plugin.settings[key]));
     });
   });
+}
+
+/**
+ * The right-sidebar controls. Everything it decides is `describePanel`; this class is the
+ * DOM wiring only, which is what keeps it reviewable by reading — it cannot be imported
+ * under `bun test`.
+ */
+class ShorthandPanelView extends ItemView {
+  // `#build` assigns all four together, exactly once, before `#patch` ever reads them — see
+  // `render()`'s guard. Definite-assignment fields rather than `| undefined` because every
+  // read after that point is meant to be unconditional; the guard belongs in one place
+  // (`render()`), not repeated as a null check in every line of `#patch`.
+  #built = false;
+  #headlineEl!: HTMLElement;
+  #noteEl!: HTMLElement;
+  #detailEl!: HTMLElement;
+  #buttonEls: ReadonlyMap<PanelButtonId, HTMLButtonElement> = new Map();
+
+  constructor(leaf: WorkspaceLeaf, private readonly plugin: ShorthandPlugin) {
+    super(leaf);
+  }
+
+  getViewType(): string {
+    return SHORTHAND_PANEL_VIEW;
+  }
+
+  getDisplayText(): string {
+    return "Shorthand";
+  }
+
+  getIcon(): string {
+    return "mic";
+  }
+
+  async onOpen(): Promise<void> {
+    this.render();
+  }
+
+  /**
+   * Builds the DOM at most once per view instance, then patches the existing nodes on every
+   * later call. The one-second interval that keeps the panel's clock current calls this
+   * unconditionally, whether or not anything actually changed — `container.empty()` and
+   * rebuilding every element on that cadence dropped keyboard focus off whichever button a
+   * keyboard user was holding, and made a screen reader re-announce the whole panel once a
+   * second, forever, for as long as the panel stayed open.
+   */
+  render(): void {
+    const model = this.plugin.panelModel();
+    if (!this.#built) { this.#build(model); this.#built = true; }
+    this.#patch(model);
+  }
+
+  /** Runs once. `describePanel` always returns the same three button ids in the same order
+   * (a documented invariant), so there is no case where the set of controls needs to change
+   * after this — only their text and `disabled` state do, which `#patch` handles. */
+  #build(model: PanelModel): void {
+    const container = this.contentEl;
+    container.empty();
+    container.addClass("shorthand-panel");
+    this.#headlineEl = container.createEl("p", { cls: "shorthand-panel-headline" });
+    this.#noteEl = container.createEl("p", { cls: "shorthand-panel-note" });
+    this.#detailEl = container.createEl("p", { cls: "shorthand-panel-detail" });
+    const buttons = container.createDiv({ cls: "shorthand-panel-buttons" });
+    const buttonEls = new Map<PanelButtonId, HTMLButtonElement>();
+    for (const button of model.buttons) {
+      const el = buttons.createEl("button");
+      if (button.id === "start-meeting") el.addClass("mod-cta");
+      el.onclick = () => { this.plugin.runPanelAction(button.id); };
+      buttonEls.set(button.id, el);
+    }
+    this.#buttonEls = buttonEls;
+  }
+
+  /**
+   * Patches text and `disabled` in place — never `.empty()`, never a fresh element — so an
+   * idle repaint cannot move focus or trigger accessibility-tree churn. `.hidden` toggles the
+   * note/detail lines' visibility rather than adding or removing them, which stays within
+   * "patch `textContent`/`disabled`, not `style`": it is a boolean content attribute, not
+   * inline styling, and the browser's own UA stylesheet does the hiding.
+   */
+  #patch(model: PanelModel): void {
+    this.#headlineEl.textContent = model.headline;
+    this.#noteEl.textContent = model.noteName ?? "";
+    this.#noteEl.hidden = model.noteName === undefined;
+    this.#detailEl.textContent = model.detail ?? "";
+    this.#detailEl.hidden = model.detail === undefined;
+
+    for (const button of model.buttons) {
+      const el = this.#buttonEls.get(button.id);
+      if (el === undefined) continue; // Unreachable while the button-set invariant above holds.
+      el.textContent = button.label;
+      el.disabled = !button.enabled;
+    }
+  }
 }
 
 class ScaffoldModal extends Modal {

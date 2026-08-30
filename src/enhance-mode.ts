@@ -7,6 +7,8 @@
  * between the three sources of text lives here.
  */
 
+import { COMMAND_NAMES } from "./commands.js";
+
 export type EnhanceCommandId = "enhance-now" | "clean-up-this-note";
 
 export type EnhanceRequest = Readonly<{
@@ -26,18 +28,14 @@ export type EnhanceRequest = Readonly<{
   writeTranscriptNote: boolean;
 }>;
 
-const ENHANCE_COMMAND_NAMES: Readonly<Record<EnhanceCommandId, string>> = {
-  "enhance-now": "Enhance now",
-  "clean-up-this-note": "Clean up this note",
-};
-
 /**
  * The command palette name for an `EnhanceCommandId`, exactly as `main.ts` registers it.
- * A `Record`, not a ternary, so a third command id is a compile error here rather than a
- * silently wrong name — the same reason `onEnhanceStatus` in `main.ts` switches on `never`.
+ * Reads `COMMAND_NAMES` rather than holding its own copy, so these two names have exactly
+ * one source — the situation `src/commands.ts` exists to prevent had a second table here
+ * that just happened to agree with the first.
  */
 export function enhanceCommandName(command: EnhanceCommandId): string {
-  return ENHANCE_COMMAND_NAMES[command];
+  return COMMAND_NAMES[command];
 }
 
 export type EnhanceMode =

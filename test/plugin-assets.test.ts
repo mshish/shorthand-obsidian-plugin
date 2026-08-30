@@ -16,6 +16,7 @@ describe("the plugin stylesheet", () => {
   test("defines the prompt-editor field class", () => {
     const css = readFileSync(resolve(process.cwd(), "styles.css"), "utf8");
     expect(css).toContain(".shorthand-prompt-textarea");
+    expect(css).toContain(".shorthand-panel-buttons");
   });
 
   test("is delivered to the vault alongside main.js and manifest.json", () => {

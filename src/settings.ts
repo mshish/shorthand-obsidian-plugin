@@ -59,6 +59,17 @@ export type ShorthandPluginSettings = Readonly<{
    */
   writeTranscriptNote: boolean;
   /**
+   * Whether a note with no Shorthand marker block is scaffolded without asking.
+   *
+   * On by default: the user has already expressed intent by running a Shorthand command
+   * on that note, and the modal's answer was yes almost every time.
+   *
+   * It governs the *confirmation* only. `preflightMarkers`' `error` status — markers
+   * present but malformed — is untouched by it and is still never repaired implicitly,
+   * because a broken ownership boundary is a different question from an absent one.
+   */
+  autoScaffold: boolean;
+  /**
    * Replaces core's `DEFAULT_EDITORIAL_GUIDANCE`. Empty means "use core's default" and is
    * stored as empty rather than as a copy of that default: a user who never touches this
    * keeps inheriting improvements to it, instead of being frozen at whatever the text
@@ -78,6 +89,15 @@ export type ShorthandPluginSettings = Readonly<{
   retainAgentSessionHistory: boolean;
   /** One heading per line. Empty means core's `DEFAULT_CONFIG.templateSections`, for the same reason. */
   templateSectionText: string;
+  /**
+   * Whether the plugin keeps a follower attached while idle, so a recording started with
+   * Shorthand's own hotkey also starts a capture here.
+   *
+   * Off by default, and deliberately: it holds a `shorthand --follow-stream` child process
+   * open for as long as the plugin is loaded, which is not something to switch on for
+   * someone without asking. Eight followers may attach at once, so the slot itself is free.
+   */
+  followAppRecording: boolean;
 }>;
 
 export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
@@ -95,10 +115,12 @@ export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
   enableLiveEnhancement: true,
   controlShorthandRecording: true,
   writeTranscriptNote: false,
+  autoScaffold: true,
   debugLogging: false,
   retainAgentSessionHistory: false,
   noteTakingGuidance: "",
   templateSectionText: "",
+  followAppRecording: false,
 });
 
 export function normalizePluginSettings(input: unknown): ShorthandPluginSettings {
@@ -126,6 +148,9 @@ export function normalizePluginSettings(input: unknown): ShorthandPluginSettings
     writeTranscriptNote: typeof value.writeTranscriptNote === "boolean"
       ? value.writeTranscriptNote
       : DEFAULT_PLUGIN_SETTINGS.writeTranscriptNote,
+    autoScaffold: typeof value.autoScaffold === "boolean"
+      ? value.autoScaffold
+      : DEFAULT_PLUGIN_SETTINGS.autoScaffold,
     debugLogging: typeof value.debugLogging === "boolean"
       ? value.debugLogging
       : DEFAULT_PLUGIN_SETTINGS.debugLogging,
@@ -134,6 +159,9 @@ export function normalizePluginSettings(input: unknown): ShorthandPluginSettings
       : DEFAULT_PLUGIN_SETTINGS.retainAgentSessionHistory,
     noteTakingGuidance: guidanceText(value.noteTakingGuidance, DEFAULT_PLUGIN_SETTINGS.noteTakingGuidance),
     templateSectionText: headingListText(value.templateSectionText, DEFAULT_PLUGIN_SETTINGS.templateSectionText),
+    followAppRecording: typeof value.followAppRecording === "boolean"
+      ? value.followAppRecording
+      : DEFAULT_PLUGIN_SETTINGS.followAppRecording,
   };
 }
 

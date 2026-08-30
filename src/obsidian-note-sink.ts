@@ -47,6 +47,12 @@ export type ObsidianNoteSinkOptions = Readonly<{
   api: ObsidianNoteApi;
   file: TFile;
   agentContext?: Readonly<{ cwd: string }>;
+  /**
+   * Runs a callback after the frame in which the editor re-measures. Injected so a
+   * test can run it synchronously; defaults to `requestAnimationFrame`. See
+   * `applyPreservingViewport` for why the viewport has to be restored twice.
+   */
+  scheduleFrame?: (run: () => void) => void;
 }>;
 
 export type ObsidianScaffoldResult =
@@ -61,11 +67,13 @@ export type ObsidianScaffoldResult =
 export class ObsidianNoteSink implements NoteSink {
   readonly #api: ObsidianNoteApi;
   readonly #file: TFile;
+  readonly #scheduleFrame: (run: () => void) => void;
   readonly agentContext?: Readonly<{ cwd: string }>;
 
   constructor(options: ObsidianNoteSinkOptions) {
     this.#api = options.api;
     this.#file = options.file;
+    this.#scheduleFrame = options.scheduleFrame ?? defaultScheduleFrame;
     if (options.agentContext !== undefined) this.agentContext = options.agentContext;
   }
 
@@ -181,7 +189,7 @@ export class ObsidianNoteSink implements NoteSink {
     if (update.status === "error") return { status: "error", error: update.error };
     if (update.status === "stale") return { status: "stale" };
     if (update.status === "written") {
-      editor.replaceRange(update.edit.replacement, editor.offsetToPos(update.edit.from), editor.offsetToPos(update.edit.to));
+      applyPreservingViewport(editor, update.edit, this.#scheduleFrame);
       await open.save();
     }
     return { status: update.status, revision: update.revision };
@@ -195,7 +203,7 @@ export class ObsidianNoteSink implements NoteSink {
     const scaffold = scaffoldMarkdownDocument(editor.getValue(), sections);
     if (scaffold.status === "error") return { status: "error", message: scaffold.error.message };
     if (scaffold.status === "written") {
-      editor.replaceRange(scaffold.edit.replacement, editor.offsetToPos(scaffold.edit.from), editor.offsetToPos(scaffold.edit.to));
+      applyPreservingViewport(editor, scaffold.edit, this.#scheduleFrame);
       await open.save();
     }
     return { status: scaffold.status };
@@ -208,6 +216,52 @@ export class ObsidianNoteSink implements NoteSink {
     return this.#api.vault.getFileByPath(this.#file.path) === this.#file ? this.#file : undefined;
   }
 
+}
+
+/**
+ * Apply an owned-range edit without moving the reader.
+ *
+ * The person whose note this is did not ask for this edit and is usually reading
+ * the note while a meeting runs. Replacing the whole AI block is a large single
+ * change, and the editor does not reliably hold its scroll anchor across one — the
+ * note was thrown to the top on every enhancement pass, roughly twice a minute,
+ * which is what made a live capture unwatchable. Nothing else restores the
+ * viewport: `replaceRange` maps the selection but says nothing about scroll.
+ *
+ * **The viewport is restored twice, and both are load-bearing.** CodeMirror reads
+ * layout in a measure phase it schedules with `requestAnimationFrame`
+ * (https://codemirror.net/docs/guide/), so a restore that only ran synchronously
+ * would land *before* that phase and be overwritten by it. A restore that only ran
+ * after the frame would leave the reset visible for one frame — the "jumps to the
+ * top and then returns" flash reported in codemirror/dev#1473. The synchronous call
+ * covers a reset applied during the change; the scheduled one covers a reset applied
+ * during the measure that follows.
+ *
+ * Neither restore opens a window for the user to scroll and be yanked back: the
+ * first has no `await` before it, and the second is one frame later.
+ *
+ * The selection is left alone on purpose: the editor already maps it through the
+ * change, and restoring a captured copy would fight a user typing during the write.
+ */
+function applyPreservingViewport(
+  editor: Editor,
+  edit: Readonly<{ from: number; to: number; replacement: string }>,
+  scheduleFrame: (run: () => void) => void,
+): void {
+  const scroll = editor.getScrollInfo();
+  editor.replaceRange(edit.replacement, editor.offsetToPos(edit.from), editor.offsetToPos(edit.to));
+  editor.scrollTo(scroll.left, scroll.top);
+  scheduleFrame(() => editor.scrollTo(scroll.left, scroll.top));
+}
+
+/**
+ * `requestAnimationFrame` when there is a window to ask, and a microtask otherwise.
+ * The plugin is desktop-only, so the fallback exists for the test and bundle
+ * environments rather than for a real vault.
+ */
+function defaultScheduleFrame(run: () => void): void {
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+  else void Promise.resolve().then(run);
 }
 
 function missingTarget(): Readonly<{ ok: false; error: ReturnType<typeof sinkError> }> {

@@ -35,25 +35,32 @@ Add `mshish/shorthand-obsidian-plugin` as a beta plugin in BRAT. BRAT installs t
 
 1. Open the meeting note in Obsidian.
 2. Make sure the Shorthand desktop app is running.
-3. Run **Shorthand: Start capture on this note** from the command palette.
+3. Run **Shorthand: Start meeting capture on this note** from the command palette.
 4. Run **Shorthand: Stop capture** when the meeting ends.
 
-If the note has not been prepared for Shorthand, the plugin offers to add the required sections. Your own writing stays outside the section maintained by AI.
+If the note has not been prepared for Shorthand, the plugin adds the required sections. Turn off **Automatic note scaffolding** in settings if you would rather be asked first. Your own writing stays outside the section maintained by AI.
 
 Turn on **Transcript notes** if you also want a linked note containing the raw transcript. This is optional. **Enhance now** can use that saved transcript after the live capture has ended.
+
+## The Shorthand panel
+
+**Open Shorthand panel**, or the microphone icon in the ribbon, opens a panel in the right sidebar with Start and Stop buttons, the current state, the elapsed time, and the note being captured. It is not opened automatically.
+
+While a capture is running, the status bar shows the elapsed time and clicking it stops the capture. It is hidden when nothing is capturing.
 
 ## Commands
 
 Obsidian adds the “Shorthand:” prefix in the command palette.
 
-- **Start capture on this note**
+- **Start meeting capture on this note**
 - **Start assisted notes capture on this note**
 - **Stop capture**
 - **Enhance now**
 - **Clean up this note**
-- **Toggle Shorthand recording**
-- **Toggle Shorthand assisted notes**
+- **Toggle Shorthand meeting recording**
+- **Toggle Shorthand assisted notes recording**
 - **Cancel Shorthand recording**
+- **Open Shorthand panel**
 
 **Clean up this note** improves a note you wrote or dictated without using a transcript. It does not run on a note that already has a linked transcript.
 
@@ -78,6 +85,16 @@ Leave the API key field blank to keep the saved key. Use **Clear key** to remove
 Starting a capture cancels any recording already in progress. If you quit Shorthand during a capture, the plugin may reopen it while making sure the recorder is stopped. Turn off **Control Shorthand recording** if you prefer to manage the recorder yourself.
 
 The three recorder commands remain available as manual controls. They control Shorthand but do not start or stop an Obsidian capture.
+
+## Following Shorthand's recordings
+
+**Follow Shorthand's recordings** is off by default. Turn it on and starting a Meetings or Assisted notes recording with Shorthand's own hotkey also starts a capture on the note you have open in Obsidian.
+
+While it is on, the plugin keeps a connection to Shorthand open so it can see those recordings — reopening it roughly every 30 seconds, indefinitely, whenever Shorthand is not running. Dictation is never followed.
+
+A capture started this way does not stop Shorthand's recording when you stop it, because it was not the one that started it. Stop the recording the way you started it.
+
+This needs a Shorthand build that reports which mode a recording is. **No shipped build does this yet** — the `shorthand-app` half that reports it is on an unmerged pull request — so today the plugin always sees a recording started but not what kind, and does nothing rather than guess. Turning the setting on has no effect until that build ships.
 
 ## Note writing
 

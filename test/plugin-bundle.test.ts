@@ -22,7 +22,8 @@ class Notice { constructor(message) { this.message = message; } }
 class Setting { constructor(container) { this.container = container; } }
 class MarkdownView {}
 class FileSystemAdapter {}
-module.exports = { Plugin, PluginSettingTab, Modal, Notice, Setting, MarkdownView, FileSystemAdapter };
+class ItemView { constructor(leaf) { this.leaf = leaf; } }
+module.exports = { Plugin, PluginSettingTab, Modal, Notice, Setting, MarkdownView, FileSystemAdapter, ItemView };
 `;
 
 /**
