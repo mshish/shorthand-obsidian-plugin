@@ -12,10 +12,10 @@ The rest is deliberately not imported — open it only when the work calls for i
   after the tag in `package.json` changes, which makes a green typecheck prove
   nothing. Re-run the install naming the tag explicitly and check that the
   `resolved` commit in `package-lock.json` actually moved.
-- `README.md` § "Verification — run this before every push" — before assuming
-  `npm test` covers `main.ts`. It cannot be imported under `bun test`, so most of
-  what it expresses is verified only by typecheck, the bundle-load smoke test, and
-  a human. There is no CI in this repo, so that gate is yours to run.
+- `AGENTS.md` § "Commands" — before assuming `npm test` covers `main.ts`. It
+  cannot be imported under `bun test`, so most of what it expresses is verified
+  only by typecheck, the bundle-load smoke test, and a human. CI runs the first
+  two on every push and pull request; the human half is still yours.
 - `test/plugin-bundle.test.ts` — before changing entry points or adding a
   barrel. It loads the built `main.js` under a stub `obsidian`, and it exists
   because CI once built the bundle and never required it, which shipped a load
