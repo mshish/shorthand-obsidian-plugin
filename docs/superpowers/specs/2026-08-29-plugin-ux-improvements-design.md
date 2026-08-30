@@ -66,10 +66,20 @@ token is the raw `PluginMode` union member, so a user can be shown
   | `enhancing` | `Shorthand 12:34 · writing` |
   | `stopping` | `Shorthand 12:34 · stopping` |
   | `enhancement-stopped` | `Shorthand 12:34 · enhancement stopped` |
-  | `error` | `Shorthand · error` |
+  | `error`, capture still live | `Shorthand 12:34 · error` |
+  | `error`, no capture | `Shorthand · error` |
 
-  The clock is omitted wherever there is no capture to measure — `starting`
-  before the runtime exists, and an `error` that outlived its capture.
+  The rule the table illustrates: **the clock appears whenever there is a
+  capture to measure, and only then.** `starting` has no runtime yet, so it
+  has no clock. `error` has one in either state, because an error does not
+  end a capture — `fail()` is reached from `connectionError`, `protocolError`,
+  `giveUp` and `drainTimeout` while the capture runs on, and the reducer keeps
+  `captureActive` set. Hiding the clock there would tell the user time had
+  stopped while their meeting was still being recorded.
+
+  For the same reason the `error` tooltip says "Click to stop" when a capture
+  is live: the click handler really does still stop it.
+
   No cell contains a `PluginMode` union member.
 - The item is clickable. While a capture is running or stopping, clicking it
   stops the capture. Because the item is hidden when idle there is no start
