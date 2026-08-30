@@ -375,7 +375,9 @@ export default class ShorthandPlugin extends Plugin {
         // Do this before either frontmatter or marker writes. Starting capture is
         // the only point at which we may ask the user to let Shorthand claim an
         // unmarked note, and declining must leave every byte untouched.
-        if (markerPreflight.status === "needs-scaffold" && !await confirmScaffold(this.app)) return;
+        if (markerPreflight.status === "needs-scaffold"
+          && !this.settings.autoScaffold
+          && !await confirmScaffold(this.app)) return;
         let sidecar: SidecarWriter | undefined;
         if (this.settings.writeTranscriptNote) {
           const noteContent = await noteSink.readContent();
@@ -935,7 +937,9 @@ export default class ShorthandPlugin extends Plugin {
       this.fail(preflight.message);
       return false;
     }
-    if (preflight.status === "needs-scaffold" && !await confirmScaffold(this.app)) return false;
+    if (preflight.status === "needs-scaffold"
+      && !this.settings.autoScaffold
+      && !await confirmScaffold(this.app)) return false;
     return this.ensureScaffold(sink);
   }
 
@@ -1277,6 +1281,12 @@ class ShorthandSettingTab extends PluginSettingTab {
     if (this.plugin.settings.writeTranscriptNote) {
       textSetting(containerEl, this.plugin, "Transcript folder", transcriptFolderDescription, "sidecarDirectory");
     }
+    new Setting(containerEl)
+      .setName("Automatic note scaffolding")
+      .setDesc("Shorthand adds its section markers to a note that has none, instead of asking you first.")
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.autoScaffold)
+        .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, autoScaffold: value })));
     new Setting(containerEl)
       .setName("Control Shorthand recording")
       .setDesc(createFragment((desc) => {

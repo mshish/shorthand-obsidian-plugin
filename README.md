@@ -38,7 +38,7 @@ Add `mshish/shorthand-obsidian-plugin` as a beta plugin in BRAT. BRAT installs t
 3. Run **Shorthand: Start meeting capture on this note** from the command palette.
 4. Run **Shorthand: Stop capture** when the meeting ends.
 
-If the note has not been prepared for Shorthand, the plugin offers to add the required sections. Your own writing stays outside the section maintained by AI.
+If the note has not been prepared for Shorthand, the plugin adds the required sections. Turn off **Automatic note scaffolding** in settings if you would rather be asked first. Your own writing stays outside the section maintained by AI.
 
 Turn on **Transcript notes** if you also want a linked note containing the raw transcript. This is optional. **Enhance now** can use that saved transcript after the live capture has ended.
 

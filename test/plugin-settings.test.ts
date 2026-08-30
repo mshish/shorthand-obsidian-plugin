@@ -41,6 +41,23 @@ describe("plugin settings normalization", () => {
     }
   });
 
+  test("scaffolds automatically by default", () => {
+    expect(DEFAULT_PLUGIN_SETTINGS.autoScaffold).toBe(true);
+    expect(normalizePluginSettings({}).autoScaffold).toBe(true);
+  });
+
+  test("respects an explicit opt-out", () => {
+    expect(normalizePluginSettings({ autoScaffold: false }).autoScaffold).toBe(false);
+  });
+
+  test("falls back to the default for a malformed value", () => {
+    // normalizePluginSettings is the trust boundary for data.json, which is
+    // user-editable and may be hand-written. Every key validates and falls back.
+    expect(normalizePluginSettings({ autoScaffold: "yes" }).autoScaffold).toBe(true);
+    expect(normalizePluginSettings({ autoScaffold: null }).autoScaffold).toBe(true);
+    expect(normalizePluginSettings({ autoScaffold: 0 }).autoScaffold).toBe(true);
+  });
+
   test("normalizes valid persisted values", () => {
     expect(normalizePluginSettings({
       backend: "llm",
@@ -57,6 +74,7 @@ describe("plugin settings normalization", () => {
       enableLiveEnhancement: false,
       controlShorthandRecording: false,
       writeTranscriptNote: true,
+      autoScaffold: false,
       debugLogging: true,
       retainAgentSessionHistory: true,
       noteTakingGuidance: "  Write terse bullets.  ",
@@ -76,6 +94,7 @@ describe("plugin settings normalization", () => {
       enableLiveEnhancement: false,
       controlShorthandRecording: false,
       writeTranscriptNote: true,
+      autoScaffold: false,
       debugLogging: true,
       retainAgentSessionHistory: true,
       noteTakingGuidance: "Write terse bullets.",

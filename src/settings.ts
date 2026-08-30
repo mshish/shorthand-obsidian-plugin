@@ -59,6 +59,17 @@ export type ShorthandPluginSettings = Readonly<{
    */
   writeTranscriptNote: boolean;
   /**
+   * Whether a note with no Shorthand marker block is scaffolded without asking.
+   *
+   * On by default: the user has already expressed intent by running a Shorthand command
+   * on that note, and the modal's answer was yes almost every time.
+   *
+   * It governs the *confirmation* only. `preflightMarkers`' `error` status — markers
+   * present but malformed — is untouched by it and is still never repaired implicitly,
+   * because a broken ownership boundary is a different question from an absent one.
+   */
+  autoScaffold: boolean;
+  /**
    * Replaces core's `DEFAULT_EDITORIAL_GUIDANCE`. Empty means "use core's default" and is
    * stored as empty rather than as a copy of that default: a user who never touches this
    * keeps inheriting improvements to it, instead of being frozen at whatever the text
@@ -95,6 +106,7 @@ export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
   enableLiveEnhancement: true,
   controlShorthandRecording: true,
   writeTranscriptNote: false,
+  autoScaffold: true,
   debugLogging: false,
   retainAgentSessionHistory: false,
   noteTakingGuidance: "",
@@ -126,6 +138,9 @@ export function normalizePluginSettings(input: unknown): ShorthandPluginSettings
     writeTranscriptNote: typeof value.writeTranscriptNote === "boolean"
       ? value.writeTranscriptNote
       : DEFAULT_PLUGIN_SETTINGS.writeTranscriptNote,
+    autoScaffold: typeof value.autoScaffold === "boolean"
+      ? value.autoScaffold
+      : DEFAULT_PLUGIN_SETTINGS.autoScaffold,
     debugLogging: typeof value.debugLogging === "boolean"
       ? value.debugLogging
       : DEFAULT_PLUGIN_SETTINGS.debugLogging,
