@@ -14,6 +14,9 @@ const base = {
   minNewChars: 180,
   noteName: undefined,
   hasActiveNote: true,
+  // Defaults to "nothing to stop"; tests for a live runtime override this explicitly so the
+  // scenario reads plainly, rather than a shared default doing invisible work for them.
+  hasCapture: false,
 } as const;
 
 const enabled = (model: ReturnType<typeof describePanel>): string[] =>
@@ -36,9 +39,19 @@ describe("describePanel", () => {
   });
 
   test("offers only stop while capturing, and shows the clock", () => {
-    const model = describePanel({ ...base, state: capturing, elapsedMs: 754_000, noteName: "Weekly sync" });
+    const model = describePanel({ ...base, state: capturing, hasCapture: true, elapsedMs: 754_000, noteName: "Weekly sync" });
     expect(model.headline).toBe("Capturing — 12:34");
     expect(model.noteName).toBe("Weekly sync");
+    expect(enabled(model)).toEqual(["stop"]);
+  });
+
+  test("keeps Stop available during Assisted Notes' acknowledgement wait, before captureActive flips", () => {
+    // Assisted Notes defers `capture-started` into its bounded acknowledgement, so a real
+    // runtime can exist — and need stopping — for that whole window while `state.mode` is
+    // still "starting" and `captureActive` is still false. Gating Stop on `captureActive`
+    // greyed it out for exactly the capture the panel most needs to let a user cancel.
+    const starting = reducePluginState(INITIAL_PLUGIN_STATE, { type: "capture-starting" });
+    const model = describePanel({ ...base, state: starting, hasCapture: true });
     expect(enabled(model)).toEqual(["stop"]);
   });
 
@@ -47,19 +60,25 @@ describe("describePanel", () => {
     expect(model.detail).toBe("140 of 180 characters toward the next pass");
   });
 
-  test("disables every button with no Markdown note open", () => {
+  test("disables every button with no Markdown note open, and says what to do", () => {
     // Both start commands are checkCallback-gated on an open note; a panel button
     // that ignored that would fire a command the palette would have hidden.
     const model = describePanel({ ...base, state: INITIAL_PLUGIN_STATE, hasActiveNote: false });
     expect(enabled(model)).toEqual([]);
+    // Idle with no note and no error is the one case where every button is disabled and
+    // neither a message nor the character gate exists to say why.
+    expect(model.detail).toBe("Open a Markdown note to start a capture.");
   });
 
-  test("offers nothing while a start or a stop is in flight", () => {
+  test("offers nothing while a start (with no runtime yet) or a stop is in flight", () => {
     const starting = reducePluginState(INITIAL_PLUGIN_STATE, { type: "capture-starting" });
     expect(enabled(describePanel({ ...base, state: starting }))).toEqual([]);
     const stopping = reducePluginState(capturing, { type: "capture-stopping" });
-    expect(describePanel({ ...base, state: stopping }).headline).toBe("Stopping…");
-    expect(enabled(describePanel({ ...base, state: stopping }))).toEqual([]);
+    const stoppingModel = describePanel({ ...base, state: stopping, hasCapture: true });
+    expect(stoppingModel.headline).toBe("Stopping…");
+    // `stopping` overrides `hasCapture` even though a runtime still exists: a second Stop
+    // press during teardown must not send a second control signal to Shorthand.
+    expect(enabled(stoppingModel)).toEqual([]);
   });
 
   test("shows an error's own message as the detail", () => {
@@ -68,6 +87,15 @@ describe("describePanel", () => {
     expect(model.headline).toBe("Error");
     expect(model.detail).toBe("Shorthand was not running.");
     // An error does not hold the capture open, so starting again must stay possible.
+    expect(enabled(model)).toEqual(["start-meeting", "start-assisted-notes"]);
+  });
+
+  test("sticky enhancement-stopped also re-enables Start, same as sticky error", () => {
+    // `canStartCapture` treats both sticky modes alike; this covers the one this suite was
+    // missing so the property is verified for both rather than just `error`.
+    const stopped = reducePluginState(INITIAL_PLUGIN_STATE, { type: "enhancement-stopped", message: "Enhancement disabled after repeated read failures." });
+    const model = describePanel({ ...base, state: stopped });
+    expect(model.headline).toBe("Enhancement stopped");
     expect(enabled(model)).toEqual(["start-meeting", "start-assisted-notes"]);
   });
 

@@ -1545,7 +1545,8 @@ export default class ShorthandPlugin extends Plugin {
       pendingCharacters: this.#capture?.enhancer?.state.pendingCharacters,
       minNewChars: this.settings.minNewChars,
       noteName: this.#capture?.noteFile.basename,
-      hasActiveNote: this.hasActiveMarkdownFile(),
+      hasActiveNote: this.hasActiveNote(),
+      hasCapture: this.#capture !== undefined,
     });
   }
 
@@ -2167,6 +2168,16 @@ function numberSetting(
  * under `bun test`.
  */
 class ShorthandPanelView extends ItemView {
+  // `#build` assigns all four together, exactly once, before `#patch` ever reads them — see
+  // `render()`'s guard. Definite-assignment fields rather than `| undefined` because every
+  // read after that point is meant to be unconditional; the guard belongs in one place
+  // (`render()`), not repeated as a null check in every line of `#patch`.
+  #built = false;
+  #headlineEl!: HTMLElement;
+  #noteEl!: HTMLElement;
+  #detailEl!: HTMLElement;
+  #buttonEls: ReadonlyMap<PanelButtonId, HTMLButtonElement> = new Map();
+
   constructor(leaf: WorkspaceLeaf, private readonly plugin: ShorthandPlugin) {
     super(leaf);
   }
@@ -2187,24 +2198,60 @@ class ShorthandPanelView extends ItemView {
     this.render();
   }
 
+  /**
+   * Builds the DOM at most once per view instance, then patches the existing nodes on every
+   * later call. The one-second interval that keeps the panel's clock current calls this
+   * unconditionally, whether or not anything actually changed — `container.empty()` and
+   * rebuilding every element on that cadence dropped keyboard focus off whichever button a
+   * keyboard user was holding, and made a screen reader re-announce the whole panel once a
+   * second, forever, for as long as the panel stayed open.
+   */
   render(): void {
     const model = this.plugin.panelModel();
+    if (!this.#built) { this.#build(model); this.#built = true; }
+    this.#patch(model);
+  }
+
+  /** Runs once. `describePanel` always returns the same three button ids in the same order
+   * (a documented invariant), so there is no case where the set of controls needs to change
+   * after this — only their text and `disabled` state do, which `#patch` handles. */
+  #build(model: PanelModel): void {
     const container = this.contentEl;
     container.empty();
     container.addClass("shorthand-panel");
-    container.createEl("p", { text: model.headline, cls: "shorthand-panel-headline" });
-    if (model.noteName !== undefined) {
-      container.createEl("p", { text: model.noteName, cls: "shorthand-panel-note" });
-    }
-    if (model.detail !== undefined) {
-      container.createEl("p", { text: model.detail, cls: "shorthand-panel-detail" });
-    }
+    this.#headlineEl = container.createEl("p", { cls: "shorthand-panel-headline" });
+    this.#noteEl = container.createEl("p", { cls: "shorthand-panel-note" });
+    this.#detailEl = container.createEl("p", { cls: "shorthand-panel-detail" });
     const buttons = container.createDiv({ cls: "shorthand-panel-buttons" });
+    const buttonEls = new Map<PanelButtonId, HTMLButtonElement>();
     for (const button of model.buttons) {
-      const el = buttons.createEl("button", { text: button.label });
-      el.disabled = !button.enabled;
+      const el = buttons.createEl("button");
       if (button.id === "start-meeting") el.addClass("mod-cta");
       el.onclick = () => { this.plugin.runPanelAction(button.id); };
+      buttonEls.set(button.id, el);
+    }
+    this.#buttonEls = buttonEls;
+  }
+
+  /**
+   * Patches text and `disabled` in place — never `.empty()`, never a fresh element — so an
+   * idle repaint cannot move focus or trigger accessibility-tree churn. `.hidden` toggles the
+   * note/detail lines' visibility rather than adding or removing them, which stays within
+   * "patch `textContent`/`disabled`, not `style`": it is a boolean content attribute, not
+   * inline styling, and the browser's own UA stylesheet does the hiding.
+   */
+  #patch(model: PanelModel): void {
+    this.#headlineEl.textContent = model.headline;
+    this.#noteEl.textContent = model.noteName ?? "";
+    this.#noteEl.hidden = model.noteName === undefined;
+    this.#detailEl.textContent = model.detail ?? "";
+    this.#detailEl.hidden = model.detail === undefined;
+
+    for (const button of model.buttons) {
+      const el = this.#buttonEls.get(button.id);
+      if (el === undefined) continue; // Unreachable while the button-set invariant above holds.
+      el.textContent = button.label;
+      el.disabled = !button.enabled;
     }
   }
 }

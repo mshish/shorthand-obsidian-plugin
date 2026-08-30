@@ -25,6 +25,15 @@ export type PanelInput = Readonly<{
   noteName: string | undefined;
   /** Whether a Markdown note is open, mirroring both start commands' `checkCallback`. */
   hasActiveNote: boolean;
+  /**
+   * Whether a `CaptureRuntime` currently exists, mirroring the status bar's own click
+   * gate (`#capture !== undefined`) rather than `state.captureActive`. Assisted Notes
+   * defers `capture-started` — and so `captureActive` — into its bounded acknowledgement,
+   * so for up to that whole window a real runtime is running with `captureActive: false`.
+   * `canStop` needs "is there something to stop", which this answers and `captureActive`
+   * does not.
+   */
+  hasCapture: boolean;
 }>;
 
 /**
@@ -35,10 +44,14 @@ export type PanelInput = Readonly<{
  * sidebar is narrow enough that one row vanishing reflows the rest.
  */
 export function describePanel(input: PanelInput): PanelModel {
-  const { state, elapsedMs, pendingCharacters, minNewChars, noteName, hasActiveNote } = input;
+  const { state, elapsedMs, pendingCharacters, minNewChars, noteName, hasActiveNote, hasCapture } = input;
   const clock = elapsedMs === undefined ? undefined : formatElapsed(elapsedMs);
   const canStart = hasActiveNote && canStartCapture(state);
-  const canStop = state.captureActive && !state.stopping;
+  // Not `state.captureActive`: Assisted Notes defers `capture-started` into its bounded
+  // acknowledgement, so a real runtime can be running for that whole window with
+  // `captureActive` still false. `hasCapture` mirrors the status bar's own click gate and
+  // answers "is there something to stop", which is what this button needs.
+  const canStop = hasCapture && !state.stopping;
 
   const buttons: readonly PanelButton[] = [
     { id: "start-meeting", label: "Start meeting", enabled: canStart },
@@ -66,9 +79,14 @@ export function describePanel(input: PanelInput): PanelModel {
     }
   })();
 
+  // Idle with no note open is the one case where every button is greyed and neither a
+  // message nor a gate exists to say why — without this a user opening the panel cold sees
+  // three disabled buttons and nothing telling them what to do about it.
+  const idleWithoutNote = state.mode === "idle" && !hasActiveNote;
+
   // A message, when there is one, outranks the gate: it is the thing that went wrong,
   // and the gate is reassurance nobody needs while looking at an error.
-  const detail = state.message ?? gate;
+  const detail = state.message ?? gate ?? (idleWithoutNote ? "Open a Markdown note to start a capture." : undefined);
 
   return {
     headline,
