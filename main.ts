@@ -53,6 +53,7 @@ import {
   resolveEnhanceMode,
   type EnhanceCommandId,
 } from "./src/enhance-mode.js";
+import { COMMAND_NAMES } from "./src/commands.js";
 import {
   DEFAULT_PLUGIN_SETTINGS,
   claudeAgentOptions,
@@ -190,8 +191,8 @@ type CaptureRuntime = {
  *
  * `start` is not among these: which manual command can resume the capture depends on which
  * signal it was trying to send, so it is a function of that signal instead — see
- * `START_NOT_RUNNING`. A manual recovery that always named "Toggle Shorthand recording" would
- * start a *Meeting* on a capture that was trying to start Assisted Notes.
+ * `START_NOT_RUNNING`. A manual recovery that always named "Toggle Shorthand meeting recording"
+ * would start a *Meeting* on a capture that was trying to start Assisted Notes.
  */
 const NOT_RUNNING_NOTICES: Record<Exclude<RecorderPhase, "start"> | "manual", string> = {
   recall: "Shorthand did not confirm the cancel for the recording this capture had just started. Check that Shorthand is not still recording.",
@@ -201,7 +202,11 @@ const NOT_RUNNING_NOTICES: Record<Exclude<RecorderPhase, "start"> | "manual", st
 };
 
 const START_NOT_RUNNING = (signal: ControlSignal): string =>
-  `Shorthand was not running, so this capture did not start a recording; Shorthand is starting now. Once it is up, start the recording with Shorthand's shortcut or "${signal === "toggle-assisted-notes" ? "Toggle Shorthand assisted notes" : "Toggle Shorthand recording"}" — the capture is already running and will pick it up.`;
+  `Shorthand was not running, so this capture did not start a recording; Shorthand is starting now. Once it is up, start the recording with Shorthand's shortcut or "${
+    signal === "toggle-assisted-notes"
+      ? COMMAND_NAMES["toggle-shorthand-assisted-notes"]
+      : COMMAND_NAMES["toggle-shorthand-recording"]
+  }" — the capture is already running and will pick it up.`;
 
 /**
  * Assisted Notes' three capability-gated ways to fail to start, named by
@@ -243,16 +248,18 @@ export default class ShorthandPlugin extends Plugin {
     this.registerInterval(window.setInterval(() => this.#renderStatus(), 1_000));
     this.addSettingTab(new ShorthandSettingTab(this.app, this));
 
-    // Command names carry no plugin prefix and are sentence case, per Obsidian's plugin
-    // guidelines: the command palette already renders these as "Shorthand: Start capture
-    // on this note". Spelling it out here produced "Shorthand: Shorthand: start capture…".
-    // checkCallback, not callback: Obsidian hides a command whose check returns false, which
-    // is its prescribed way to express "needs an open Markdown note". Matches the two
-    // enhancement commands. The check runs on every palette render, so it must not fire a
-    // Notice — hence hasActiveMarkdownFile rather than activeMarkdownFile.
+    // Names come from src/commands.ts so they are covered by bun test; main.ts cannot
+    // be imported under it. They carry no plugin prefix and are sentence case, per
+    // Obsidian's plugin guidelines: the palette already renders these as "Shorthand:
+    // Start meeting capture on this note". Spelling it out here produced "Shorthand:
+    // Shorthand: start capture…".
+    // checkCallback, not callback: Obsidian hides a command whose check returns false,
+    // which is its prescribed way to express "needs an open Markdown note". The check
+    // runs on every palette render, so it must not fire a Notice — hence
+    // hasActiveMarkdownFile rather than activeMarkdownFile.
     this.addCommand({
       id: "start-capture-this-note",
-      name: "Start capture on this note",
+      name: COMMAND_NAMES["start-capture-this-note"],
       checkCallback: (checking: boolean) => {
         if (!this.hasActiveMarkdownFile()) return false;
         if (checking) return true;
@@ -262,7 +269,7 @@ export default class ShorthandPlugin extends Plugin {
     });
     this.addCommand({
       id: "start-assisted-notes-capture-this-note",
-      name: "Start assisted notes capture on this note",
+      name: COMMAND_NAMES["start-assisted-notes-capture-this-note"],
       checkCallback: (checking: boolean) => {
         if (!this.hasActiveMarkdownFile()) return false;
         if (checking) return true;
@@ -272,12 +279,12 @@ export default class ShorthandPlugin extends Plugin {
     });
     this.addCommand({
       id: "stop-capture",
-      name: "Stop capture",
+      name: COMMAND_NAMES["stop-capture"],
       callback: () => { void this.stopCapture().catch((error: unknown) => this.fail(errorMessage(error))); },
     });
     this.addCommand({
       id: "enhance-now",
-      name: "Enhance now",
+      name: COMMAND_NAMES["enhance-now"],
       checkCallback: (checking: boolean) => {
         if (!this.hasActiveMarkdownFile()) return false;
         if (!checking) void this.enhanceActiveNote();
@@ -286,7 +293,7 @@ export default class ShorthandPlugin extends Plugin {
     });
     this.addCommand({
       id: "clean-up-this-note",
-      name: "Clean up this note",
+      name: COMMAND_NAMES["clean-up-this-note"],
       checkCallback: (checking: boolean) => {
         if (!this.hasActiveMarkdownFile()) return false;
         if (!checking) void this.cleanUpActiveNote();
@@ -297,20 +304,20 @@ export default class ShorthandPlugin extends Plugin {
     // toggle and an unconditional cancel, neither of which touches the capture itself.
     this.addCommand({
       id: "toggle-shorthand-recording",
-      name: "Toggle Shorthand recording",
+      name: COMMAND_NAMES["toggle-shorthand-recording"],
       callback: () => { this.fireControl("toggle-transcription"); },
     });
-    // Not decoration: a manual recovery that named "Toggle Shorthand recording" would start a
-    // *Meeting*. The Assisted Notes recovery path has to select the same mode it was trying to
-    // start — see START_NOT_RUNNING, which points here for that signal.
+    // Not decoration: a manual recovery that named "Toggle Shorthand meeting recording" would
+    // start a *Meeting*. The Assisted Notes recovery path has to select the same mode it was
+    // trying to start — see START_NOT_RUNNING, which points here for that signal.
     this.addCommand({
       id: "toggle-shorthand-assisted-notes",
-      name: "Toggle Shorthand assisted notes",
+      name: COMMAND_NAMES["toggle-shorthand-assisted-notes"],
       callback: () => { this.fireControl("toggle-assisted-notes"); },
     });
     this.addCommand({
       id: "cancel-shorthand-recording",
-      name: "Cancel Shorthand recording",
+      name: COMMAND_NAMES["cancel-shorthand-recording"],
       callback: () => { this.fireControl("cancel"); },
     });
 

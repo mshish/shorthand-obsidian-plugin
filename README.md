@@ -35,7 +35,7 @@ Add `mshish/shorthand-obsidian-plugin` as a beta plugin in BRAT. BRAT installs t
 
 1. Open the meeting note in Obsidian.
 2. Make sure the Shorthand desktop app is running.
-3. Run **Shorthand: Start capture on this note** from the command palette.
+3. Run **Shorthand: Start meeting capture on this note** from the command palette.
 4. Run **Shorthand: Stop capture** when the meeting ends.
 
 If the note has not been prepared for Shorthand, the plugin offers to add the required sections. Your own writing stays outside the section maintained by AI.
@@ -46,13 +46,13 @@ Turn on **Transcript notes** if you also want a linked note containing the raw t
 
 Obsidian adds the “Shorthand:” prefix in the command palette.
 
-- **Start capture on this note**
+- **Start meeting capture on this note**
 - **Start assisted notes capture on this note**
 - **Stop capture**
 - **Enhance now**
 - **Clean up this note**
-- **Toggle Shorthand recording**
-- **Toggle Shorthand assisted notes**
+- **Toggle Shorthand meeting recording**
+- **Toggle Shorthand assisted notes recording**
 - **Cancel Shorthand recording**
 
 **Clean up this note** improves a note you wrote or dictated without using a transcript. It does not run on a note that already has a linked transcript.
