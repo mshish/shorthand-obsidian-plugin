@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { decideFollow, endsSession } from "../src/follow-policy.js";
+import {
+  EMPTY_PENDING_ATTACH_BUFFER,
+  PENDING_ATTACH_BUFFER_CAP,
+  decideFollow,
+  endsSession,
+  pushPendingAttachRecord,
+} from "../src/follow-policy.js";
 import { INITIAL_PLUGIN_STATE, reducePluginState } from "../src/state.js";
 
 const base = {
@@ -72,6 +78,25 @@ describe("decideFollow", () => {
     const starting = reducePluginState(INITIAL_PLUGIN_STATE, { type: "capture-starting" });
     expect(decideFollow({ ...base, mode: "meeting", state: starting })).toEqual({ kind: "ignore" });
   });
+
+  test("does not warn about the app version for the plugin's own recording", () => {
+    // The idle follower keeps listening during a capture this plugin itself just started
+    // from the palette, and that recording's own `begin` reaches this function too. Before
+    // the capability check moved after the eligibility checks, an older app's every
+    // `begin` — including this one — produced "update Shorthand", drowning out the one
+    // recording the notice actually exists for.
+    const capturing = reducePluginState(
+      reducePluginState(INITIAL_PLUGIN_STATE, { type: "capture-starting" }),
+      { type: "capture-started" },
+    );
+    expect(decideFollow({ ...base, mode: undefined, appAdvertisesMode: false, state: capturing }))
+      .toEqual({ kind: "ignore" });
+    expect(decideFollow({ ...base, mode: undefined, appAdvertisesMode: false, hasActiveNote: false }))
+      .toEqual({ kind: "ignore" });
+    // The setting being off still wins over everything, capability included.
+    expect(decideFollow({ ...base, mode: undefined, appAdvertisesMode: false, followEnabled: false }))
+      .toEqual({ kind: "ignore" });
+  });
 });
 
 describe("endsSession", () => {
@@ -85,5 +110,35 @@ describe("endsSession", () => {
     // A connection-level error carries no session and must not end a recording.
     expect(endsSession({ t: "error" }, 4)).toBe(false);
     expect(endsSession({ t: "final", session: 4 }, undefined)).toBe(false);
+  });
+});
+
+describe("pushPendingAttachRecord", () => {
+  test("buffers a record belonging to the pending session", () => {
+    const entry = { generation: 1, record: { t: "partial", session: 7 } };
+    const buffer = pushPendingAttachRecord(EMPTY_PENDING_ATTACH_BUFFER, 7, entry);
+    expect(buffer).toEqual({ records: [entry], droppedCount: 0 });
+  });
+
+  test("drops a record for any other session, silently", () => {
+    const entry = { generation: 1, record: { t: "partial", session: 9 } };
+    const buffer = pushPendingAttachRecord(EMPTY_PENDING_ATTACH_BUFFER, 7, entry);
+    expect(buffer).toEqual(EMPTY_PENDING_ATTACH_BUFFER);
+  });
+
+  test("stops appending past the cap and counts what it drops", () => {
+    let buffer = EMPTY_PENDING_ATTACH_BUFFER;
+    for (let index = 0; index < PENDING_ATTACH_BUFFER_CAP; index += 1) {
+      buffer = pushPendingAttachRecord(buffer, 7, { generation: 1, record: { t: "partial", session: 7 } });
+    }
+    expect(buffer.records.length).toBe(PENDING_ATTACH_BUFFER_CAP);
+    expect(buffer.droppedCount).toBe(0);
+
+    const overflowed = pushPendingAttachRecord(buffer, 7, { generation: 1, record: { t: "partial", session: 7 } });
+    expect(overflowed.records.length).toBe(PENDING_ATTACH_BUFFER_CAP);
+    expect(overflowed.droppedCount).toBe(1);
+
+    const overflowedAgain = pushPendingAttachRecord(overflowed, 7, { generation: 1, record: { t: "partial", session: 7 } });
+    expect(overflowedAgain.droppedCount).toBe(2);
   });
 });
