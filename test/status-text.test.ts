@@ -14,6 +14,15 @@ describe("describeStatus", () => {
     expect(describeStatus({ ...base, state: INITIAL_PLUGIN_STATE })).toEqual({ visible: false });
   });
 
+  test("shows a starting state before any capture exists, with no clock yet", () => {
+    const starting = reducePluginState(INITIAL_PLUGIN_STATE, { type: "capture-starting" });
+    expect(describeStatus({ ...base, state: starting })).toEqual({
+      visible: true,
+      text: "Shorthand · starting",
+      tooltip: "Starting the capture.",
+    });
+  });
+
   test("shows the elapsed clock and nothing else while capturing", () => {
     expect(describeStatus({ ...base, state: capturing, elapsedMs: 754_000 })).toEqual({
       visible: true,

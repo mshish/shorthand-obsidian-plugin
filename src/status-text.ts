@@ -45,6 +45,8 @@ export function describeStatus(input: StatusInput): StatusDisplay {
     : ` ${pendingCharacters} of ${minNewChars} characters toward the next pass.`;
 
   switch (state.mode) {
+    case "starting":
+      return { visible: true, text: "Shorthand · starting", tooltip: "Starting the capture." };
     case "capturing":
       return {
         visible: true,

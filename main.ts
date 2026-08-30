@@ -88,6 +88,7 @@ import {
 } from "./src/settings-display.js";
 import {
   INITIAL_PLUGIN_STATE,
+  canStartCapture,
   reducePluginState,
   type PluginUiEvent,
   type PluginUiState,
@@ -339,234 +340,264 @@ export default class ShorthandPlugin extends Plugin {
   async startCaptureOnActiveNote(
     recordingSignal: ControlSignal = "toggle-transcription",
   ): Promise<void> {
-    if (this.#capture !== undefined) {
+    // Synchronous, before any await. The guard this replaces tested `#capture`, which is
+    // assigned further down — so two starts fired inside the setup window both passed it,
+    // and the second orphaned the first's follower, control and enhancer.
+    if (!canStartCapture(this.#state)) {
       new Notice("Shorthand is already capturing. Stop it before starting another note.");
       return;
     }
-    const file = this.activeMarkdownFile();
-    if (file === undefined) return;
-    const vaultRoot = this.vaultRoot();
-    if (vaultRoot === undefined) return;
-    const noteSink = this.noteSink(file, vaultRoot);
+    this.dispatch({ type: "capture-starting" });
     let unownedEnhancer: EnhanceRunner | undefined;
+    // "Handed off" means something else now owns this runtime's lifecycle — not that a
+    // capture started. Set immediately after `#capture = runtime` below, before either
+    // dispatch that could follow it: from that assignment on, `finishRuntime`,
+    // `forceStopCapture`, `captureSettled` and `abortAssistedNotesStart` are all reachable
+    // and each dispatches its own terminal event, so this `finally` must not also fire.
+    let handedOff = false;
 
     try {
-      const markerPreflight = await preflightMarkers(noteSink);
-      if (markerPreflight.status === "error") {
-        this.fail(markerPreflight.message);
-        return;
-      }
-      // Do this before either frontmatter or marker writes. Starting capture is
-      // the only point at which we may ask the user to let Shorthand claim an
-      // unmarked note, and declining must leave every byte untouched.
-      if (markerPreflight.status === "needs-scaffold" && !await confirmScaffold(this.app)) return;
-      let sidecar: SidecarWriter | undefined;
-      if (this.settings.writeTranscriptNote) {
-        const noteContent = await noteSink.readContent();
-        if (!noteContent.ok) {
-          this.fail(noteContent.message);
+      try {
+        // `file` and `vaultRoot` moved inside this try along with everything after them:
+        // both can fail, and a failure here is exactly the kind of exit the outer `finally`
+        // exists to catch. Leaving them ahead of the guard would dispatch "starting" and
+        // then abandon it on the very first early return.
+        const file = this.activeMarkdownFile();
+        if (file === undefined) return;
+        const vaultRoot = this.vaultRoot();
+        if (vaultRoot === undefined) return;
+        const noteSink = this.noteSink(file, vaultRoot);
+        const markerPreflight = await preflightMarkers(noteSink);
+        if (markerPreflight.status === "error") {
+          this.fail(markerPreflight.message);
           return;
         }
-        let linked = transcriptWikilink(noteContent.content);
-        if (linked === undefined) {
-          const candidate = `${this.settings.sidecarDirectory}/${timestampName(new Date()).replace(/\.md$/i, "")}`;
-          // A folder named `Notes [2026]` is legal in Obsidian but cannot survive
-          // a round trip through `[[...]]`: every later capture would fail to
-          // read the link back and would generate another sidecar.
-          if (/[[\]|#^]/.test(candidate)) {
-            this.fail(
-              `The transcript folder "${this.settings.sidecarDirectory}" contains a character a wikilink cannot hold `
-              + "([, ], |, # or ^). Rename the folder or change the transcript folder setting.",
-            );
+        // Do this before either frontmatter or marker writes. Starting capture is
+        // the only point at which we may ask the user to let Shorthand claim an
+        // unmarked note, and declining must leave every byte untouched.
+        if (markerPreflight.status === "needs-scaffold" && !await confirmScaffold(this.app)) return;
+        let sidecar: SidecarWriter | undefined;
+        if (this.settings.writeTranscriptNote) {
+          const noteContent = await noteSink.readContent();
+          if (!noteContent.ok) {
+            this.fail(noteContent.message);
             return;
           }
-          const linkedResult = await ensureTranscriptLink({
-            fileManager: this.app.fileManager,
-            metadataCache: this.app.metadataCache,
-          }, file, candidate);
-          if (linkedResult.status === "error") {
-            this.fail(`Could not add the transcript link: ${linkedResult.message}`);
-            return;
+          let linked = transcriptWikilink(noteContent.content);
+          if (linked === undefined) {
+            const candidate = `${this.settings.sidecarDirectory}/${timestampName(new Date()).replace(/\.md$/i, "")}`;
+            // A folder named `Notes [2026]` is legal in Obsidian but cannot survive
+            // a round trip through `[[...]]`: every later capture would fail to
+            // read the link back and would generate another sidecar.
+            if (/[[\]|#^]/.test(candidate)) {
+              this.fail(
+                `The transcript folder "${this.settings.sidecarDirectory}" contains a character a wikilink cannot hold `
+                + "([, ], |, # or ^). Rename the folder or change the transcript folder setting.",
+              );
+              return;
+            }
+            const linkedResult = await ensureTranscriptLink({
+              fileManager: this.app.fileManager,
+              metadataCache: this.app.metadataCache,
+            }, file, candidate);
+            if (linkedResult.status === "error") {
+              this.fail(`Could not add the transcript link: ${linkedResult.message}`);
+              return;
+            }
+            linked = linkedResult.linkPath;
           }
-          linked = linkedResult.linkPath;
+          const target = this.app.metadataCache.getFirstLinkpathDest(linkTarget(linked), file.path);
+          const store = this.sidecarStore(file, linked, target);
+          if (store === undefined) return;
+          sidecar = new SidecarWriter(store.describe, {
+            flushIntervalMs: DEFAULT_CONFIG.sidecarFlushIntervalMs,
+            store,
+          });
         }
-        const target = this.app.metadataCache.getFirstLinkpathDest(linkTarget(linked), file.path);
-        const store = this.sidecarStore(file, linked, target);
-        if (store === undefined) return;
-        sidecar = new SidecarWriter(store.describe, {
-          flushIntervalMs: DEFAULT_CONFIG.sidecarFlushIntervalMs,
-          store,
-        });
-      }
-      if (!await this.ensureScaffold(noteSink)) return;
+        if (!await this.ensureScaffold(noteSink)) return;
 
-      const transcript = new TranscriptStore();
-      let enhancer: EnhanceRunner | undefined;
-      let enhancementUnavailable: string | undefined;
-      try {
-        enhancer = await this.createEnhancer(
-          noteSink,
-          DEFAULT_CONFIG.enhancement.timeoutMs,
-        );
-        unownedEnhancer = enhancer;
-      } catch (error) {
-        enhancementUnavailable = `${errorMessage(error)} Capture will continue with transcript only.`;
-      }
-      const command = this.shorthandCommand();
-      const client = new StreamClient({
-        command,
-        args: DEFAULT_CONFIG.followStreamArgs,
-        maxReconnectAttempts: DEFAULT_CONFIG.reconnect.maxAttempts,
-        backoffMs: DEFAULT_CONFIG.reconnect.backoffMs,
-        drainTimeoutMs: DEFAULT_CONFIG.drainTimeoutMs,
-      });
-      const settled = new Promise<ExitDiagnosis>((resolveSettled) => client.once("settled", resolveSettled));
-      const control = new ShorthandControl({ command });
-      // Resolved with the follower's parsed `hello` record; `ShorthandRecorder.start()` explains
-      // why the start toggle waits on it, and Assisted Notes additionally gates the toggle on
-      // the record's advertised `capabilities`.
-      let markAttached = (_info: HelloInfo): void => {};
-      const attached = new Promise<HelloInfo>((resolveAttached) => { markAttached = resolveAttached; });
-      const recorder = this.settings.controlShorthandRecording
-        ? new ShorthandRecorder({
-          control,
-          recordingSignal,
-          report: (phase, result) => this.reportControl(phase, result, recordingSignal),
-          // The recorder's wait for the terminal record replaces the follower's own drain
-          // rather than preceding it, so it gets the same budget.
-          finalizeTimeoutMs: DEFAULT_CONFIG.drainTimeoutMs,
-          attachGraceMs: ATTACH_GRACE_MS,
-          beginGraceMs: BEGIN_GRACE_MS,
-          // Only Assisted Notes needs the capability gate and the bounded acknowledgement: an
-          // older app would otherwise parse-fail the flag mid-capture, and Shorthand's
-          // disabled-mode refusal exits the forwarding process 0 with nothing to say a
-          // recording never actually began. Meeting keeps the plain fire-and-forget contract.
-          ...(recordingSignal === "toggle-assisted-notes"
-            ? { requiredCapability: "toggle-assisted-notes", startAcknowledgementMs: START_ACKNOWLEDGEMENT_MS }
-            : {}),
-        })
-        : undefined;
-      const runtime: CaptureRuntime = {
-        noteFile: file,
-        client,
-        control,
-        recorder,
-        shorthandDown: false,
-        helloEver: false,
-        sidecar,
-        enhancer,
-        settled,
-        stopping: false,
-        startedAt: Date.now(),
-      };
-      this.#capture = runtime;
-      unownedEnhancer = undefined;
-      this.dispatch({ type: "capture-started" });
-      if (enhancementUnavailable !== undefined) this.fail(enhancementUnavailable);
-
-      client.on("event", ({ generation, record }) => {
-        // The recorder's whole view of Shorthand's session state comes from here — this
-        // handler already sees every record Shorthand sends, and unlike StreamClient's own
-        // session set it is never reset behind the plugin's back by a reconnect.
-        // `observe()` takes session-scoped records only; `hello` is the sole session-less
-        // record that reaches this event at all (a connection-level `error` is emitted as
-        // `connectionError`, never here), and it has its own entry point.
-        if (record.t === "hello") {
-          runtime.helloEver = true;
-          recorder?.noteAttached();
-          // `record.capabilities`, when present, already passed core's own defensive parsing
-          // (`stringArrayField`): a malformed field is dropped before this event ever fires, so
-          // it is not re-validated here.
-          markAttached({ capabilities: record.capabilities });
-        } else recorder?.observe(record);
-        const update = transcript.ingest(generation, record);
-        if (update === null) return;
-        sidecar?.apply(update);
-        const delta = enhancementDelta(update);
-        if (delta.length === 0) return;
-        enhancer?.appendTranscript(delta);
-        if (enhancer !== undefined && this.settings.enableLiveEnhancement) {
-          enhancer.requestTick();
-          console.log(
-            `[shorthand] transcript +${delta.length} chars; pending ${enhancer.state.pendingCharacters}/${this.settings.minNewChars} toward next pass`,
+        const transcript = new TranscriptStore();
+        let enhancer: EnhanceRunner | undefined;
+        let enhancementUnavailable: string | undefined;
+        try {
+          enhancer = await this.createEnhancer(
+            noteSink,
+            DEFAULT_CONFIG.enhancement.timeoutMs,
           );
+          unownedEnhancer = enhancer;
+        } catch (error) {
+          enhancementUnavailable = `${errorMessage(error)} Capture will continue with transcript only.`;
         }
-        this.#renderStatus();
-      });
-      client.on("disconnect", ({ generation }) => {
-        for (const update of transcript.markConnectionEnded(generation)) sidecar?.apply(update);
-      });
-      client.on("reconnect", ({ generation, gap }) => {
-        if (gap) sidecar?.addReconnectWarning(generation);
-      });
-      client.on("connectionError", ({ record }) => this.fail(`Shorthand connection error (${record.code}): ${record.message}`));
-      client.on("protocolError", ({ error }) => this.fail(error.message));
-      client.on("processError", ({ error, command: attempted, fatal }) => {
-        // ENOENT is the follower telling us there is no Shorthand binary at all, which is also
-        // the answer for every control spawn this capture might still make.
-        if (fatal) runtime.shorthandDown = true;
-        this.fail(`Could not start "${attempted}". Check the shorthand.exe path in Shorthand settings. ${error.message}`);
-      });
-      client.on("giveUp", ({ attempts }) => this.fail(`Shorthand stream disconnected repeatedly; gave up after ${attempts} reconnect attempts.`));
-      client.on("drainTimeout", () => this.fail("Shorthand did not finish the active transcript before the drain timeout; the child was stopped."));
-      sidecar?.on("writeError", ({ error }) => this.fail(`Transcript sidecar write failed: ${error.message}`));
-      // Registered before anything else awaits `settled`, so `shorthandDown` is already set by
-      // the time `stopCapture()` resumes and decides whether a control spawn is safe.
-      void settled.then(
-        (diagnosis) => {
-          // Not `diagnosis.code === 2`: that code is ambiguous, and reading it as proof is
-          // what left Shorthand recording with no follower. `shorthandProvenDown` says why.
-          if (shorthandProvenDown({
-            exitCode: diagnosis.code,
-            helloEver: runtime.helloEver,
-            observedSession: recorder?.observedSession ?? false,
-            // The one piece of evidence that is not follower-derived, and the strongest:
-            // a control signal Shorthand confirmed cannot have been forwarded to a Shorthand that
-            // was not running. Without it, a capture whose follower was refused (streaming
-            // off, slot taken) concluded "Shorthand is down" while its own start sequence had
-            // just put that same Shorthand into recording.
-            controlConfirmed: recorder?.controlConfirmed ?? false,
-          })) runtime.shorthandDown = true;
-          return this.captureSettled(runtime, diagnosis);
-        },
-      ).catch((error: unknown) => {
-        // Nothing else is watching this chain; an unhandled rejection here would take the
-        // failure out of the user's sight entirely.
-        this.fail(`Capture shutdown failed: ${errorMessage(error)}`);
-      });
-      client.start();
-      if (recorder === undefined || recordingSignal !== "toggle-assisted-notes") {
-        // Meeting's existing contract, unchanged: not awaited here — the capture is live
-        // either way — but the promise is retained by the recorder itself, which is what lets
-        // a stop sequence wait for it.
-        void recorder?.start(attached);
-        new Notice(`Shorthand capture started: ${file.path}`);
-      } else {
-        // Assisted Notes opts into the bounded acknowledgement: a `sent` toggle is not proof
-        // Shorthand actually started recording (see `START_ACKNOWLEDGEMENT_MS`), so the
-        // "capture started" notice waits for that proof instead of firing unconditionally.
-        void recorder.start(attached).then(async (outcome) => {
-          if (outcome === "started") {
-            new Notice(`Shorthand capture started: ${file.path}`);
-            return;
-          }
-          if (outcome === "stopped") {
-            // A concurrent stop/quit already owns its own notices and teardown.
-            return;
-          }
-          const reason = recorder.startFailure;
-          if (reason !== undefined) new Notice(ASSISTED_NOTES_START_FAILURE_NOTICES[reason], 10_000);
-          await this.abortAssistedNotesStart(runtime);
+        const command = this.shorthandCommand();
+        const client = new StreamClient({
+          command,
+          args: DEFAULT_CONFIG.followStreamArgs,
+          maxReconnectAttempts: DEFAULT_CONFIG.reconnect.maxAttempts,
+          backoffMs: DEFAULT_CONFIG.reconnect.backoffMs,
+          drainTimeoutMs: DEFAULT_CONFIG.drainTimeoutMs,
         });
+        const settled = new Promise<ExitDiagnosis>((resolveSettled) => client.once("settled", resolveSettled));
+        const control = new ShorthandControl({ command });
+        // Resolved with the follower's parsed `hello` record; `ShorthandRecorder.start()` explains
+        // why the start toggle waits on it, and Assisted Notes additionally gates the toggle on
+        // the record's advertised `capabilities`.
+        let markAttached = (_info: HelloInfo): void => {};
+        const attached = new Promise<HelloInfo>((resolveAttached) => { markAttached = resolveAttached; });
+        const recorder = this.settings.controlShorthandRecording
+          ? new ShorthandRecorder({
+            control,
+            recordingSignal,
+            report: (phase, result) => this.reportControl(phase, result, recordingSignal),
+            // The recorder's wait for the terminal record replaces the follower's own drain
+            // rather than preceding it, so it gets the same budget.
+            finalizeTimeoutMs: DEFAULT_CONFIG.drainTimeoutMs,
+            attachGraceMs: ATTACH_GRACE_MS,
+            beginGraceMs: BEGIN_GRACE_MS,
+            // Only Assisted Notes needs the capability gate and the bounded acknowledgement: an
+            // older app would otherwise parse-fail the flag mid-capture, and Shorthand's
+            // disabled-mode refusal exits the forwarding process 0 with nothing to say a
+            // recording never actually began. Meeting keeps the plain fire-and-forget contract.
+            ...(recordingSignal === "toggle-assisted-notes"
+              ? { requiredCapability: "toggle-assisted-notes", startAcknowledgementMs: START_ACKNOWLEDGEMENT_MS }
+              : {}),
+          })
+          : undefined;
+        const runtime: CaptureRuntime = {
+          noteFile: file,
+          client,
+          control,
+          recorder,
+          shorthandDown: false,
+          helloEver: false,
+          sidecar,
+          enhancer,
+          settled,
+          stopping: false,
+          startedAt: Date.now(),
+        };
+        this.#capture = runtime;
+        handedOff = true;
+        unownedEnhancer = undefined;
+        // Meeting is fire-and-forget: a sent toggle is proof enough, so it goes straight to
+        // capturing. Assisted Notes waits — see the acknowledgement branch below, and
+        // START_ACKNOWLEDGEMENT_MS for why a sent toggle is not proof there.
+        if (recordingSignal !== "toggle-assisted-notes" || recorder === undefined) {
+          this.dispatch({ type: "capture-started" });
+        }
+        if (enhancementUnavailable !== undefined) this.fail(enhancementUnavailable);
+
+        client.on("event", ({ generation, record }) => {
+          // The recorder's whole view of Shorthand's session state comes from here — this
+          // handler already sees every record Shorthand sends, and unlike StreamClient's own
+          // session set it is never reset behind the plugin's back by a reconnect.
+          // `observe()` takes session-scoped records only; `hello` is the sole session-less
+          // record that reaches this event at all (a connection-level `error` is emitted as
+          // `connectionError`, never here), and it has its own entry point.
+          if (record.t === "hello") {
+            runtime.helloEver = true;
+            recorder?.noteAttached();
+            // `record.capabilities`, when present, already passed core's own defensive parsing
+            // (`stringArrayField`): a malformed field is dropped before this event ever fires, so
+            // it is not re-validated here.
+            markAttached({ capabilities: record.capabilities });
+          } else recorder?.observe(record);
+          const update = transcript.ingest(generation, record);
+          if (update === null) return;
+          sidecar?.apply(update);
+          const delta = enhancementDelta(update);
+          if (delta.length === 0) return;
+          enhancer?.appendTranscript(delta);
+          if (enhancer !== undefined && this.settings.enableLiveEnhancement) {
+            enhancer.requestTick();
+            console.log(
+              `[shorthand] transcript +${delta.length} chars; pending ${enhancer.state.pendingCharacters}/${this.settings.minNewChars} toward next pass`,
+            );
+          }
+          this.#renderStatus();
+        });
+        client.on("disconnect", ({ generation }) => {
+          for (const update of transcript.markConnectionEnded(generation)) sidecar?.apply(update);
+        });
+        client.on("reconnect", ({ generation, gap }) => {
+          if (gap) sidecar?.addReconnectWarning(generation);
+        });
+        client.on("connectionError", ({ record }) => this.fail(`Shorthand connection error (${record.code}): ${record.message}`));
+        client.on("protocolError", ({ error }) => this.fail(error.message));
+        client.on("processError", ({ error, command: attempted, fatal }) => {
+          // ENOENT is the follower telling us there is no Shorthand binary at all, which is also
+          // the answer for every control spawn this capture might still make.
+          if (fatal) runtime.shorthandDown = true;
+          this.fail(`Could not start "${attempted}". Check the shorthand.exe path in Shorthand settings. ${error.message}`);
+        });
+        client.on("giveUp", ({ attempts }) => this.fail(`Shorthand stream disconnected repeatedly; gave up after ${attempts} reconnect attempts.`));
+        client.on("drainTimeout", () => this.fail("Shorthand did not finish the active transcript before the drain timeout; the child was stopped."));
+        sidecar?.on("writeError", ({ error }) => this.fail(`Transcript sidecar write failed: ${error.message}`));
+        // Registered before anything else awaits `settled`, so `shorthandDown` is already set by
+        // the time `stopCapture()` resumes and decides whether a control spawn is safe.
+        void settled.then(
+          (diagnosis) => {
+            // Not `diagnosis.code === 2`: that code is ambiguous, and reading it as proof is
+            // what left Shorthand recording with no follower. `shorthandProvenDown` says why.
+            if (shorthandProvenDown({
+              exitCode: diagnosis.code,
+              helloEver: runtime.helloEver,
+              observedSession: recorder?.observedSession ?? false,
+              // The one piece of evidence that is not follower-derived, and the strongest:
+              // a control signal Shorthand confirmed cannot have been forwarded to a Shorthand that
+              // was not running. Without it, a capture whose follower was refused (streaming
+              // off, slot taken) concluded "Shorthand is down" while its own start sequence had
+              // just put that same Shorthand into recording.
+              controlConfirmed: recorder?.controlConfirmed ?? false,
+            })) runtime.shorthandDown = true;
+            return this.captureSettled(runtime, diagnosis);
+          },
+        ).catch((error: unknown) => {
+          // Nothing else is watching this chain; an unhandled rejection here would take the
+          // failure out of the user's sight entirely.
+          this.fail(`Capture shutdown failed: ${errorMessage(error)}`);
+        });
+        client.start();
+        if (recorder === undefined || recordingSignal !== "toggle-assisted-notes") {
+          // Meeting's existing contract, unchanged: not awaited here — the capture is live
+          // either way — but the promise is retained by the recorder itself, which is what lets
+          // a stop sequence wait for it.
+          void recorder?.start(attached);
+          new Notice(`Shorthand capture started: ${file.path}`);
+        } else {
+          // Assisted Notes opts into the bounded acknowledgement: a `sent` toggle is not proof
+          // Shorthand actually started recording (see `START_ACKNOWLEDGEMENT_MS`), so the
+          // "capture started" notice — and the dispatch that claims capturing — wait for that
+          // proof instead of firing unconditionally.
+          void recorder.start(attached).then(async (outcome) => {
+            if (outcome === "started") {
+              this.dispatch({ type: "capture-started" });
+              new Notice(`Shorthand capture started: ${file.path}`);
+              return;
+            }
+            if (outcome === "stopped") {
+              // A concurrent stop/quit already owns its own notices and teardown.
+              return;
+            }
+            const reason = recorder.startFailure;
+            if (reason !== undefined) new Notice(ASSISTED_NOTES_START_FAILURE_NOTICES[reason], 10_000);
+            await this.abortAssistedNotesStart(runtime);
+          });
+        }
+      } catch (error) {
+        // If setup failed after the agent client was created but before the runtime took
+        // ownership, there is no #capture for forceStopCapture() to dispose.
+        await unownedEnhancer?.dispose().catch((cleanupError: unknown) => {
+          this.fail(`Agent session cleanup failed: ${errorMessage(cleanupError)}`);
+        });
+        this.fail(errorMessage(error));
+        this.forceStopCapture();
       }
-    } catch (error) {
-      // If setup failed after the agent client was created but before the runtime took
-      // ownership, there is no #capture for forceStopCapture() to dispose.
-      await unownedEnhancer?.dispose().catch((cleanupError: unknown) => {
-        this.fail(`Agent session cleanup failed: ${errorMessage(cleanupError)}`);
-      });
-      this.fail(errorMessage(error));
-      this.forceStopCapture();
+    } finally {
+      // Any path that left without handing ownership to a live runtime has to release
+      // `starting`, or the plugin refuses every later start with "already capturing".
+      // `capture-start-failed` returns to idle only from `starting`, so a setup error
+      // that already dispatched a sticky `error` keeps its message.
+      if (!handedOff) this.dispatch({ type: "capture-start-failed" });
     }
   }
 
@@ -667,7 +698,9 @@ export default class ShorthandPlugin extends Plugin {
       this.fail(`Agent session cleanup failed: ${errorMessage(error)}`);
     });
     if (this.#capture === runtime) this.#capture = undefined;
-    this.dispatch({ type: "capture-stopped" });
+    // Not `capture-stopped`: this path exists precisely because no recording ever
+    // started, and reporting a stopped capture tells the user something ran.
+    this.dispatch({ type: "capture-start-failed" });
   }
 
   async enhanceActiveNote(): Promise<void> {
@@ -1029,12 +1062,13 @@ export default class ShorthandPlugin extends Plugin {
    */
   private reportOutcome(outcome: PassOutcome, command: EnhanceCommandId): void {
     if (outcome.status === "completed") {
-      this.dispatch({ type: "enhancement-finished" });
+      // No `enhancement-finished` here: core emitted a `finished` status before
+      // returning this outcome, and `onEnhanceStatus` already dispatched for it.
+      // Both firing double-decrements the pass counter, which ends the `enhancing`
+      // state while a second, overlapping pass is still writing.
       new Notice(outcome.written ? "Shorthand updated the AI block." : "The AI block was already up to date.");
     } else if (outcome.status === "expired") {
-      const message = "Enhancement stopped after the maximum capture window; capture continues.";
-      this.dispatch({ type: "enhancement-stopped", message });
-      new Notice(message, 8_000);
+      // Same reason: `onEnhanceStatus`'s `expired` arm owns the dispatch and the Notice.
     } else if (outcome.status === "requeued") {
       this.fail(outcome.retryAfterMs === undefined
         ? `Enhancement was safely re-queued (${outcome.reason}).`
