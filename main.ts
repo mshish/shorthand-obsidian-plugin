@@ -95,6 +95,7 @@ import {
   type PluginUiEvent,
   type PluginUiState,
 } from "./src/state.js";
+import { decideFollow, endsSession } from "./src/follow-policy.js";
 import {
   ShorthandRecorder,
   shorthandProvenDown,
@@ -147,6 +148,14 @@ const BEGIN_GRACE_MS = 1_500;
  * has to absorb Shorthand raising its window before it can even evaluate the flag.
  */
 const START_ACKNOWLEDGEMENT_MS = 3_000;
+
+/**
+ * How long to wait before re-spawning an idle follower whose Shorthand was not running.
+ * Deliberately slow: this is a poll for an app that may not be launched for hours and
+ * every attempt spawns a process, so a tight retry is a spinning child-process loop in an
+ * otherwise idle vault.
+ */
+const IDLE_FOLLOWER_RETRY_MS = 30_000;
 
 type CaptureRuntime = {
   /** The live Obsidian identity, retained across normal rename and move operations. */
@@ -233,6 +242,30 @@ export default class ShorthandPlugin extends Plugin {
   // assigning `undefined` to an optional property, and both are cleared on teardown.
   #statusBar: HTMLElement | undefined = undefined;
   #capture: CaptureRuntime | undefined = undefined;
+  /**
+   * A follower held open while no capture owns one, so a recording started with
+   * Shorthand's hotkey is seen at all. Adopted by an attached capture rather than
+   * replaced — see `adoptIdleFollower`.
+   */
+  #idleFollower: StreamClient | undefined = undefined;
+  /** Whether the connected app's `hello` listed `begin-mode`. Reset on every attach. */
+  #idleAppAdvertisesMode = false;
+  /** So the "update Shorthand" notice fires once per plugin load, not once per recording. */
+  #warnedAboutAppVersion = false;
+  /** Backoff timer for reconnecting the idle follower. Cleared on unload. */
+  #idleRetry: number | undefined = undefined;
+  /**
+   * The session `onAppRecordingBegan` just decided to attach to, set for exactly the
+   * window between that decision and the capture's own listener taking over. Marker
+   * preflight, a possible confirmation modal, sidecar setup and `createEnhancer` all run in
+   * between, and a short recording can end during any of them — before `adoptIdleFollower`
+   * has even run, let alone before the capture's own `endsSession` check is attached. The
+   * idle listener is the only thing attached for that whole window, so it is the only place
+   * that can see the terminal record land; see the "event" handler in `syncIdleFollower`.
+   */
+  #idlePendingAttachSession: number | undefined = undefined;
+  /** Set by that same idle listener when the pending session's terminal record arrives. */
+  #idlePendingAttachEnded = false;
 
   async onload(): Promise<void> {
     this.settings = normalizePluginSettings(await this.loadData());
@@ -334,22 +367,30 @@ export default class ShorthandPlugin extends Plugin {
     });
 
     // StreamClient owns the child process. These hooks synchronously signal it
-    // before Obsidian tears down the plugin or application.
-    this.registerDomEvent(window, "beforeunload", () => this.forceStopCapture());
-    this.registerEvent(this.app.workspace.on("quit", () => this.forceStopCapture()));
+    // before Obsidian tears down the plugin or application. The idle follower is a second,
+    // independent child process and needs the same backstop: without `stopIdleFollower()`
+    // here too, a follower running with no capture active (the ordinary idle state) would
+    // never be told to exit on this path, only on `onunload`.
+    this.registerDomEvent(window, "beforeunload", () => { this.stopIdleFollower(); this.forceStopCapture(); });
+    this.registerEvent(this.app.workspace.on("quit", () => { this.stopIdleFollower(); this.forceStopCapture(); }));
+
+    this.syncIdleFollower();
   }
 
   onunload(): void {
+    this.stopIdleFollower();
     this.forceStopCapture();
   }
 
   async saveSettings(candidate: unknown): Promise<void> {
     this.settings = normalizePluginSettings(candidate);
     await this.saveData(this.settings);
+    this.syncIdleFollower();
   }
 
   async startCaptureOnActiveNote(
     recordingSignal: ControlSignal = "toggle-transcription",
+    options: Readonly<{ attachToSession?: number }> = {},
   ): Promise<void> {
     // Synchronous, before any await. The guard this replaces tested `#capture`, which is
     // assigned further down — so two starts fired inside the setup window both passed it,
@@ -442,13 +483,20 @@ export default class ShorthandPlugin extends Plugin {
           enhancementUnavailable = `${errorMessage(error)} Capture will continue with transcript only.`;
         }
         const command = this.shorthandCommand();
-        const client = new StreamClient({
-          command,
-          args: DEFAULT_CONFIG.followStreamArgs,
-          maxReconnectAttempts: DEFAULT_CONFIG.reconnect.maxAttempts,
-          backoffMs: DEFAULT_CONFIG.reconnect.backoffMs,
-          drainTimeoutMs: DEFAULT_CONFIG.drainTimeoutMs,
-        });
+        // Adopted, not replaced, when attaching. The app replays a session only while it is
+        // still active, and this setup can spend a whole confirmation modal — so a short
+        // recording could end before a freshly spawned follower ever attached, leaving the
+        // capture permanently empty. The capture's own `TranscriptStore` does not need the
+        // `begin` it missed: `ingest` falls back to an implicit session for one whose `begin`
+        // it never saw, which is what makes adoption cheap.
+        const client = (options.attachToSession === undefined ? undefined : this.adoptIdleFollower())
+          ?? new StreamClient({
+            command,
+            args: DEFAULT_CONFIG.followStreamArgs,
+            maxReconnectAttempts: DEFAULT_CONFIG.reconnect.maxAttempts,
+            backoffMs: DEFAULT_CONFIG.reconnect.backoffMs,
+            drainTimeoutMs: DEFAULT_CONFIG.drainTimeoutMs,
+          });
         const settled = new Promise<ExitDiagnosis>((resolveSettled) => client.once("settled", resolveSettled));
         const control = new ShorthandControl({ command });
         // Resolved with the follower's parsed `hello` record; `ShorthandRecorder.start()` explains
@@ -456,7 +504,12 @@ export default class ShorthandPlugin extends Plugin {
         // the record's advertised `capabilities`.
         let markAttached = (_info: HelloInfo): void => {};
         const attached = new Promise<HelloInfo>((resolveAttached) => { markAttached = resolveAttached; });
-        const recorder = this.settings.controlShorthandRecording
+        // No recorder when attaching to a recording Shorthand already started: the recorder
+        // exists to send the start toggle, and a toggle against a live recording stops it.
+        // The cost is that this capture cannot finalize Shorthand's recording either, so the
+        // user stops it the way they started it — see README, "Following Shorthand's
+        // recordings".
+        const recorder = this.settings.controlShorthandRecording && options.attachToSession === undefined
           ? new ShorthandRecorder({
             control,
             recordingSignal,
@@ -514,6 +567,15 @@ export default class ShorthandPlugin extends Plugin {
             // it is not re-validated here.
             markAttached({ capabilities: record.capabilities });
           } else recorder?.observe(record);
+          // An attached capture has no recorder to notice the recording ending, and
+          // StreamClient kills its child on a terminal record only once stopAfterDrain has
+          // been requested. Without this, stopping the recording in Shorthand leaves the
+          // Obsidian capture running until the user stops it by hand. A no-op for a capture
+          // that started its own recording: `endsSession` is always false when there is no
+          // `attachToSession` to match against.
+          if (endsSession(record, options.attachToSession)) {
+            void this.stopCapture().catch((error: unknown) => this.fail(errorMessage(error)));
+          }
           const update = transcript.ingest(generation, record);
           if (update === null) return;
           sidecar?.apply(update);
@@ -569,7 +631,10 @@ export default class ShorthandPlugin extends Plugin {
           // failure out of the user's sight entirely.
           this.fail(`Capture shutdown failed: ${errorMessage(error)}`);
         });
-        client.start();
+        // Not for an adopted client: it is already running, and StreamClient's own start()
+        // is a no-op while active anyway, but calling it here would be misleading about who
+        // owns this connection's lifecycle.
+        if (options.attachToSession === undefined) client.start();
         if (recorder === undefined || recordingSignal !== "toggle-assisted-notes") {
           // Meeting's existing contract, unchanged: not awaited here — the capture is live
           // either way — but the promise is retained by the recorder itself, which is what lets
@@ -697,6 +762,11 @@ export default class ShorthandPlugin extends Plugin {
     void runtime.sidecar?.close().catch(() => {});
     this.#capture = undefined;
     this.dispatch({ type: "capture-stopped" });
+    // Deliberately no `syncIdleFollower()` here, unlike `finishRuntime` and
+    // `abortAssistedNotesStart`: every call site of this method is a shutdown path
+    // (`beforeunload`, `quit`, `onunload`), each of which already calls
+    // `stopIdleFollower()` of its own accord. Syncing here would spawn a brand-new
+    // follower process on the way out the door, with nothing left running to ever stop it.
   }
 
   /**
@@ -722,6 +792,123 @@ export default class ShorthandPlugin extends Plugin {
     // Not `capture-stopped`: this path exists precisely because no recording ever
     // started, and reporting a stopped capture tells the user something ran.
     this.dispatch({ type: "capture-start-failed" });
+    this.syncIdleFollower();
+  }
+
+  /** Start or stop the idle follower to match the setting and the capture state. */
+  private syncIdleFollower(): void {
+    const wanted = this.settings.followAppRecording && this.#capture === undefined;
+    if (!wanted) { this.stopIdleFollower(); return; }
+    if (this.#idleFollower !== undefined) return;
+    const client = new StreamClient({
+      command: this.shorthandCommand(),
+      args: DEFAULT_CONFIG.followStreamArgs,
+      maxReconnectAttempts: DEFAULT_CONFIG.reconnect.maxAttempts,
+      backoffMs: DEFAULT_CONFIG.reconnect.backoffMs,
+      drainTimeoutMs: DEFAULT_CONFIG.drainTimeoutMs,
+    });
+    this.#idleFollower = client;
+    this.#idleAppAdvertisesMode = false;
+    client.on("event", ({ record }) => {
+      if (record.t === "hello") {
+        this.#idleAppAdvertisesMode = record.capabilities?.includes("begin-mode") === true;
+        return;
+      }
+      if (record.t === "begin") { this.onAppRecordingBegan(record.mode, record.session); return; }
+      // A recording that ends before the capture's own listener takes over (see
+      // `#idlePendingAttachSession`'s comment for the window and why it exists) must still
+      // end the capture once setup finishes. This listener is the only thing attached for
+      // that whole window, so it is the only place that can see the terminal record land.
+      if (this.#idlePendingAttachSession !== undefined && endsSession(record, this.#idlePendingAttachSession)) {
+        this.#idlePendingAttachEnded = true;
+      }
+    });
+    // `settled`, not `processError`/`giveUp`. A Shorthand that is not running exits the
+    // follower with code 2 before any hello, which StreamClient treats as terminal: it
+    // deactivates and emits only this — never `processError` or `giveUp`. A follower
+    // listening only for those two would be silently dead after its first attempt, and
+    // "open Obsidian, start Shorthand later" is the ordinary order users hit this in.
+    client.once("settled", () => {
+      if (this.#idleFollower !== client) return;
+      this.#idleFollower = undefined;
+      this.#idleAppAdvertisesMode = false;
+      this.scheduleIdleRetry();
+    });
+    // Deliberately quiet otherwise: an idle follower failing means Shorthand is not
+    // running, which is the normal state of a vault that is not in a meeting. A Notice
+    // would fire at a user who asked for nothing. Capture reports its own failures.
+    client.start();
+  }
+
+  private scheduleIdleRetry(): void {
+    if (this.#idleRetry !== undefined) return;
+    if (!this.settings.followAppRecording || this.#capture !== undefined) return;
+    this.#idleRetry = window.setTimeout(() => {
+      this.#idleRetry = undefined;
+      this.syncIdleFollower();
+    }, IDLE_FOLLOWER_RETRY_MS);
+  }
+
+  private stopIdleFollower(): void {
+    if (this.#idleRetry !== undefined) { window.clearTimeout(this.#idleRetry); this.#idleRetry = undefined; }
+    this.#idleFollower?.forceStop();
+    this.#idleFollower = undefined;
+    this.#idleAppAdvertisesMode = false;
+  }
+
+  /**
+   * Release the idle follower for a capture to adopt, without stopping it. The idle
+   * listeners come off first, so the capture's own handler is the only one left.
+   */
+  private adoptIdleFollower(): StreamClient | undefined {
+    const client = this.#idleFollower;
+    if (client === undefined) return undefined;
+    client.removeAllListeners("event");
+    client.removeAllListeners("settled");
+    this.#idleFollower = undefined;
+    if (this.#idleRetry !== undefined) { window.clearTimeout(this.#idleRetry); this.#idleRetry = undefined; }
+    return client;
+  }
+
+  /** `mode` is whatever the wire carried; `decideFollow` is what validates it. */
+  private onAppRecordingBegan(mode: unknown, session: number | undefined): void {
+    const decision = decideFollow({
+      mode,
+      state: this.#state,
+      hasActiveNote: this.hasActiveMarkdownFile(),
+      followEnabled: this.settings.followAppRecording,
+      appAdvertisesMode: this.#idleAppAdvertisesMode,
+    });
+    if (decision.kind === "needs-newer-app") {
+      if (this.#warnedAboutAppVersion) return;
+      this.#warnedAboutAppVersion = true;
+      new Notice(
+        "This Shorthand build does not say which mode a recording is, so Obsidian cannot follow it. Update Shorthand and try again.",
+        10_000,
+      );
+      return;
+    }
+    if (decision.kind === "ignore") return;
+    // Captured now, not read back off `this.#idleFollower` later: by the time the `finally`
+    // below runs, adoption may already have cleared that field, and identity is what tells
+    // a refused attempt (`canStartCapture` said no, so `#capture` is someone else's runtime)
+    // apart from this one actually going through.
+    const client = this.#idleFollower;
+    this.#idlePendingAttachSession = session;
+    this.#idlePendingAttachEnded = false;
+    // Conditional spread, not `{ attachToSession: session }`: `exactOptionalPropertyTypes`
+    // forbids assigning an explicit `undefined` to `attachToSession`, and `session` here can
+    // be `undefined` in principle even though a real `begin` record always carries one.
+    void this.startCaptureOnActiveNote(
+      decision.signal,
+      session === undefined ? {} : { attachToSession: session },
+    ).finally(() => {
+      this.#idlePendingAttachSession = undefined;
+      if (this.#idlePendingAttachEnded && this.#capture?.client === client) {
+        void this.stopCapture().catch((error: unknown) => this.fail(errorMessage(error)));
+      }
+      this.#idlePendingAttachEnded = false;
+    });
   }
 
   async enhanceActiveNote(): Promise<void> {
@@ -999,6 +1186,7 @@ export default class ShorthandPlugin extends Plugin {
     } finally {
       if (this.#capture === runtime) this.#capture = undefined;
       this.dispatch({ type: "capture-stopped" });
+      this.syncIdleFollower();
     }
   }
 
@@ -1523,6 +1711,21 @@ class ShorthandSettingTab extends PluginSettingTab {
       .addToggle((toggle) => toggle
         .setValue(this.plugin.settings.enableLiveEnhancement)
         .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, enableLiveEnhancement: value })));
+    new Setting(containerEl)
+      .setName("Follow Shorthand's recordings")
+      .setDesc(createFragment((desc) => {
+        desc.appendText(
+          "Starting a recording with Shorthand's own hotkey also starts a capture on the note you have open — see ",
+        );
+        desc.createEl("a", {
+          text: "Following Shorthand's recordings",
+          href: "https://github.com/mshish/shorthand-obsidian-plugin#following-shorthands-recordings",
+        });
+        desc.appendText(".");
+      }))
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.followAppRecording)
+        .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, followAppRecording: value })));
     new Setting(containerEl)
       .setName("Debug logging")
       .setDesc("Logs enhancement activity to the developer console. Turn this on if a note stops updating during capture.")

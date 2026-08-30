@@ -86,6 +86,16 @@ Starting a capture cancels any recording already in progress. If you quit Shorth
 
 The three recorder commands remain available as manual controls. They control Shorthand but do not start or stop an Obsidian capture.
 
+## Following Shorthand's recordings
+
+**Follow Shorthand's recordings** is off by default. Turn it on and starting a Meetings or Assisted notes recording with Shorthand's own hotkey also starts a capture on the note you have open in Obsidian.
+
+While it is on, the plugin keeps a connection to Shorthand open so it can see those recordings. Dictation is never followed.
+
+A capture started this way does not stop Shorthand's recording when you stop it, because it was not the one that started it. Stop the recording the way you started it.
+
+This needs a Shorthand build that reports which mode a recording is. An older build tells the plugin a recording started but not what kind, and the plugin does nothing rather than guess.
+
 ## Note writing
 
 The plugin changes only the note section marked for Shorthand. It checks that section again before each update and keeps the existing text if the markers or generated result are invalid.

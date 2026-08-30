@@ -89,6 +89,15 @@ export type ShorthandPluginSettings = Readonly<{
   retainAgentSessionHistory: boolean;
   /** One heading per line. Empty means core's `DEFAULT_CONFIG.templateSections`, for the same reason. */
   templateSectionText: string;
+  /**
+   * Whether the plugin keeps a follower attached while idle, so a recording started with
+   * Shorthand's own hotkey also starts a capture here.
+   *
+   * Off by default, and deliberately: it holds a `shorthand --follow-stream` child process
+   * open for as long as the plugin is loaded, which is not something to switch on for
+   * someone without asking. Eight followers may attach at once, so the slot itself is free.
+   */
+  followAppRecording: boolean;
 }>;
 
 export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
@@ -111,6 +120,7 @@ export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
   retainAgentSessionHistory: false,
   noteTakingGuidance: "",
   templateSectionText: "",
+  followAppRecording: false,
 });
 
 export function normalizePluginSettings(input: unknown): ShorthandPluginSettings {
@@ -149,6 +159,9 @@ export function normalizePluginSettings(input: unknown): ShorthandPluginSettings
       : DEFAULT_PLUGIN_SETTINGS.retainAgentSessionHistory,
     noteTakingGuidance: guidanceText(value.noteTakingGuidance, DEFAULT_PLUGIN_SETTINGS.noteTakingGuidance),
     templateSectionText: headingListText(value.templateSectionText, DEFAULT_PLUGIN_SETTINGS.templateSectionText),
+    followAppRecording: typeof value.followAppRecording === "boolean"
+      ? value.followAppRecording
+      : DEFAULT_PLUGIN_SETTINGS.followAppRecording,
   };
 }
 
