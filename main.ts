@@ -1,5 +1,6 @@
 import {
   FileSystemAdapter,
+  ItemView,
   MarkdownView,
   Modal,
   Notice,
@@ -14,6 +15,7 @@ import {
   normalizePath,
   type Editor,
   type TextComponent,
+  type WorkspaceLeaf,
 } from "obsidian";
 import { existsSync } from "node:fs";
 // Core is consumed by package name through its `exports` map — never a deep path.
@@ -100,6 +102,7 @@ import {
   type RecorderPhase,
 } from "./src/recorder.js";
 import { describeStatus } from "./src/status-text.js";
+import { describePanel, SHORTHAND_PANEL_VIEW, type PanelButtonId, type PanelModel } from "./src/panel-model.js";
 import { createRequestUrlFetch } from "./src/request-url-fetch.js";
 import { deleteLlmCredentials, writeLlmCredentials } from "./src/llm-credentials-writer.js";
 import { LlmProfileCommitQueue } from "./src/llm-profile-commit-queue.js";
@@ -242,12 +245,15 @@ export default class ShorthandPlugin extends Plugin {
       if (this.#capture === undefined) return;
       void this.stopCapture().catch((error: unknown) => this.fail(errorMessage(error)));
     });
-    this.#renderStatus();
+    this.#render();
     // The elapsed-time display is otherwise only refreshed from a transcript-delta handler
     // and from dispatch(), so between utterances it would visibly freeze. A ticking interval
     // keeps it advancing during silence; registerInterval auto-clears it on unload.
-    this.registerInterval(window.setInterval(() => this.#renderStatus(), 1_000));
+    this.registerInterval(window.setInterval(() => this.#render(), 1_000));
     this.addSettingTab(new ShorthandSettingTab(this.app, this));
+
+    this.registerView(SHORTHAND_PANEL_VIEW, (leaf) => new ShorthandPanelView(leaf, this));
+    this.addRibbonIcon("mic", "Open Shorthand panel", () => { void this.revealPanel(); });
 
     // Names come from src/commands.ts so they are covered by bun test; main.ts cannot
     // be imported under it. They carry no plugin prefix and are sentence case, per
@@ -320,6 +326,11 @@ export default class ShorthandPlugin extends Plugin {
       id: "cancel-shorthand-recording",
       name: COMMAND_NAMES["cancel-shorthand-recording"],
       callback: () => { this.fireControl("cancel"); },
+    });
+    this.addCommand({
+      id: "open-panel",
+      name: COMMAND_NAMES["open-panel"],
+      callback: () => { void this.revealPanel(); },
     });
 
     // StreamClient owns the child process. These hooks synchronously signal it
@@ -515,7 +526,7 @@ export default class ShorthandPlugin extends Plugin {
               `[shorthand] transcript +${delta.length} chars; pending ${enhancer.state.pendingCharacters}/${this.settings.minNewChars} toward next pass`,
             );
           }
-          this.#renderStatus();
+          this.#render();
         });
         client.on("disconnect", ({ generation }) => {
           for (const update of transcript.markConnectionEnded(generation)) sidecar?.apply(update);
@@ -1192,7 +1203,57 @@ export default class ShorthandPlugin extends Plugin {
 
   private dispatch(event: PluginUiEvent): void {
     this.#state = reducePluginState(this.#state, event);
+    this.#render();
+  }
+
+  /** The panel's whole view of the world, assembled from the same facts the status bar uses. */
+  panelModel(): PanelModel {
+    return describePanel({
+      state: this.#state,
+      elapsedMs: this.#capture === undefined ? undefined : Date.now() - this.#capture.startedAt,
+      pendingCharacters: this.#capture?.enhancer?.state.pendingCharacters,
+      minNewChars: this.settings.minNewChars,
+      noteName: this.#capture?.noteFile.basename,
+      hasActiveNote: this.hasActiveMarkdownFile(),
+    });
+  }
+
+  runPanelAction(id: PanelButtonId): void {
+    if (id === "stop") {
+      void this.stopCapture().catch((error: unknown) => this.fail(errorMessage(error)));
+      return;
+    }
+    void this.startCaptureOnActiveNote(id === "start-assisted-notes" ? "toggle-assisted-notes" : "toggle-transcription");
+  }
+
+  #renderPanel(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(SHORTHAND_PANEL_VIEW)) {
+      const view = leaf.view;
+      if (view instanceof ShorthandPanelView) view.render();
+    }
+  }
+
+  /**
+   * Reveal the panel, creating it if the workspace has none. `getRightLeaf(false)` can
+   * return null on a workspace with no right sidebar, which is why this is guarded rather
+   * than chained.
+   */
+  private async revealPanel(): Promise<void> {
+    const existing = this.app.workspace.getLeavesOfType(SHORTHAND_PANEL_VIEW);
+    const leaf = existing[0] ?? this.app.workspace.getRightLeaf(false);
+    if (leaf === null || leaf === undefined) return;
+    if (existing.length === 0) await leaf.setViewState({ type: SHORTHAND_PANEL_VIEW, active: true });
+    this.app.workspace.revealLeaf(leaf);
+  }
+
+  /**
+   * Both surfaces, always together. Deliberately not `#renderPanel()` appended to
+   * `#renderStatus()`: that method returns early when the status bar is hidden, which
+   * is exactly the idle transition the panel most needs to hear about.
+   */
+  #render(): void {
     this.#renderStatus();
+    this.#renderPanel();
   }
 
   #renderStatus(): void {
@@ -1752,6 +1813,54 @@ function numberSetting(
       setting.setDesc(describe(plugin.settings[key]));
     });
   });
+}
+
+/**
+ * The right-sidebar controls. Everything it decides is `describePanel`; this class is the
+ * DOM wiring only, which is what keeps it reviewable by reading — it cannot be imported
+ * under `bun test`.
+ */
+class ShorthandPanelView extends ItemView {
+  constructor(leaf: WorkspaceLeaf, private readonly plugin: ShorthandPlugin) {
+    super(leaf);
+  }
+
+  getViewType(): string {
+    return SHORTHAND_PANEL_VIEW;
+  }
+
+  getDisplayText(): string {
+    return "Shorthand";
+  }
+
+  getIcon(): string {
+    return "mic";
+  }
+
+  async onOpen(): Promise<void> {
+    this.render();
+  }
+
+  render(): void {
+    const model = this.plugin.panelModel();
+    const container = this.contentEl;
+    container.empty();
+    container.addClass("shorthand-panel");
+    container.createEl("p", { text: model.headline, cls: "shorthand-panel-headline" });
+    if (model.noteName !== undefined) {
+      container.createEl("p", { text: model.noteName, cls: "shorthand-panel-note" });
+    }
+    if (model.detail !== undefined) {
+      container.createEl("p", { text: model.detail, cls: "shorthand-panel-detail" });
+    }
+    const buttons = container.createDiv({ cls: "shorthand-panel-buttons" });
+    for (const button of model.buttons) {
+      const el = buttons.createEl("button", { text: button.label });
+      el.disabled = !button.enabled;
+      if (button.id === "start-meeting") el.addClass("mod-cta");
+      el.onclick = () => { this.plugin.runPanelAction(button.id); };
+    }
+  }
 }
 
 class ScaffoldModal extends Modal {

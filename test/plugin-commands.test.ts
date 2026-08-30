@@ -51,6 +51,7 @@ describe("command names", () => {
       "toggle-shorthand-recording",
       "toggle-shorthand-assisted-notes",
       "cancel-shorthand-recording",
+      "open-panel",
     ];
     expect(Object.keys(COMMAND_NAMES).sort()).toEqual([...ids].sort());
     expect(new Set(Object.values(COMMAND_NAMES)).size).toBe(ids.length);

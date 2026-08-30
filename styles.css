@@ -10,3 +10,24 @@
   margin-bottom: var(--size-4-2);
   resize: vertical;
 }
+
+/* The right-sidebar panel. Spacing comes from Obsidian's own variables so it tracks the
+   active theme; the guidelines forbid hardcoded values for exactly this reason. */
+.shorthand-panel-headline {
+  font-weight: var(--font-semibold);
+  margin-bottom: var(--size-4-1);
+}
+
+.shorthand-panel-note,
+.shorthand-panel-detail {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  margin: 0 0 var(--size-4-1) 0;
+}
+
+.shorthand-panel-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-1);
+  margin-top: var(--size-4-2);
+}

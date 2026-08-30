@@ -42,6 +42,12 @@ If the note has not been prepared for Shorthand, the plugin adds the required se
 
 Turn on **Transcript notes** if you also want a linked note containing the raw transcript. This is optional. **Enhance now** can use that saved transcript after the live capture has ended.
 
+## The Shorthand panel
+
+**Open Shorthand panel**, or the microphone icon in the ribbon, opens a panel in the right sidebar with Start and Stop buttons, the current state, the elapsed time, and the note being captured. It is not opened automatically.
+
+While a capture is running, the status bar shows the elapsed time and clicking it stops the capture. It is hidden when nothing is capturing.
+
 ## Commands
 
 Obsidian adds the “Shorthand:” prefix in the command palette.
@@ -54,6 +60,7 @@ Obsidian adds the “Shorthand:” prefix in the command palette.
 - **Toggle Shorthand meeting recording**
 - **Toggle Shorthand assisted notes recording**
 - **Cancel Shorthand recording**
+- **Open Shorthand panel**
 
 **Clean up this note** improves a note you wrote or dictated without using a transcript. It does not run on a note that already has a linked transcript.
 

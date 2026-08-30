@@ -16,7 +16,8 @@ export type CommandId =
   | "clean-up-this-note"
   | "toggle-shorthand-recording"
   | "toggle-shorthand-assisted-notes"
-  | "cancel-shorthand-recording";
+  | "cancel-shorthand-recording"
+  | "open-panel";
 
 /**
  * The ids are frozen. Obsidian keys a user's custom hotkey to
@@ -42,4 +43,5 @@ export const COMMAND_NAMES: Readonly<Record<CommandId, string>> = Object.freeze(
   "toggle-shorthand-recording": "Toggle Shorthand meeting recording",
   "toggle-shorthand-assisted-notes": "Toggle Shorthand assisted notes recording",
   "cancel-shorthand-recording": "Cancel Shorthand recording",
+  "open-panel": "Open Shorthand panel",
 });
