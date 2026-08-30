@@ -79,4 +79,16 @@ describe("describeStatus", () => {
       tooltip: "Shorthand was not running.",
     });
   });
+
+  test("keeps the clock on an error that did not end the capture", () => {
+    // fail() is reached from connectionError, giveUp and drainTimeout while the
+    // capture is still running, so the meeting timer must not vanish at the moment
+    // something goes wrong — the recording is still going.
+    const failed = reducePluginState(capturing, { type: "error", message: "Shorthand connection error." });
+    expect(describeStatus({ ...base, state: failed, elapsedMs: 754_000 })).toEqual({
+      visible: true,
+      text: "Shorthand 12:34 · error",
+      tooltip: "Shorthand connection error. Click to stop.",
+    });
+  });
 });

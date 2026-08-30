@@ -69,12 +69,17 @@ export function describeStatus(input: StatusInput): StatusDisplay {
         text: `Shorthand${clock} · enhancement stopped`,
         tooltip: state.message ?? "Enhancement stopped; capture continues.",
       };
-    case "error":
+    case "error": {
+      // Tied to the same signal as `clock` rather than to `state.captureActive`: the
+      // click handler's only power is stopping the capture whose elapsed time is
+      // shown, so the offer to stop and the clock it stops must never disagree.
+      const stopHint = elapsedMs === undefined ? "" : " Click to stop.";
       return {
         visible: true,
         text: `Shorthand${clock} · error`,
-        tooltip: state.message ?? "Shorthand hit an error.",
+        tooltip: `${state.message ?? "Shorthand hit an error."}${stopHint}`,
       };
+    }
     default: {
       // A new mode must choose its own words rather than falling through to a
       // union member the user would then be shown.
