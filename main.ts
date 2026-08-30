@@ -731,6 +731,14 @@ export default class ShorthandPlugin extends Plugin {
             const reason = recorder.startFailure;
             if (reason !== undefined) new Notice(ASSISTED_NOTES_START_FAILURE_NOTICES[reason], 10_000);
             await this.abortAssistedNotesStart(runtime);
+          }).catch((error: unknown) => {
+            // Nothing else is watching this chain (same reasoning as the `settled` chain
+            // above). This `.then` body is the sole clearer of `starting` on the Assisted
+            // Notes path: a throw here — before it reaches `abortAssistedNotesStart` on its
+            // own — would otherwise leave `starting` stuck true for the rest of the session,
+            // refusing every later start with "already capturing" until a plugin reload.
+            this.fail(`Assisted Notes start failed: ${errorMessage(error)}`);
+            void this.abortAssistedNotesStart(runtime);
           });
         }
       } catch (error) {
