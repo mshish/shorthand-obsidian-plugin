@@ -430,7 +430,11 @@ export class ShorthandRecorder {
     if (this.#stopping) return "stopped";
     const toggled = await this.#send(this.#recordingSignal, "start");
     if (toggled) {
-      this.#expectingSession = true;
+      // Not unconditionally true. Shorthand announces the session when it acts on the toggle,
+      // not when the forwarding process carrying it exits, so a `begin` can already have
+      // arrived during the await above and set this false. Overwriting it here would claim a
+      // session is still pending when the recorder is already following one.
+      this.#expectingSession = !this.#sessionLive;
       this.#idleGuaranteed = false;
     }
     // The one check that cannot be a guard. A stop that arrived while that toggle was in
@@ -443,6 +447,14 @@ export class ShorthandRecorder {
     }
     if (!toggled) return "not-started";
     if (this.#startAcknowledgementMs === undefined) return "started";
+
+    // The session can announce itself before the toggle's forwarding process exits, and
+    // `#send()` above only resolves on that exit. `#beginWaiters` was therefore still empty
+    // when the record arrived, and `resolveAll` on an empty set drops the wakeup — so waiting
+    // now would sit out the whole budget for a `begin` that has already gone by, then report
+    // `start-timeout` and tell the user to enable a mode that was never disabled.
+    // `#markIdle()` cleared this a few lines above, so a live session here is this toggle's.
+    if (this.#sessionLive) return "started";
 
     // The toggle landed, but for a capability-gated signal that only proves delivery, not
     // acceptance: Shorthand's disabled-mode refusal still exits the forwarding process 0, and

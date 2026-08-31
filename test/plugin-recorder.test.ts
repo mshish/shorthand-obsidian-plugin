@@ -993,6 +993,29 @@ describe("Assisted Notes: the capability-gated start contract", () => {
     expect(recorder.startFailure).toBeUndefined();
   });
 
+  /**
+   * Shorthand announces the session when it acts on the toggle, not when the forwarding
+   * process it was sent through exits — and on Windows the gap runs the wrong way: `begin`
+   * was observed ~20ms before the child's exit. The acknowledgement wait is only entered
+   * after `send()` resolves on that exit, so the record lands while `#beginWaiters` is still
+   * empty and its wakeup is dropped. The start then sat out the whole budget waiting for a
+   * `begin` that had already arrived, and reported `start-timeout` — which tells the user to
+   * go and enable a mode that was enabled all along.
+   */
+  test("a begin that arrives while the toggle child is still exiting still counts as started", async () => {
+    const { control, recorder } = buildGated();
+    control.auto = false;
+    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: [ASSISTED] }));
+    await flush();
+    expect(control.release()).toBe("cancel");
+    await flush();
+    // The toggle has been spawned and is still in flight. Shorthand has already acted on it.
+    recorder.observe({ t: "begin", session: 1 });
+    expect(control.release()).toBe(ASSISTED);
+    expect(await outcomeOf(started)).toBe("started");
+    expect(recorder.startFailure).toBeUndefined();
+  });
+
   test("capability missing: not-started, with neither cancel nor the unsupported flag sent", async () => {
     const { control, recorder } = buildGated();
     const outcome = await recorder.start(Promise.resolve<HelloInfo>({ capabilities: [] }));
