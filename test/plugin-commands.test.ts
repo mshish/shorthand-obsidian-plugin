@@ -6,9 +6,9 @@ describe("command names", () => {
     // The asymmetry this fixes: one sibling said which mode it started and the
     // other did not, so the palette read as though there were a default and a
     // special case rather than two peers.
-    expect(COMMAND_NAMES["start-capture-this-note"]).toBe("Start meeting capture on this note");
-    expect(COMMAND_NAMES["start-assisted-notes-capture-this-note"]).toBe(
-      "Start assisted notes capture on this note",
+    expect(COMMAND_NAMES["start-meeting-notes-this-note"]).toBe("Start meeting notes on this note");
+    expect(COMMAND_NAMES["start-assisted-notes-this-note"]).toBe(
+      "Start assisted notes on this note",
     );
   });
 
@@ -32,7 +32,7 @@ describe("command names", () => {
 
   test("are sentence case and carry no plugin prefix", () => {
     // Obsidian renders these as "Shorthand: <name>", so a prefix here produced
-    // "Shorthand: Shorthand: start capture…". Its guidelines also require
+    // "Shorthand: Shorthand: start meeting notes…". Its guidelines also require
     // sentence case for all UI text.
     for (const name of Object.values(COMMAND_NAMES)) {
       expect(name.startsWith("Shorthand:")).toBe(false);
@@ -43,9 +43,9 @@ describe("command names", () => {
 
   test("cover every id exactly once", () => {
     const ids: CommandId[] = [
-      "start-capture-this-note",
-      "start-assisted-notes-capture-this-note",
-      "stop-capture",
+      "start-meeting-notes-this-note",
+      "start-assisted-notes-this-note",
+      "stop-notes",
       "enhance-now",
       "clean-up-this-note",
       "toggle-recording",

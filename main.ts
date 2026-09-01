@@ -461,15 +461,15 @@ export default class ShorthandPlugin extends Plugin {
     // Names come from src/commands.ts so they are covered by bun test; main.ts cannot
     // be imported under it. They carry no plugin prefix and are sentence case, per
     // Obsidian's plugin guidelines: the palette already renders these as "Shorthand:
-    // Start meeting capture on this note". Spelling it out here produced "Shorthand:
-    // Shorthand: start capture…".
+    // Start meeting notes on this note". Spelling it out here produced "Shorthand:
+    // Shorthand: start meeting notes…".
     // checkCallback, not callback: Obsidian hides a command whose check returns false,
     // which is its prescribed way to express "needs an open Markdown note". The check
     // runs on every palette render, so it must not fire a Notice — hence
     // hasActiveMarkdownFile rather than activeMarkdownFile.
     this.addCommand({
-      id: "start-capture-this-note",
-      name: COMMAND_NAMES["start-capture-this-note"],
+      id: "start-meeting-notes-this-note",
+      name: COMMAND_NAMES["start-meeting-notes-this-note"],
       checkCallback: (checking: boolean) => {
         if (!this.hasActiveMarkdownFile()) return false;
         if (checking) return true;
@@ -478,8 +478,8 @@ export default class ShorthandPlugin extends Plugin {
       },
     });
     this.addCommand({
-      id: "start-assisted-notes-capture-this-note",
-      name: COMMAND_NAMES["start-assisted-notes-capture-this-note"],
+      id: "start-assisted-notes-this-note",
+      name: COMMAND_NAMES["start-assisted-notes-this-note"],
       checkCallback: (checking: boolean) => {
         if (!this.hasActiveMarkdownFile()) return false;
         if (checking) return true;
@@ -488,8 +488,8 @@ export default class ShorthandPlugin extends Plugin {
       },
     });
     this.addCommand({
-      id: "stop-capture",
-      name: COMMAND_NAMES["stop-capture"],
+      id: "stop-notes",
+      name: COMMAND_NAMES["stop-notes"],
       callback: () => { void this.stopCapture().catch((error: unknown) => this.fail(errorMessage(error))); },
     });
     this.addCommand({
