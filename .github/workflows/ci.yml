@@ -35,6 +35,14 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
+      # Reproduces the Obsidian marketplace review's own lint pass, which is how
+      # the plugin's first submission came back with findings rather than an
+      # approval. Gating here means the next regression is caught before a
+      # reviewer sees it. eslint.config.mjs records the two places this
+      # deliberately differs from the marketplace's config, and why.
+      - name: Lint
+        run: npm run lint
+
       # Build before test, and never reorder these. main.js is gitignored, so a clean
       # checkout has no bundle at all, and test/plugin-bundle.test.ts throws rather than
       # building one itself — building there could deliver mid-edit code into a live vault.
