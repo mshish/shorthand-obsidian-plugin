@@ -14,6 +14,8 @@ import {
   type TFile,
   normalizePath,
   type Editor,
+  type SettingDefinitionControl,
+  type SettingDefinitionItem,
   type TextComponent,
   type WorkspaceLeaf,
 } from "obsidian";
@@ -67,11 +69,11 @@ import {
   codexAgentOptions,
   defaultTemplateSectionText,
   initialPromptFieldState,
-  isEnhancementBackend,
   normalizePluginSettings,
   resolveTemplateSections,
   storedPromptFieldValue,
   validatePromptSettings,
+  type EnhancementBackend,
   type ShorthandPluginSettings,
 } from "./src/settings.js";
 import {
@@ -1784,491 +1786,586 @@ export default class ShorthandPlugin extends Plugin {
   }
 }
 
-class ShorthandSettingTab extends PluginSettingTab {
-  #displayGeneration = 0;
+/**
+ * Every key the settings tab's `control` definitions read and write through
+ * `getControlValue`/`setControlValue`, plus `minIntervalSeconds` — a UI-only key with no
+ * matching settings field: the tab shows and edits `minIntervalMs` in seconds, so this key
+ * carries that unit conversion through the same generic get/set path every other control uses,
+ * rather than giving the interval row a bespoke `render` callback.
+ */
+type SettingsKey = keyof ShorthandPluginSettings | "minIntervalSeconds";
 
+class ShorthandSettingTab extends PluginSettingTab {
   constructor(app: App, private readonly plugin: ShorthandPlugin) {
     super(app, plugin);
   }
 
-  display(): void {
-    const displayGeneration = ++this.#displayGeneration;
-    const { containerEl } = this;
-    containerEl.empty();
-    // No plugin-name heading at the top: Obsidian already titles this pane "Shorthand", and
-    // the guidelines reserve headings for separating multiple sections.
-    this.displayBasic(containerEl, displayGeneration);
-    this.displayAdvanced(containerEl);
+  /**
+   * Called on every re-render and once more when the tab is registered, purely to index its
+   * rows for Obsidian's settings search — so this must stay a plain, side-effect-free read of
+   * current settings. The agent catalog fetch and the LLM credential read are the two things
+   * here that are neither: both are gated behind their own `render` callback (see
+   * `agentCatalogItem` and `llmProfileGroup`), which Obsidian only invokes for a row that is
+   * actually being displayed, never for a search-indexing pass.
+   */
+  getSettingDefinitions(): SettingDefinitionItem<SettingsKey>[] {
+    return [
+      ...this.basicDefinitions(),
+      this.advancedGroup(),
+    ];
   }
 
-  private displayBasic(containerEl: HTMLElement, displayGeneration: number): void {
-    new Setting(containerEl)
-      .setName("Enhancement backend")
-      .setDesc("Only Claude Code can look things up elsewhere in your vault.")
-      .addDropdown((dropdown) => dropdown
-        .addOption("claude-agent-sdk", "Claude Code")
-        .addOption("codex", "Codex")
-        .addOption("llm", "LLM provider")
-        .setValue(this.plugin.settings.backend)
-        .onChange(async (value) => {
-          // Narrowed through the same predicate `normalizePluginSettings` uses, not against
-          // literals repeated here. The literals this replaced listed only the two backends
-          // that existed when it was written, so adding a third made its option selectable
-          // and unsaveable: the dropdown moved, this handler returned, and nothing anywhere
-          // reported that the choice had been discarded.
-          if (!isEnhancementBackend(value)) return;
-          await this.plugin.saveSettings({ ...this.plugin.settings, backend: value });
-          this.display();
-        }));
-    // Each backend fetches its own catalog and renders its own sign-in row (shown only once
-    // `signedIn: false` comes back — see displayAgentCatalog), rather than an if/else on a
-    // shared block, for the reason recorded on the LLM-profile branch below: a third backend
-    // added later must not inherit a block written for a different one.
-    if (this.plugin.settings.backend === "claude-agent-sdk") {
-      this.displayAgentCatalog(containerEl, displayGeneration, "claude");
-    }
-    if (this.plugin.settings.backend === "codex") {
-      this.displayAgentCatalog(containerEl, displayGeneration, "codex");
-    }
-    // Each half of this pair names its own backend rather than being an if/else, and that is
-    // what keeps a third backend from inheriting a block written for a different one: Codex
-    // wants neither the LLM profile rows nor the Claude executable field in Advanced. Turning
-    // either test back into an else silently hands whichever block sits on that branch to
-    // every backend added after it.
-    if (this.plugin.settings.backend === "llm") {
-      this.displayLlmProfileControls(containerEl, displayGeneration);
-    }
-    new Setting(containerEl)
-      .setName("Transcript notes")
-      .setDesc("Each capture also saves the raw transcript in its own linked note.")
-      .addToggle((toggle) => toggle
-        .setValue(this.plugin.settings.writeTranscriptNote)
-        .onChange(async (value) => {
-          await this.plugin.saveSettings({ ...this.plugin.settings, writeTranscriptNote: value });
-          this.display();
-        }));
-    if (this.plugin.settings.writeTranscriptNote) {
-      textSetting(containerEl, this.plugin, "Transcript folder", transcriptFolderDescription, "sidecarDirectory");
-    }
-    new Setting(containerEl)
-      .setName("Automatic note scaffolding")
-      .setDesc("Shorthand adds its section markers to a note that has none, instead of asking you first.")
-      .addToggle((toggle) => toggle
-        .setValue(this.plugin.settings.autoScaffold)
-        .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, autoScaffold: value })));
-    new Setting(containerEl)
-      .setName("Control Shorthand recording")
-      .setDesc(createFragment((desc) => {
-        desc.appendText(
-          "Starting and stopping a capture also starts and stops Shorthand's recording. "
-          + "If Shorthand quits during a capture, this plugin may reopen Shorthand to send the final stop command. ",
-        );
-        desc.createEl("a", {
-          text: "Read how recorder control works",
-          href: "https://github.com/mshish/shorthand-obsidian-plugin#driving-shorthands-recorder",
-          cls: "shorthand-settings-link",
-        });
-        desc.appendText(".");
-      }))
-      .addToggle((toggle) => toggle
-        .setValue(this.plugin.settings.controlShorthandRecording)
-        .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, controlShorthandRecording: value })));
+  /**
+   * Bridges the plugin's own `saveSettings()`-based persistence to the declarative API's
+   * per-key get/set contract. `minIntervalSeconds` is the one key with no settings field of its
+   * own — see `SettingsKey`'s doc comment.
+   */
+  getControlValue(key: string): unknown {
+    if (key === "minIntervalSeconds") return this.plugin.settings.minIntervalMs / 1_000;
+    return (this.plugin.settings as unknown as Record<string, unknown>)[key];
+  }
 
-    // setHeading() rather than a raw <h3>: the guidelines call for it, and it inherits
-    // Obsidian's own settings typography instead of hardcoding a heading level.
-    new Setting(containerEl)
-      .setName("Note writing")
-      .setHeading()
-      .setDesc("Shorthand's defaults change with each release. Anything you customize stays as you wrote it.");
+  /**
+   * Overriding this replaces the framework's automatic `saveData()` call, so every branch
+   * persists explicitly through `saveSettings()` — the same method every other write in this
+   * plugin uses, which is what keeps `syncIdleFollower()` running after a settings-tab edit.
+   *
+   * A control's own row has no reactive `desc`, so a row whose description is computed from its
+   * current value (docs/settings-copy-style.md rule 4) goes stale after a commit unless
+   * `getSettingDefinitions()` runs again — `update()` is what re-runs it. `backend` and
+   * `writeTranscriptNote` instead gate *other* rows' `visible` predicates; re-evaluating those
+   * is `refreshDomState()`'s job and does not need a full rebuild.
+   */
+  async setControlValue(key: string, value: unknown): Promise<void> {
+    if (key === "minIntervalSeconds") {
+      const seconds = typeof value === "number" ? value : Number(value);
+      await this.plugin.saveSettings({ ...this.plugin.settings, minIntervalMs: seconds * 1_000 });
+      this.update();
+      return;
+    }
+    await this.plugin.saveSettings({ ...this.plugin.settings, [key]: value });
+    if (REVEALS_OTHER_ROWS.has(key)) {
+      this.refreshDomState();
+    } else if (SELF_DESCRIBING_KEYS.has(key)) {
+      this.update();
+    }
+  }
+
+  private basicDefinitions(): SettingDefinitionItem<SettingsKey>[] {
+    return [
+      {
+        name: "Enhancement backend",
+        desc: "Only Claude Code can look things up elsewhere in your vault.",
+        control: {
+          type: "dropdown",
+          key: "backend",
+          options: {
+            "claude-agent-sdk": "Claude Code",
+            codex: "Codex",
+            llm: "LLM provider",
+          } satisfies Record<EnhancementBackend, string>,
+        },
+      },
+      // Each backend fetches its own catalog and renders its own sign-in row (shown only once
+      // `signedIn: false` comes back — see agentCatalogItem's render callback), rather than an
+      // if/else on a shared block, for the reason recorded on the LLM-profile branch below: a
+      // third backend added later must not inherit a block written for a different one.
+      this.agentCatalogItem("claude"),
+      this.agentCatalogItem("codex"),
+      // Each half of this pair names its own backend rather than being an if/else, and that is
+      // what keeps a third backend from inheriting a block written for a different one: Codex
+      // wants neither the LLM profile rows nor the Claude executable field in Advanced. Turning
+      // either test back into an else silently hands whichever block sits on that branch to
+      // every backend added after it.
+      this.llmProfileGroup(),
+      {
+        name: "Transcript notes",
+        desc: "Each capture also saves the raw transcript in its own linked note.",
+        control: { type: "toggle", key: "writeTranscriptNote" },
+      },
+      {
+        ...textControlItem("Transcript folder", transcriptFolderDescription, "sidecarDirectory", this.plugin.settings.sidecarDirectory),
+        visible: () => this.plugin.settings.writeTranscriptNote,
+      },
+      {
+        name: "Automatic note scaffolding",
+        desc: "Shorthand adds its section markers to a note that has none, instead of asking you first.",
+        control: { type: "toggle", key: "autoScaffold" },
+      },
+      {
+        name: "Control Shorthand recording",
+        desc: createFragment((desc) => {
+          desc.appendText(
+            "Starting and stopping a capture also starts and stops Shorthand's recording. "
+            + "If Shorthand quits during a capture, this plugin may reopen Shorthand to send the final stop command. ",
+          );
+          desc.createEl("a", {
+            text: "Read how recorder control works",
+            href: "https://github.com/mshish/shorthand-obsidian-plugin#driving-shorthands-recorder",
+            cls: "shorthand-settings-link",
+          });
+          desc.appendText(".");
+        }),
+        control: { type: "toggle", key: "controlShorthandRecording" },
+      },
+      this.noteWritingGroup(),
+    ];
+  }
+
+  /**
+   * "Note writing"'s heading and its introductory sentence are two separate items because
+   * `SettingDefinitionGroup` has no `desc` field of its own — only `heading`. The sentence
+   * becomes a nameless, control-less row instead: a plain label-and-description row with no
+   * interactive element, the same shape `SettingDefinitionEmpty` describes.
+   */
+  private noteWritingGroup(): SettingDefinitionItem<SettingsKey> {
     // Which of the two are overridden, so the pane answers "am I on the defaults?" without
-    // opening the window. This is read at render time, which is why the modal re-renders the
-    // pane on save — otherwise the row would keep reporting the state from before the edit.
+    // opening the window. Read fresh on every call, which is why the modal's onSaved callback
+    // calls update() — otherwise this row would keep reporting the state from before the edit.
     const overridden = [
       this.plugin.settings.noteTakingGuidance.length > 0 ? "prompt" : undefined,
       this.plugin.settings.templateSectionText.length > 0 ? "starting sections" : undefined,
     ].filter((label): label is string => label !== undefined);
-    new Setting(containerEl)
-      .setName("Note-taking prompt and starting sections")
-      .setDesc(overridden.length === 0
-        ? "Both follow Shorthand's defaults."
-        : `Custom ${overridden.join(" and ")} in use.`)
-      .addButton((button) => button
-        .setButtonText("Edit…")
-        .onClick(() => new NotePromptModal(this.app, this.plugin, () => this.display()).open()));
+    return {
+      type: "group",
+      heading: "Note writing",
+      items: [
+        { name: "", desc: "Shorthand's defaults change with each release. Anything you customize stays as you wrote it." },
+        {
+          name: "Note-taking prompt and starting sections",
+          desc: overridden.length === 0
+            ? "Both follow Shorthand's defaults."
+            : `Custom ${overridden.join(" and ")} in use.`,
+          // A button with its own "Edit…" label, not a whole-row `action`: an action definition
+          // renders the entire row as the click target with no button of its own, which would
+          // drop the labelled button docs/settings-copy-style.md rule 6 explicitly keeps.
+          render: (setting) => {
+            setting.addButton((button) => button
+              .setButtonText("Edit…")
+              .onClick(() => new NotePromptModal(this.app, this.plugin, () => this.update()).open()));
+          },
+        },
+      ],
+    };
   }
 
   /**
-   * The model and effort rows for one agent backend, plus the sign-in row that only appears
-   * once the fetched catalog says `signedIn: false`.
+   * The sign-in row plus the model and effort rows for one agent backend, built as a single
+   * `render` item: `getSettingDefinitions()` runs on every render and once more when the tab is
+   * registered for search indexing, and the catalog fetch spawns a subprocess costing
+   * ~0.6-2.6s (see `CATALOG_TIMEOUT_MS`'s doc comment in core) — it must stay behind `render`,
+   * which Obsidian only invokes for a row it is actually displaying, never for search indexing
+   * and never for a backend hidden by `visible` below. Paying that cost for a backend the user
+   * has not selected would be wasted work on every tab open.
    *
-   * The catalog is fetched lazily, here, rather than in `display()` — it spawns a subprocess
-   * and costs ~0.6-2.6s (see `CATALOG_TIMEOUT_MS`'s doc comment in core), so paying that cost
-   * for a backend the user has not selected would be wasted work on every tab open. The
-   * `isCurrentDisplay` guard follows the same pattern `displayLlmProfileControls` uses: the tab
-   * can be closed, or the backend switched, before the fetch resolves, and a resolved fetch
-   * must not write into a `Setting` row `display()` has already discarded.
+   * `disposed` replaces the old `#displayGeneration` counter. Obsidian calls a `render`
+   * callback's returned cleanup function before tearing the row down — backend switched away,
+   * or the tab closed — which is the same "the fetch resolved into a row that is already gone"
+   * window the counter used to guard.
    */
-  private displayAgentCatalog(
-    containerEl: HTMLElement,
-    displayGeneration: number,
-    backend: "claude" | "codex",
-  ): void {
-    const isCurrentDisplay = (): boolean => this.#displayGeneration === displayGeneration;
+  private agentCatalogItem(backend: "claude" | "codex"): SettingDefinitionItem<SettingsKey> {
     const backendLabel: AgentBackendLabel = backend === "claude" ? "Claude" : "Codex";
     const loginCommand = backend === "claude" ? "claude login" : "codex login";
     const modelKey = backend === "claude" ? "claudeModel" : "codexModel";
     const effortKey = backend === "claude" ? "claudeEffort" : "codexEffort";
-    let catalog: AgentCatalog | undefined;
-
-    // Reserved here, in the same position the old unconditional "Codex sign-in" row held, and
-    // hidden until the fetch resolves and says nobody is signed in — a hard fetch failure gets
-    // its own message on the rows below instead, per catalog.ts's AgentCatalog.signedIn doc:
-    // neither backend fails merely because nobody is signed in, so this is not the row a
-    // failed fetch uses.
-    const signInSetting = new Setting(containerEl)
-      .setName(`${backendLabel} sign-in`)
-      .setDesc(createFragment((desc) => {
+    const ownsBackend: EnhancementBackend = backend === "claude" ? "claude-agent-sdk" : "codex";
+    return {
+      // Reserved here, in the same position the old unconditional "Codex sign-in" row held, and
+      // hidden until the fetch resolves and says nobody is signed in — a hard fetch failure gets
+      // its own message on the rows below instead, per catalog.ts's AgentCatalog.signedIn doc:
+      // neither backend fails merely because nobody is signed in, so this is not the row a
+      // failed fetch uses.
+      name: `${backendLabel} sign-in`,
+      desc: createFragment((desc) => {
         desc.appendText("Sign in with ");
         desc.createEl("code", { text: loginCommand });
         desc.appendText(" in a terminal first. Shorthand uses that sign-in and cannot start it for you.");
-      }));
-    signInSetting.settingEl.hide();
+      }),
+      // Each backend names itself rather than sharing an else — see basicDefinitions().
+      visible: () => this.plugin.settings.backend === ownsBackend,
+      render: (signInSetting, group) => {
+        let disposed = false;
+        signInSetting.settingEl.hide();
 
-    let modelDropdown!: DropdownComponent;
-    const modelRow = new Setting(containerEl).setName(`${backendLabel} model`).setDesc(catalogLoadingDescription());
-    modelRow.addDropdown((dropdown) => {
-      modelDropdown = dropdown
-        .addOption("", "Provider default")
-        .setValue(this.plugin.settings[modelKey]);
-      dropdown.onChange(async (value) => {
-        // Preserve-and-flag, not clear-and-reset: whether `value`'s model still accepts the
-        // stored effort is exactly what `decideEffortRow` below already works out from
-        // `this.plugin.settings[effortKey]`, so the effort is left untouched here. A model
-        // switch that invalidates it does not lose it — the next render shows it selected,
-        // disabled, and described as unavailable, the same presentation `decideModelRow` uses
-        // for a stale model id, which is what forces a visible re-pick instead of a silent
-        // substitution.
-        await this.plugin.saveSettings({ ...this.plugin.settings, [modelKey]: value });
-        if (catalog !== undefined) renderEffortOptions(catalog);
-      });
-    });
-    modelRow.setDisabled(true);
+        let catalog: AgentCatalog | undefined;
+        let modelDropdown!: DropdownComponent;
+        let modelRow!: Setting;
+        group.addSetting((row) => {
+          modelRow = row.setName(`${backendLabel} model`).setDesc(catalogLoadingDescription());
+          modelRow.addDropdown((dropdown) => {
+            modelDropdown = dropdown
+              .addOption("", "Provider default")
+              .setValue(this.plugin.settings[modelKey]);
+            dropdown.onChange(async (value) => {
+              // Preserve-and-flag, not clear-and-reset: whether `value`'s model still accepts
+              // the stored effort is exactly what `decideEffortRow` below already works out
+              // from `this.plugin.settings[effortKey]`, so the effort is left untouched here. A
+              // model switch that invalidates it does not lose it — the next render shows it
+              // selected, disabled, and described as unavailable, the same presentation
+              // `decideModelRow` uses for a stale model id, which is what forces a visible
+              // re-pick instead of a silent substitution.
+              await this.plugin.saveSettings({ ...this.plugin.settings, [modelKey]: value });
+              if (catalog !== undefined) renderEffortOptions(catalog);
+            });
+          });
+          modelRow.setDisabled(true);
+        });
 
-    let effortDropdown!: DropdownComponent;
-    const effortRow = new Setting(containerEl).setName(`${backendLabel} effort`).setDesc(catalogLoadingDescription());
-    effortRow.addDropdown((dropdown) => {
-      effortDropdown = dropdown.addOption("", "Provider default");
-      dropdown.onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, [effortKey]: value }));
-    });
-    effortRow.setDisabled(true);
+        let effortDropdown!: DropdownComponent;
+        let effortRow!: Setting;
+        group.addSetting((row) => {
+          effortRow = row.setName(`${backendLabel} effort`).setDesc(catalogLoadingDescription());
+          effortRow.addDropdown((dropdown) => {
+            effortDropdown = dropdown.addOption("", "Provider default");
+            dropdown.onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, [effortKey]: value }));
+          });
+          effortRow.setDisabled(true);
+        });
 
-    const renderEffortOptions = (loadedCatalog: AgentCatalog): void => {
-      const decision = decideEffortRow(loadedCatalog, this.plugin.settings[modelKey], this.plugin.settings[effortKey]);
-      applyCatalogDecision(effortDropdown, effortRow, decision);
+        const renderEffortOptions = (loadedCatalog: AgentCatalog): void => {
+          const decision = decideEffortRow(loadedCatalog, this.plugin.settings[modelKey], this.plugin.settings[effortKey]);
+          applyCatalogDecision(effortDropdown, effortRow, decision);
+        };
+
+        const executableOverride = this.plugin.settings[backend === "claude" ? "claudeExecutable" : "codexExecutable"];
+        const fetchCatalog = backend === "claude"
+          ? listClaudeModels(executableOverride.length === 0 ? {} : { executableOverride })
+          : listCodexModels(executableOverride.length === 0 ? {} : { codexPathOverride: executableOverride });
+
+        void fetchCatalog.then((loadedCatalog) => {
+          if (disposed) return;
+          catalog = loadedCatalog;
+          signInSetting.settingEl.toggle(!loadedCatalog.signedIn);
+
+          applyCatalogDecision(modelDropdown, modelRow, decideModelRow(loadedCatalog, this.plugin.settings[modelKey]));
+          renderEffortOptions(loadedCatalog);
+        }).catch((error: unknown) => {
+          if (disposed) return;
+          const message = catalogFetchFailedDescription(
+            backendLabel,
+            error instanceof AgentCatalogError ? error.reason : "protocol",
+          );
+          modelRow.setDesc(message).setDisabled(true);
+          effortRow.setDesc(message).setDisabled(true);
+        });
+
+        return () => { disposed = true; };
+      },
     };
-
-    const executableOverride = this.plugin.settings[backend === "claude" ? "claudeExecutable" : "codexExecutable"];
-    const fetchCatalog = backend === "claude"
-      ? listClaudeModels(executableOverride.length === 0 ? {} : { executableOverride })
-      : listCodexModels(executableOverride.length === 0 ? {} : { codexPathOverride: executableOverride });
-
-    void fetchCatalog.then((loadedCatalog) => {
-      if (!isCurrentDisplay()) return;
-      catalog = loadedCatalog;
-      signInSetting.settingEl.toggle(!loadedCatalog.signedIn);
-
-      applyCatalogDecision(modelDropdown, modelRow, decideModelRow(loadedCatalog, this.plugin.settings[modelKey]));
-      renderEffortOptions(loadedCatalog);
-    }).catch((error: unknown) => {
-      if (!isCurrentDisplay()) return;
-      const message = catalogFetchFailedDescription(
-        backendLabel,
-        error instanceof AgentCatalogError ? error.reason : "protocol",
-      );
-      modelRow.setDesc(message).setDisabled(true);
-      effortRow.setDesc(message).setDisabled(true);
-    });
   }
 
   /**
-   * Always visible, at the bottom, no expander. This settings tab still uses the imperative
-   * API throughout. The 1.13.7 marketplace floor makes the declarative API available, but
-   * converting only this section would split one surface across two ownership models. Keep
-   * Advanced visible until the whole tab and its conditional rows can migrate together.
+   * Always visible, at the bottom, no expander — same as before the migration, just declarative
+   * now: a static `SettingDefinitionGroup` with its own conditional rows, rather than a section
+   * that only made sense as the tail end of one imperative `display()` pass.
    */
-  private displayAdvanced(containerEl: HTMLElement): void {
-    new Setting(containerEl).setName("Advanced").setHeading();
-    textSetting(containerEl, this.plugin, "Shorthand executable", shorthandExecutableDescription, "shorthandExecutable");
-    // Both revealed by the backend dropdown in displayBasic, and each naming its own backend
-    // rather than sharing an else, for the reason recorded there. Both are optional — blank
-    // means automatic detection, of `claude` at its install location and of `codex` on PATH —
-    // which is why they can sit this far from the dropdown that reveals them.
-    if (this.plugin.settings.backend === "claude-agent-sdk") {
-      textSetting(containerEl, this.plugin, "Claude executable", claudeExecutableDescription, "claudeExecutable");
-    }
-    if (this.plugin.settings.backend === "codex") {
-      textSetting(containerEl, this.plugin, "Codex executable", codexExecutableDescription, "codexExecutable");
-    }
-    if (this.plugin.settings.backend === "claude-agent-sdk" || this.plugin.settings.backend === "codex") {
-      new Setting(containerEl)
-        .setName("Agent session history")
-        .setDesc("Keeps local Claude or Codex transcripts after a capture or one-off enhancement ends.")
-        .addToggle((toggle) => toggle
-          .setValue(this.plugin.settings.retainAgentSessionHistory)
-          .onChange(async (value) => this.plugin.saveSettings({
-            ...this.plugin.settings,
-            retainAgentSessionHistory: value,
-          })));
-    }
-    numberSetting(containerEl, this.plugin, "Minimum new characters", newCharacterThresholdDescription, "minNewChars");
-    intervalSetting(containerEl, this.plugin);
-    new Setting(containerEl)
-      .setName("Live enhancement")
-      .setDesc("The note is rewritten while the meeting runs, instead of only when you stop or run Enhance now.")
-      .addToggle((toggle) => toggle
-        .setValue(this.plugin.settings.enableLiveEnhancement)
-        .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, enableLiveEnhancement: value })));
-    new Setting(containerEl)
-      .setName("Follow Shorthand's recordings")
-      .setDesc(createFragment((desc) => {
-        desc.appendText(
-          "Starting a recording with Shorthand's own hotkey also starts a capture on the note you have open — see ",
-        );
-        desc.createEl("a", {
-          text: "Following Shorthand's recordings",
-          href: "https://github.com/mshish/shorthand-obsidian-plugin#following-shorthands-recordings",
-        });
-        desc.appendText(".");
-      }))
-      .addToggle((toggle) => toggle
-        .setValue(this.plugin.settings.followAppRecording)
-        .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, followAppRecording: value })));
-    new Setting(containerEl)
-      .setName("Debug logging")
-      .setDesc("Logs capture and enhancement activity to the developer console. Turn this on if a capture does not start or stop as expected, or a note stops updating during capture.")
-      .addToggle((toggle) => toggle
-        .setValue(this.plugin.settings.debugLogging)
-        .onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, debugLogging: value })));
+  private advancedGroup(): SettingDefinitionItem<SettingsKey> {
+    return {
+      type: "group",
+      heading: "Advanced",
+      items: [
+        textControlItem("Shorthand executable", shorthandExecutableDescription, "shorthandExecutable", this.plugin.settings.shorthandExecutable),
+        // Both revealed by the backend dropdown in basicDefinitions(), and each naming its own
+        // backend rather than sharing an else, for the reason recorded there. Both are optional
+        // — blank means automatic detection, of `claude` at its install location and of `codex`
+        // on PATH — which is why they can sit this far from the dropdown that reveals them.
+        {
+          ...textControlItem("Claude executable", claudeExecutableDescription, "claudeExecutable", this.plugin.settings.claudeExecutable),
+          visible: () => this.plugin.settings.backend === "claude-agent-sdk",
+        },
+        {
+          ...textControlItem("Codex executable", codexExecutableDescription, "codexExecutable", this.plugin.settings.codexExecutable),
+          visible: () => this.plugin.settings.backend === "codex",
+        },
+        {
+          name: "Agent session history",
+          desc: "Keeps local Claude or Codex transcripts after a capture or one-off enhancement ends.",
+          control: { type: "toggle", key: "retainAgentSessionHistory" },
+          visible: () => this.plugin.settings.backend === "claude-agent-sdk" || this.plugin.settings.backend === "codex",
+        },
+        numberControlItem("Minimum new characters", newCharacterThresholdDescription, "minNewChars", this.plugin.settings.minNewChars),
+        {
+          name: "Minimum interval (seconds)",
+          desc: passIntervalDescription(this.plugin.settings.minIntervalMs / 1_000),
+          control: {
+            type: "number",
+            key: "minIntervalSeconds",
+            min: 10,
+            step: 1,
+            defaultValue: DEFAULT_PLUGIN_SETTINGS.minIntervalMs / 1_000,
+          },
+        },
+        {
+          name: "Live enhancement",
+          desc: "The note is rewritten while the meeting runs, instead of only when you stop or run Enhance now.",
+          control: { type: "toggle", key: "enableLiveEnhancement" },
+        },
+        {
+          name: "Follow Shorthand's recordings",
+          desc: createFragment((desc) => {
+            desc.appendText(
+              "Starting a recording with Shorthand's own hotkey also starts a capture on the note you have open — see ",
+            );
+            desc.createEl("a", {
+              text: "Following Shorthand's recordings",
+              href: "https://github.com/mshish/shorthand-obsidian-plugin#following-shorthands-recordings",
+            });
+            desc.appendText(".");
+          }),
+          control: { type: "toggle", key: "followAppRecording" },
+        },
+        {
+          name: "Debug logging",
+          desc: "Logs capture and enhancement activity to the developer console. Turn this on if a capture does not start or stop as expected, or a note stops updating during capture.",
+          control: { type: "toggle", key: "debugLogging" },
+        },
+      ],
+    };
   }
 
-  private displayLlmProfileControls(
-    containerEl: HTMLElement,
-    displayGeneration: number,
-  ): void {
-    const credentialsPath = llmCredentialsPath();
-    const credentialsFileExisted = existsSync(credentialsPath);
-    let draft: LlmProfileDraft = EMPTY_LLM_PROFILE_DRAFT;
-    let storedKey = "";
-    let ready = false;
-    let commitQueue: LlmProfileCommitQueue | undefined;
-    let clearKeyPointerDown = false;
+  /**
+   * "LLM provider profile"'s heading and its introductory sentence are two separate items for
+   * the same reason `noteWritingGroup()` splits them — `SettingDefinitionGroup` has no `desc`.
+   *
+   * Everything else here stays one `render` item, imperative throughout, for the reasons
+   * `agentCatalogItem` gives: a credential-file read gated behind `render` so it never runs
+   * during search indexing or for a backend the user has not chosen, and `disposed` (set by the
+   * returned cleanup function) standing in for the old `#displayGeneration` guard so a read or
+   * write that resolves after this row is torn down cannot write into it.
+   */
+  private llmProfileGroup(): SettingDefinitionItem<SettingsKey> {
+    return {
+      type: "group",
+      heading: "LLM provider profile",
+      visible: () => this.plugin.settings.backend === "llm",
+      items: [
+        { name: "", desc: "The API key is stored outside your vault, so it never syncs." },
+        {
+          name: "Profile status",
+          desc: "Loading the provider profile…",
+          render: (statusSetting, group) => {
+            let disposed = false;
+            const credentialsPath = llmCredentialsPath();
+            const credentialsFileExisted = existsSync(credentialsPath);
+            let draft: LlmProfileDraft = EMPTY_LLM_PROFILE_DRAFT;
+            let storedKey = "";
+            let ready = false;
+            let commitQueue: LlmProfileCommitQueue | undefined;
+            let clearKeyPointerDown = false;
 
-    new Setting(containerEl)
-      .setName("LLM provider profile")
-      .setHeading()
-      .setDesc("The API key is stored outside your vault, so it never syncs.");
+            let startOverButton: ButtonComponent;
+            statusSetting.addButton((button) => {
+              startOverButton = button
+                .setButtonText("Discard file")
+                .setDestructive()
+                .onClick(() => { void startOver(); });
+              button.buttonEl.hide();
+            });
 
-    let startOverButton: ButtonComponent;
-    const statusSetting = new Setting(containerEl)
-      .setName("Profile status")
-      .setDesc("Loading the provider profile…")
-      .addButton((button) => {
-        startOverButton = button
-          .setButtonText("Discard file")
-          .setWarning()
-          .onClick(() => { void startOver(); });
-        button.buttonEl.hide();
-      });
+            let providerInput: DropdownComponent;
+            let providerSetting!: Setting;
+            group.addSetting((row) => {
+              providerSetting = row.setName("Provider");
+              providerSetting.addDropdown((dropdown) => {
+                providerInput = dropdown
+                  .addOption("", "No provider chosen")
+                  .addOption("openai", "OpenAI")
+                  .addOption("anthropic", "Anthropic")
+                  .addOption("openai-compatible", "OpenAI-compatible")
+                  .setDisabled(true)
+                  .onChange((value) => {
+                    if (value !== "" && value !== "openai" && value !== "anthropic" && value !== "openai-compatible") return;
+                    draft = { ...draft, provider: value };
+                    commitQueue?.acceptEdit(draft);
+                    showDraftStatus();
+                  });
+                dropdown.selectEl.addEventListener("blur", () => { void commitDraft(); });
+              });
+            });
 
-    let providerInput: DropdownComponent;
-    const providerSetting = new Setting(containerEl)
-      .setName("Provider")
-      .addDropdown((dropdown) => {
-        providerInput = dropdown
-          .addOption("", "No provider chosen")
-          .addOption("openai", "OpenAI")
-          .addOption("anthropic", "Anthropic")
-          .addOption("openai-compatible", "OpenAI-compatible")
-          .setDisabled(true)
-          .onChange((value) => {
-            if (value !== "" && value !== "openai" && value !== "anthropic" && value !== "openai-compatible") return;
-            draft = { ...draft, provider: value };
-            commitQueue?.acceptEdit(draft);
-            showDraftStatus();
-          });
-        dropdown.selectEl.addEventListener("blur", () => { void commitDraft(); });
-      });
+            let modelInput: TextComponent;
+            let modelSetting!: Setting;
+            group.addSetting((row) => {
+              modelSetting = row.setName("Model").setDesc("Model IDs are exact strings, not display names.");
+              modelSetting.addText((text) => {
+                modelInput = text.setDisabled(true).onChange((value) => {
+                  draft = { ...draft, model: value };
+                  commitQueue?.acceptEdit(draft);
+                  showDraftStatus();
+                });
+                text.inputEl.addEventListener("blur", () => { void commitDraft(); });
+              });
+            });
 
-    let modelInput: TextComponent;
-    const modelSetting = new Setting(containerEl)
-      .setName("Model")
-      .setDesc("Model IDs are exact strings, not display names.")
-      .addText((text) => {
-        modelInput = text.setDisabled(true).onChange((value) => {
-          draft = { ...draft, model: value };
-          commitQueue?.acceptEdit(draft);
-          showDraftStatus();
-        });
-        text.inputEl.addEventListener("blur", () => { void commitDraft(); });
-      });
+            let baseUrlInput: TextComponent;
+            let baseUrlSetting!: Setting;
+            group.addSetting((row) => {
+              baseUrlSetting = row.setName("Base URL").setDesc(baseUrlDescription(draft.provider));
+              baseUrlSetting.addText((text) => {
+                baseUrlInput = text.setDisabled(true).onChange((value) => {
+                  draft = { ...draft, base_url: value };
+                  commitQueue?.acceptEdit(draft);
+                  showDraftStatus();
+                });
+                text.inputEl.addEventListener("blur", () => { void commitDraft(); });
+              });
+            });
 
-    let baseUrlInput: TextComponent;
-    const baseUrlSetting = new Setting(containerEl)
-      .setName("Base URL")
-      .setDesc(baseUrlDescription(draft.provider))
-      .addText((text) => {
-        baseUrlInput = text.setDisabled(true).onChange((value) => {
-          draft = { ...draft, base_url: value };
-          commitQueue?.acceptEdit(draft);
-          showDraftStatus();
-        });
-        text.inputEl.addEventListener("blur", () => { void commitDraft(); });
-      });
+            let apiKeyInput: TextComponent;
+            let clearKeyButton: ButtonComponent;
+            let apiKeySetting!: Setting;
+            group.addSetting((row) => {
+              apiKeySetting = row.setName("API key");
+              apiKeySetting
+                .addText((text) => {
+                  apiKeyInput = text.setDisabled(true).onChange((value) => {
+                    // The rendered field stays blank for a loaded secret. An empty edit
+                    // therefore restores the carried key; otherwise deleting masked text would
+                    // clear it by accident.
+                    draft = { ...draft, api_key: value.length === 0 ? storedKey : value };
+                    commitQueue?.acceptEdit(draft);
+                    showDraftStatus();
+                  });
+                  text.inputEl.type = "password";
+                  text.inputEl.addEventListener("blur", () => {
+                    if (!clearKeyPointerDown) void commitDraft();
+                  });
+                })
+                .addButton((button) => {
+                  clearKeyButton = button
+                    .setButtonText("Clear key")
+                    .setDisabled(true)
+                    .onClick(() => {
+                      draft = { ...draft, api_key: "" };
+                      apiKeyInput.setValue("");
+                      commitQueue?.acceptEdit(draft);
+                      clearKeyPointerDown = false;
+                      showDraftStatus();
+                      void commitDraft();
+                    });
+                  button.buttonEl.addEventListener("pointerdown", () => {
+                    // Pointer-down precedes the password field's blur. Suppressing that blur
+                    // prevents Clear key from first writing a partially typed rotation and then
+                    // writing a clear.
+                    clearKeyPointerDown = true;
+                    window.setTimeout(() => { clearKeyPointerDown = false; }, 0);
+                  });
+                });
+            });
 
-    let apiKeyInput: TextComponent;
-    let clearKeyButton: ButtonComponent;
-    const apiKeySetting = new Setting(containerEl)
-      .setName("API key")
-      .addText((text) => {
-        apiKeyInput = text.setDisabled(true).onChange((value) => {
-          // The rendered field stays blank for a loaded secret. An empty edit therefore
-          // restores the carried key; otherwise deleting masked text would clear it by accident.
-          draft = { ...draft, api_key: value.length === 0 ? storedKey : value };
-          commitQueue?.acceptEdit(draft);
-          showDraftStatus();
-        });
-        text.inputEl.type = "password";
-        text.inputEl.addEventListener("blur", () => {
-          if (!clearKeyPointerDown) void commitDraft();
-        });
-      })
-      .addButton((button) => {
-        clearKeyButton = button
-          .setButtonText("Clear key")
-          .setDisabled(true)
-          .onClick(() => {
-            draft = { ...draft, api_key: "" };
-            apiKeyInput.setValue("");
-            commitQueue?.acceptEdit(draft);
-            clearKeyPointerDown = false;
-            showDraftStatus();
-            void commitDraft();
-          });
-        button.buttonEl.addEventListener("pointerdown", () => {
-          // Pointer-down precedes the password field's blur. Suppressing that blur prevents
-          // Clear key from first writing a partially typed rotation and then writing a clear.
-          clearKeyPointerDown = true;
-          window.setTimeout(() => { clearKeyPointerDown = false; }, 0);
-        });
-      });
+            const setFieldsDisabled = (disabled: boolean): void => {
+              providerSetting.setDisabled(disabled);
+              modelSetting.setDisabled(disabled);
+              baseUrlSetting.setDisabled(disabled);
+              apiKeySetting.setDisabled(disabled);
+              clearKeyButton.setDisabled(disabled);
+            };
 
-    const isCurrentDisplay = (): boolean => this.#displayGeneration === displayGeneration;
+            const setKeyDescription = (keyStatus: "known" | "unknown" = "known"): void => {
+              const state: StoredKeyState = keyStatus === "unknown"
+                ? "unknown"
+                : storedKey.length > 0 ? "stored" : "absent";
+              apiKeySetting.setDesc(apiKeyDescription(state));
+            };
 
-    const setFieldsDisabled = (disabled: boolean): void => {
-      providerSetting.setDisabled(disabled);
-      modelSetting.setDisabled(disabled);
-      baseUrlSetting.setDisabled(disabled);
-      apiKeySetting.setDisabled(disabled);
-      clearKeyButton.setDisabled(disabled);
-    };
+            const showDraftStatus = (): void => {
+              if (!ready) return;
+              baseUrlSetting.setDesc(baseUrlDescription(draft.provider));
+              const missing = missingLlmProfileFields(draft);
+              statusSetting.setDesc(missing.length > 0
+                ? `Not saved yet. Still needed: ${missing.join(", ")}.`
+                : "Saved when you leave the field you are editing.");
+            };
 
-    const setKeyDescription = (keyStatus: "known" | "unknown" = "known"): void => {
-      const state: StoredKeyState = keyStatus === "unknown"
-        ? "unknown"
-        : storedKey.length > 0 ? "stored" : "absent";
-      apiKeySetting.setDesc(apiKeyDescription(state));
-    };
+            // This deliberately introduces commit-on-blur. The credentials file is an external,
+            // whole-profile document validated as a unit: keystroke writes would emit profiles
+            // core rejects wholesale and would put an API key on disk once for every character
+            // typed.
+            const commitDraft = async (): Promise<void> => {
+              if (!ready) return;
+              await commitQueue?.commit();
+            };
 
-    const showDraftStatus = (): void => {
-      if (!ready) return;
-      baseUrlSetting.setDesc(baseUrlDescription(draft.provider));
-      const missing = missingLlmProfileFields(draft);
-      statusSetting.setDesc(missing.length > 0
-        ? `Not saved yet. Still needed: ${missing.join(", ")}.`
-        : "Saved when you leave the field you are editing.");
-    };
+            const startOver = async (): Promise<void> => {
+              startOverButton.setDisabled(true);
+              statusSetting.setDesc(`Discarding the malformed profile at ${credentialsPath}…`);
+              try {
+                await deleteLlmCredentials();
+                if (!disposed) this.update();
+              } catch (error) {
+                if (disposed) return;
+                statusSetting.setDesc(`The profile could not be discarded: ${errorMessage(error)}`);
+                startOverButton.setDisabled(false);
+              }
+            };
 
-    // This deliberately introduces commit-on-blur. The credentials file is an external,
-    // whole-profile document validated as a unit: keystroke writes would emit profiles core
-    // rejects wholesale and would put an API key on disk once for every character typed.
-    const commitDraft = async (): Promise<void> => {
-      if (!ready) return;
-      await commitQueue?.commit();
-    };
+            const renderMalformed = (message: string): void => {
+              ready = false;
+              setFieldsDisabled(true);
+              statusSetting.setDesc(`${message} Discard file deletes the existing profile, including any key that could still be recovered from it by hand.`);
+              startOverButton.buttonEl.show();
+              startOverButton.setDisabled(false);
+              setKeyDescription("unknown");
+            };
 
-    const startOver = async (): Promise<void> => {
-      startOverButton.setDisabled(true);
-      statusSetting.setDesc(`Discarding the malformed profile at ${credentialsPath}…`);
-      try {
-        await deleteLlmCredentials();
-        if (isCurrentDisplay()) this.display();
-      } catch (error) {
-        if (!isCurrentDisplay()) return;
-        statusSetting.setDesc(`The profile could not be discarded: ${errorMessage(error)}`);
-        startOverButton.setDisabled(false);
-      }
-    };
+            void readLlmCredentials(credentialsPath).then((result) => {
+              if (disposed) return;
+              const state = resolveLlmProfileReadState(result, credentialsFileExisted);
+              if (state.status === "malformed") {
+                renderMalformed(state.message);
+                return;
+              }
 
-    const renderMalformed = (message: string): void => {
-      ready = false;
-      setFieldsDisabled(true);
-      statusSetting.setDesc(`${message} Discard file deletes the existing profile, including any key that could still be recovered from it by hand.`);
-      startOverButton.buttonEl.show();
-      startOverButton.setDisabled(false);
-      setKeyDescription("unknown");
-    };
+              draft = state.draft;
+              storedKey = state.hasStoredKey ? draft.api_key : "";
+              commitQueue = new LlmProfileCommitQueue(draft, {
+                write: writeLlmCredentials,
+                onInvalid: (missing) => {
+                  // Same wording as showDraftStatus: one condition must not have two sentences.
+                  statusSetting.setDesc(`Not saved yet. Still needed: ${missing.join(", ")}.`);
+                },
+                onSaving: () => {
+                  statusSetting.setDesc(`Saving to ${credentialsPath}…`);
+                },
+                onSaved: (credentials, isLatestRevision) => {
+                  if (disposed) return;
+                  storedKey = credentials.api_key ?? "";
+                  if (isLatestRevision) apiKeyInput.setValue("");
+                  setKeyDescription();
+                  if (isLatestRevision) {
+                    statusSetting.setDesc(`Profile saved to ${credentialsPath}.`);
+                  } else {
+                    showDraftStatus();
+                  }
+                },
+                onSaveFailed: (error) => {
+                  if (disposed) return;
+                  statusSetting.setDesc(`The profile could not be saved: ${errorMessage(error)}`);
+                },
+              });
+              providerInput.setValue(draft.provider);
+              modelInput.setValue(draft.model);
+              baseUrlInput.setValue(draft.base_url);
+              apiKeyInput.setValue("");
+              ready = true;
+              // setValue() does not fire onChange, so nothing above recomputed the
+              // provider-dependent copy. Without this, a loaded openai-compatible profile shows
+              // Base URL as optional.
+              showDraftStatus();
+              setFieldsDisabled(false);
+              setKeyDescription();
+              statusSetting.setDesc(state.status === "missing"
+                ? "The profile is written once every required field has a value."
+                : `Profile loaded from ${credentialsPath}.`);
+            }).catch((error: unknown) => {
+              if (!disposed) renderMalformed(`The provider profile could not be loaded: ${errorMessage(error)}`);
+            });
 
-    void readLlmCredentials(credentialsPath).then((result) => {
-      if (!isCurrentDisplay()) return;
-      const state = resolveLlmProfileReadState(result, credentialsFileExisted);
-      if (state.status === "malformed") {
-        renderMalformed(state.message);
-        return;
-      }
-
-      draft = state.draft;
-      storedKey = state.hasStoredKey ? draft.api_key : "";
-      commitQueue = new LlmProfileCommitQueue(draft, {
-        write: writeLlmCredentials,
-        onInvalid: (missing) => {
-          // Same wording as showDraftStatus: one condition must not have two sentences.
-          statusSetting.setDesc(`Not saved yet. Still needed: ${missing.join(", ")}.`);
+            return () => { disposed = true; };
+          },
         },
-        onSaving: () => {
-          statusSetting.setDesc(`Saving to ${credentialsPath}…`);
-        },
-        onSaved: (credentials, isLatestRevision) => {
-          if (!isCurrentDisplay()) return;
-          storedKey = credentials.api_key ?? "";
-          if (isLatestRevision) apiKeyInput.setValue("");
-          setKeyDescription();
-          if (isLatestRevision) {
-            statusSetting.setDesc(`Profile saved to ${credentialsPath}.`);
-          } else {
-            showDraftStatus();
-          }
-        },
-        onSaveFailed: (error) => {
-          if (!isCurrentDisplay()) return;
-          statusSetting.setDesc(`The profile could not be saved: ${errorMessage(error)}`);
-        },
-      });
-      providerInput.setValue(draft.provider);
-      modelInput.setValue(draft.model);
-      baseUrlInput.setValue(draft.base_url);
-      apiKeyInput.setValue("");
-      ready = true;
-      // setValue() does not fire onChange, so nothing above recomputed the provider-dependent
-      // copy. Without this, a loaded openai-compatible profile shows Base URL as optional.
-      showDraftStatus();
-      setFieldsDisabled(false);
-      setKeyDescription();
-      statusSetting.setDesc(state.status === "missing"
-        ? "The profile is written once every required field has a value."
-        : `Profile loaded from ${credentialsPath}.`);
-    }).catch((error: unknown) => {
-      if (isCurrentDisplay()) renderMalformed(`The provider profile could not be loaded: ${errorMessage(error)}`);
-    });
+      ],
+    };
   }
 }
 
@@ -2295,63 +2392,43 @@ function applyCatalogDecision(dropdown: DropdownComponent, row: Setting, decisio
   row.setDisabled(decision.disabled);
 }
 
-function textSetting(
-  container: HTMLElement,
-  plugin: ShorthandPlugin,
+/**
+ * Keys whose value gates another declarative row's `visible` predicate — revealing or hiding a
+ * row is a DOM-state change `refreshDomState()` re-evaluates cheaply, without the full rebuild
+ * `update()` does. See `ShorthandSettingTab.setControlValue`.
+ */
+const REVEALS_OTHER_ROWS = new Set<string>(["backend", "writeTranscriptNote"]);
+
+/**
+ * Keys whose declarative `desc` is computed from their own current value
+ * (docs/settings-copy-style.md rule 4). `desc` has no reactive form the way `visible`/`disabled`
+ * do, so it goes stale after a commit unless `getSettingDefinitions()` runs again — only
+ * `update()` does that. See `ShorthandSettingTab.setControlValue`.
+ */
+const SELF_DESCRIBING_KEYS = new Set<string>([
+  "shorthandExecutable",
+  "claudeExecutable",
+  "codexExecutable",
+  "sidecarDirectory",
+  "minNewChars",
+]);
+
+function textControlItem(
   name: string,
   describe: (value: string) => string,
   key: "shorthandExecutable" | "claudeExecutable" | "codexExecutable" | "sidecarDirectory",
-): void {
-  const setting = new Setting(container).setName(name).setDesc(describe(plugin.settings[key]));
-  setting.addText((text) => text
-    .setValue(plugin.settings[key])
-    .onChange(async (value) => {
-      await plugin.saveSettings({ ...plugin.settings, [key]: value });
-      // Described from the stored value, never the typed one. normalizePluginSettings is the
-      // trust boundary for data.json and rewrites what it rejects, so a description built
-      // from the raw input would name a folder the plugin is not using.
-      setting.setDesc(describe(plugin.settings[key]));
-    }));
+  value: string,
+): SettingDefinitionControl<SettingsKey> {
+  return { name, desc: describe(value), control: { type: "text", key } };
 }
 
-function numberSetting(
-  container: HTMLElement,
-  plugin: ShorthandPlugin,
+function numberControlItem(
   name: string,
   describe: (value: number) => string,
   key: "minNewChars",
-): void {
-  const setting = new Setting(container).setName(name).setDesc(describe(plugin.settings[key]));
-  setting.addText((text) => {
-    text.inputEl.type = "number";
-    text.setValue(String(plugin.settings[key])).onChange(async (value) => {
-      const parsed = Number(value);
-      // Unchanged: a half-typed or non-numeric field keeps the previous value. The
-      // description keeps the previous value with it, rather than flickering to a default.
-      if (!Number.isFinite(parsed)) return;
-      await plugin.saveSettings({ ...plugin.settings, [key]: parsed });
-      setting.setDesc(describe(plugin.settings[key]));
-    });
-  });
-}
-
-function intervalSetting(container: HTMLElement, plugin: ShorthandPlugin): void {
-  const seconds = plugin.settings.minIntervalMs / 1_000;
-  const setting = new Setting(container)
-    .setName("Minimum interval (seconds)")
-    .setDesc(passIntervalDescription(seconds));
-  setting.addText((text) => {
-    text.inputEl.type = "number";
-    text.inputEl.min = "10";
-    text.inputEl.step = "1";
-    text.setValue(String(seconds)).onChange(async (value) => {
-      const parsed = Number(value);
-      if (!Number.isFinite(parsed)) return;
-      await plugin.saveSettings({ ...plugin.settings, minIntervalMs: parsed * 1_000 });
-      setting.setDesc(passIntervalDescription(plugin.settings.minIntervalMs / 1_000));
-      text.setValue(String(plugin.settings.minIntervalMs / 1_000));
-    });
-  });
+  value: number,
+): SettingDefinitionControl<SettingsKey> {
+  return { name, desc: describe(value), control: { type: "number", key, defaultValue: DEFAULT_PLUGIN_SETTINGS[key] } };
 }
 
 /**

@@ -116,15 +116,24 @@ falls back; nothing throws.
 `manifest.json` declares `minAppVersion: 1.13.7` and the repo builds against
 `obsidian: 1.13.1`, the newest published typings for that app line. The
 declarative settings API is available at this floor and is the default for new
-settings surfaces. The existing settings tab
-predates it and remains wholly imperative until a dedicated migration can move
-its conditional rows, validation and focus behavior together; do not mix the
-two ownership models piecemeal.
+settings surfaces. `ShorthandSettingTab` uses it: `getSettingDefinitions()`
+builds the tab from a static list of `control`/`group` definitions with
+`visible` predicates for the conditional rows, and `getControlValue`/
+`setControlValue` route every read and write through
+`ShorthandPlugin.saveSettings()`. `display()` is gone from the tab entirely —
+1.13.7 is above the 1.13.0 floor `obsidianmd/settings-tab/require-display`
+checks, so no fallback implementation is needed. Two sections stay imperative
+inside a `render` callback — the agent catalog fetch and the LLM credential
+read — because both spawn a subprocess or touch the filesystem, which
+`getSettingDefinitions()` itself must never do: it runs on every render and
+once more when the tab is registered, for search indexing.
 
-For the imperative `display()` API this plugin uses, Obsidian's guidance is that
-multi-line input belongs in a form modal rather than a settings-tab textarea.
-`Setting.addTextArea` exists but is the undocumented path. `NotePromptModal`
-follows the modal pattern; `ScaffoldModal` is the other local example.
+Obsidian's guidance is that multi-line input belongs in a form modal rather
+than a settings-tab textarea. The declarative API's own `SettingTextAreaControl`
+(`control: { type: 'textarea' }`) does not change that — it is a first-class,
+one-line-to-reach-for option now, which is a reason to keep steering it into a
+modal, not a reason it no longer applies. `NotePromptModal` follows the modal
+pattern; `ScaffoldModal` is the other local example.
 
 Prefer Obsidian's own components over hand-rolled DOM: `Setting`, `Modal`,
 `setHeading()`. They carry the focus behaviour, ARIA attributes and mobile
