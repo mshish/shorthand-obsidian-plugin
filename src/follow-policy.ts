@@ -1,8 +1,15 @@
-import { BEGIN_MODES, type BeginMode, type ControlSignal } from "shorthand-core";
+import { BEGIN_MODES, type BeginMode } from "shorthand-core";
 import { canStartCapture, type PluginUiState } from "./state.js";
 
+/**
+ * The two modes this plugin can drive a capture with. `BeginMode` also names `dictation`,
+ * which is never a follow or a manual-start target — see `decideFollow`'s `default` arm —
+ * so this is its own, narrower type rather than a re-export.
+ */
+export type CaptureMode = "meeting" | "assisted-notes";
+
 export type FollowDecision =
-  | Readonly<{ kind: "attach"; signal: Extract<ControlSignal, "toggle-transcription" | "toggle-assisted-notes"> }>
+  | Readonly<{ kind: "attach"; mode: CaptureMode }>
   | Readonly<{ kind: "ignore" }>
   /** The connected Shorthand predates `begin.mode`, so nothing can be decided. Tell the user once. */
   | Readonly<{ kind: "needs-newer-app" }>;
@@ -53,9 +60,9 @@ export function decideFollow(input: FollowInput): FollowDecision {
   if (!appAdvertisesMode) return { kind: "needs-newer-app" };
   switch (beginMode(mode)) {
     case "meeting":
-      return { kind: "attach", signal: "toggle-transcription" };
+      return { kind: "attach", mode: "meeting" };
     case "assisted-notes":
-      return { kind: "attach", signal: "toggle-assisted-notes" };
+      return { kind: "attach", mode: "assisted-notes" };
     default:
       // `dictation`, absent, or anything the wire produced that this build does not know.
       return IGNORE;
