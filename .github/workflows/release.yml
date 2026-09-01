@@ -38,11 +38,16 @@ jobs:
       # version against the installed one for string equality. A tag that doesn't match
       # manifest.json exactly (including no `v` prefix) ships a release nobody's BRAT
       # install recognises as an update, so fail loudly before doing any of the real work.
+      # The tag reaches the script through `env:`, never as a `${{ }}` expression inside it:
+      # an expression is spliced in as text before the shell parses the line, so a tag name
+      # carrying shell metacharacters would run as code here, holding `contents: write`.
       - name: Check tag matches manifest version
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
           manifest_version=$(node -p "require('./manifest.json').version")
-          if [ "${{ github.ref_name }}" != "$manifest_version" ]; then
-            echo "::error::Tag '${{ github.ref_name }}' does not match manifest.json version '$manifest_version' (BRAT requires an exact match, no 'v' prefix)."
+          if [ "$TAG" != "$manifest_version" ]; then
+            echo "::error::Tag '$TAG' does not match manifest.json version '$manifest_version' (BRAT requires an exact match, no 'v' prefix)."
             exit 1
           fi
 
@@ -65,9 +70,10 @@ jobs:
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
         run: |
-          gh release create "${{ github.ref_name }}" \
+          gh release create "$TAG" \
             --draft \
-            --title "${{ github.ref_name }}" \
+            --title "$TAG" \
             --generate-notes \
             main.js manifest.json styles.css
