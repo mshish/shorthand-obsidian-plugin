@@ -1,0 +1,73 @@
+# Builds and drafts a GitHub Release when a tag is pushed. BRAT installs a plugin from
+# a repo's latest Release *assets* (manifest.json, main.js, styles.css) — it does not
+# read the tree or the tag itself, and main.js is gitignored here, so without this
+# workflow a tag is invisible to BRAT users no matter how far `main` has moved.
+name: Release
+
+on:
+  push:
+    tags: ["*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Same toolchain as ci.yml: npm owns the lockfile, `bun test` runs the suite.
+      - name: Use Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Use Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      # `npm ci`, not `npm install`: it fails when package-lock.json names a different
+      # shorthand-core commit than package.json's tag, which is the disagreement a bump
+      # can leave behind.
+      - name: Install dependencies
+        run: npm ci
+
+      # BRAT and Obsidian's community-plugin tooling both compare the release manifest's
+      # version against the installed one for string equality. A tag that doesn't match
+      # manifest.json exactly (including no `v` prefix) ships a release nobody's BRAT
+      # install recognises as an update, so fail loudly before doing any of the real work.
+      - name: Check tag matches manifest version
+        run: |
+          manifest_version=$(node -p "require('./manifest.json').version")
+          if [ "${{ github.ref_name }}" != "$manifest_version" ]; then
+            echo "::error::Tag '${{ github.ref_name }}' does not match manifest.json version '$manifest_version' (BRAT requires an exact match, no 'v' prefix)."
+            exit 1
+          fi
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      # Build before test, and never reorder these. main.js is gitignored, so a clean
+      # checkout has no bundle at all, and test/plugin-bundle.test.ts throws rather than
+      # building one itself — building there could deliver mid-edit code into a live vault.
+      # Tests first would therefore fail on a missing bundle, not on the code under test.
+      - name: Build bundle
+        run: npm run build
+
+      - name: Unit tests
+        run: npm test
+
+      # Draft, not published: a human checks the attached assets and publishes by hand,
+      # the same way 0.1.0 and 0.2.0 were cut. This also keeps a failed or half-finished
+      # tag push from silently going live to BRAT users.
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --draft \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            main.js manifest.json styles.css
