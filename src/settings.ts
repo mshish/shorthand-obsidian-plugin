@@ -138,7 +138,10 @@ export function normalizePluginSettings(input: unknown): ShorthandPluginSettings
     codexEffort: enumValue(value.codexEffort, CODEX_REASONING_EFFORTS, DEFAULT_PLUGIN_SETTINGS.codexEffort),
     sidecarDirectory: vaultRelativeDirectory(value.sidecarDirectory, DEFAULT_PLUGIN_SETTINGS.sidecarDirectory),
     minNewChars: finiteInteger(value.minNewChars, DEFAULT_PLUGIN_SETTINGS.minNewChars, 1),
-    minIntervalMs: finiteInteger(value.minIntervalMs, DEFAULT_PLUGIN_SETTINGS.minIntervalMs, 0),
+    // The plugin UI deliberately has a ten-second floor: starting an agent pass more often
+    // cannot make it finish faster and can pile up redundant work. Core keeps its own broader
+    // contract; this is the plugin's product limit, applied at the data.json trust boundary.
+    minIntervalMs: intervalMilliseconds(value.minIntervalMs, DEFAULT_PLUGIN_SETTINGS.minIntervalMs),
     enableLiveEnhancement: typeof value.enableLiveEnhancement === "boolean"
       ? value.enableLiveEnhancement
       : DEFAULT_PLUGIN_SETTINGS.enableLiveEnhancement,
@@ -307,6 +310,11 @@ function finiteInteger(value: unknown, fallback: number, minimum: number): numbe
   return typeof value === "number" && Number.isFinite(value) && value >= minimum
     ? Math.floor(value)
     : fallback;
+}
+
+function intervalMilliseconds(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.max(10_000, Math.floor(value));
 }
 
 function stringValue(value: unknown, fallback: string): string {

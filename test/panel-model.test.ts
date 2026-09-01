@@ -10,8 +10,6 @@ const capturing: PluginUiState = reducePluginState(
 
 const base = {
   elapsedMs: undefined,
-  pendingCharacters: undefined,
-  minNewChars: 180,
   noteName: undefined,
   hasActiveNote: true,
   // Defaults to "nothing to stop"; tests for a live runtime override this explicitly so the
@@ -42,6 +40,7 @@ describe("describePanel", () => {
     const model = describePanel({ ...base, state: capturing, hasCapture: true, elapsedMs: 754_000, noteName: "Weekly sync" });
     expect(model.headline).toBe("Capturing — 12:34");
     expect(model.noteName).toBe("Weekly sync");
+    expect(model.activityLabel).toBe("Taking notes");
     expect(enabled(model)).toEqual(["stop"]);
   });
 
@@ -55,9 +54,10 @@ describe("describePanel", () => {
     expect(enabled(model)).toEqual(["stop"]);
   });
 
-  test("carries the character gate the status bar gave up", () => {
-    const model = describePanel({ ...base, state: capturing, elapsedMs: 60_000, pendingCharacters: 140 });
-    expect(model.detail).toBe("140 of 180 characters toward the next pass");
+  test("uses a simple note-taking cue instead of an internal character gate", () => {
+    const model = describePanel({ ...base, state: capturing, elapsedMs: 60_000 });
+    expect(model.detail).toBeUndefined();
+    expect(model.activityLabel).toBe("Taking notes");
   });
 
   test("disables every button with no Markdown note open, and says what to do", () => {
@@ -66,7 +66,7 @@ describe("describePanel", () => {
     const model = describePanel({ ...base, state: INITIAL_PLUGIN_STATE, hasActiveNote: false });
     expect(enabled(model)).toEqual([]);
     // Idle with no note and no error is the one case where every button is disabled and
-    // neither a message nor the character gate exists to say why.
+    // no other message exists to say why.
     expect(model.detail).toBe("Open a Markdown note to start a capture.");
   });
 
@@ -75,10 +75,20 @@ describe("describePanel", () => {
     expect(enabled(describePanel({ ...base, state: starting }))).toEqual([]);
     const stopping = reducePluginState(capturing, { type: "capture-stopping" });
     const stoppingModel = describePanel({ ...base, state: stopping, hasCapture: true });
-    expect(stoppingModel.headline).toBe("Stopping…");
+    expect(stoppingModel.headline).toBe("Wrapping up…");
+    expect(stoppingModel.buttons.find(({ id }) => id === "stop")?.label).toBe("Wrapping up…");
+    expect(stoppingModel.activityLabel).toBeUndefined();
     // `stopping` overrides `hasCapture` even though a runtime still exists: a second Stop
     // press during teardown must not send a second control signal to Shorthand.
     expect(enabled(stoppingModel)).toEqual([]);
+  });
+
+  test("keeps wrapping-up language while final cleanup temporarily enters enhancing", () => {
+    const stopping = reducePluginState(capturing, { type: "capture-stopping" });
+    const finalCleanup = reducePluginState(stopping, { type: "enhancement-started" });
+    const model = describePanel({ ...base, state: finalCleanup, hasCapture: true, elapsedMs: 61_000 });
+    expect(model.headline).toBe("Wrapping up — 1:01");
+    expect(model.buttons.find(({ id }) => id === "stop")?.label).toBe("Wrapping up…");
   });
 
   test("shows an error's own message as the detail", () => {

@@ -16,9 +16,6 @@ export type StatusInput = Readonly<{
   state: PluginUiState;
   /** Milliseconds since the running capture started, or `undefined` when none is. */
   elapsedMs: number | undefined;
-  /** Characters banked toward the next enhancement pass, when a runner exists. */
-  pendingCharacters: number | undefined;
-  minNewChars: number;
 }>;
 
 const HIDDEN: StatusDisplay = Object.freeze({ visible: false });
@@ -33,16 +30,21 @@ const HIDDEN: StatusDisplay = Object.freeze({ visible: false });
  * status bar for during a meeting.
  */
 export function describeStatus(input: StatusInput): StatusDisplay {
-  const { state, elapsedMs, pendingCharacters, minNewChars } = input;
+  const { state, elapsedMs } = input;
   // Idle with nothing to report is the only state that hides. An error survives its
   // capture — `state.ts` deliberately has no clear-error event — so it must still be
   // shown once `captureActive` has gone false, or the plugin would fail silently.
   if (state.mode === "idle") return HIDDEN;
 
   const clock = elapsedMs === undefined ? "" : ` ${formatElapsed(elapsedMs)}`;
-  const gate = pendingCharacters === undefined
-    ? ""
-    : ` ${pendingCharacters} of ${minNewChars} characters toward the next pass.`;
+
+  if (state.stopping) {
+    return {
+      visible: true,
+      text: `Shorthand${clock} · wrapping up`,
+      tooltip: "Running final cleanup before finishing the capture.",
+    };
+  }
 
   switch (state.mode) {
     case "starting":
@@ -51,7 +53,7 @@ export function describeStatus(input: StatusInput): StatusDisplay {
       return {
         visible: true,
         text: `Shorthand${clock}`,
-        tooltip: `Capturing.${gate} Click to stop.`,
+        tooltip: "Taking notes. Click to stop.",
       };
     case "enhancing":
       return {
@@ -62,8 +64,8 @@ export function describeStatus(input: StatusInput): StatusDisplay {
     case "stopping":
       return {
         visible: true,
-        text: `Shorthand${clock} · stopping`,
-        tooltip: "Finishing the capture.",
+        text: `Shorthand${clock} · wrapping up`,
+        tooltip: "Running final cleanup before finishing the capture.",
       };
     case "enhancement-stopped":
       return {

@@ -5,7 +5,7 @@ import type { PluginUiState } from "../src/state.js";
 
 const capturing: PluginUiState = reducePluginState(INITIAL_PLUGIN_STATE, { type: "capture-started" });
 
-const base = { elapsedMs: undefined, pendingCharacters: undefined, minNewChars: 180 } as const;
+const base = { elapsedMs: undefined } as const;
 
 describe("describeStatus", () => {
   test("shows nothing at all when idle", () => {
@@ -27,7 +27,7 @@ describe("describeStatus", () => {
     expect(describeStatus({ ...base, state: capturing, elapsedMs: 754_000 })).toEqual({
       visible: true,
       text: "Shorthand 12:34",
-      tooltip: "Capturing. Click to stop.",
+      tooltip: "Taking notes. Click to stop.",
     });
   });
 
@@ -40,28 +40,22 @@ describe("describeStatus", () => {
     });
   });
 
-  test("reports the character gate in the tooltip, not in the bar", () => {
-    // The counter moved off the bar but the reassurance it carried has to survive:
-    // a capture sitting below the gate must not look broken.
-    const display = describeStatus({
-      ...base,
-      state: capturing,
-      elapsedMs: 60_000,
-      pendingCharacters: 140,
-    });
-    expect(display).toEqual({
-      visible: true,
-      text: "Shorthand 1:00",
-      tooltip: "Capturing. 140 of 180 characters toward the next pass. Click to stop.",
-    });
-  });
-
-  test("says stopping, because a stop can spend the whole drain budget", () => {
+  test("says wrapping up, because stop includes a final cleanup pass", () => {
     const stopping = reducePluginState(capturing, { type: "capture-stopping" });
     expect(describeStatus({ ...base, state: stopping, elapsedMs: 754_000 })).toEqual({
       visible: true,
-      text: "Shorthand 12:34 · stopping",
-      tooltip: "Finishing the capture.",
+      text: "Shorthand 12:34 · wrapping up",
+      tooltip: "Running final cleanup before finishing the capture.",
+    });
+  });
+
+  test("does not fall back to writing while the final cleanup pass runs", () => {
+    const stopping = reducePluginState(capturing, { type: "capture-stopping" });
+    const finalCleanup = reducePluginState(stopping, { type: "enhancement-started" });
+    expect(describeStatus({ ...base, state: finalCleanup, elapsedMs: 754_000 })).toEqual({
+      visible: true,
+      text: "Shorthand 12:34 · wrapping up",
+      tooltip: "Running final cleanup before finishing the capture.",
     });
   });
 

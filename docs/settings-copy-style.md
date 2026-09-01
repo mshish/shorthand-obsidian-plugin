@@ -109,8 +109,8 @@ situations:
 When neither applies, rule 2 wins and the row gets no description.
 
 - **Don't** — **Minimum interval (ms)**, "Minimum time between completed live passes."
-- **Do** — **Minimum interval**, "Live passes run no more often than once every 25 seconds.
-  The value is in milliseconds." The number is the stored one, re-rendered on every edit.
+- **Do** — **Minimum interval (seconds)**, "Live passes run no more often than once every 25
+  seconds." The current value is re-rendered on every edit.
 - **Don't** — **Transcript sidecar directory**, "Vault-relative directory used for new
   transcript notes."
 - **Do** — **Transcript folder**, "New transcript notes go in Meetings/Transcripts."

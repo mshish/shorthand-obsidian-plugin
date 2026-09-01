@@ -10,8 +10,10 @@ export type PanelButton = Readonly<{ id: PanelButtonId; label: string; enabled: 
 
 export type PanelModel = Readonly<{
   headline: string;
-  /** A second line, when there is one: the character gate, or an error's own message. */
+  /** A second line reserved for guidance or an error's own message. */
   detail: string | undefined;
+  /** A calm, non-recording activity cue while live note-taking is healthy. */
+  activityLabel: string | undefined;
   /** The basename of the note being captured, when a capture owns one. */
   noteName: string | undefined;
   buttons: readonly PanelButton[];
@@ -20,8 +22,6 @@ export type PanelModel = Readonly<{
 export type PanelInput = Readonly<{
   state: PluginUiState;
   elapsedMs: number | undefined;
-  pendingCharacters: number | undefined;
-  minNewChars: number;
   noteName: string | undefined;
   /** Whether a Markdown note is open, mirroring both start commands' `checkCallback`. */
   hasActiveNote: boolean;
@@ -44,7 +44,7 @@ export type PanelInput = Readonly<{
  * sidebar is narrow enough that one row vanishing reflows the rest.
  */
 export function describePanel(input: PanelInput): PanelModel {
-  const { state, elapsedMs, pendingCharacters, minNewChars, noteName, hasActiveNote, hasCapture } = input;
+  const { state, elapsedMs, noteName, hasActiveNote, hasCapture } = input;
   const clock = elapsedMs === undefined ? undefined : formatElapsed(elapsedMs);
   const canStart = hasActiveNote && canStartCapture(state);
   // Not `state.captureActive`: Assisted Notes defers `capture-started` into its bounded
@@ -56,20 +56,17 @@ export function describePanel(input: PanelInput): PanelModel {
   const buttons: readonly PanelButton[] = [
     { id: "start-meeting", label: "Start meeting", enabled: canStart },
     { id: "start-assisted-notes", label: "Start assisted notes", enabled: canStart },
-    { id: "stop", label: "Stop", enabled: canStop },
+    { id: "stop", label: state.stopping ? "Wrapping up…" : "Stop", enabled: canStop },
   ];
 
-  const gate = pendingCharacters === undefined
-    ? undefined
-    : `${pendingCharacters} of ${minNewChars} characters toward the next pass`;
-
   const headline = ((): string => {
+    if (state.stopping) return clock === undefined ? "Wrapping up…" : `Wrapping up — ${clock}`;
     switch (state.mode) {
       case "idle": return "Not capturing";
       case "starting": return "Starting…";
       case "capturing": return clock === undefined ? "Capturing" : `Capturing — ${clock}`;
       case "enhancing": return clock === undefined ? "Writing the note" : `Writing the note — ${clock}`;
-      case "stopping": return "Stopping…";
+      case "stopping": return "Wrapping up…";
       case "enhancement-stopped": return "Enhancement stopped";
       case "error": return "Error";
       default: {
@@ -84,13 +81,18 @@ export function describePanel(input: PanelInput): PanelModel {
   // three disabled buttons and nothing telling them what to do about it.
   const idleWithoutNote = state.mode === "idle" && !hasActiveNote;
 
-  // A message, when there is one, outranks the gate: it is the thing that went wrong,
-  // and the gate is reassurance nobody needs while looking at an error.
-  const detail = state.message ?? gate ?? (idleWithoutNote ? "Open a Markdown note to start a capture." : undefined);
+  const detail = state.message ?? (idleWithoutNote ? "Open a Markdown note to start a capture." : undefined);
+  const activityLabel = state.captureActive
+    && !state.stopping
+    && state.mode !== "error"
+    && state.mode !== "enhancement-stopped"
+    ? "Taking notes"
+    : undefined;
 
   return {
     headline,
     detail,
+    activityLabel,
     noteName: state.captureActive ? noteName : undefined,
     buttons,
   };

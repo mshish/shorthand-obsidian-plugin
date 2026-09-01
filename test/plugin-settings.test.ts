@@ -78,7 +78,7 @@ describe("plugin settings normalization", () => {
       codexEffort: "xhigh",
       sidecarDirectory: "./Calls\\Transcripts/",
       minNewChars: 42.9,
-      minIntervalMs: 0,
+      minIntervalMs: 10_900.9,
       enableLiveEnhancement: false,
       controlShorthandRecording: false,
       writeTranscriptNote: true,
@@ -99,7 +99,7 @@ describe("plugin settings normalization", () => {
       codexEffort: "xhigh",
       sidecarDirectory: "Calls/Transcripts",
       minNewChars: 42,
-      minIntervalMs: 0,
+      minIntervalMs: 10_900,
       enableLiveEnhancement: false,
       controlShorthandRecording: false,
       writeTranscriptNote: true,
@@ -236,12 +236,14 @@ describe("plugin settings normalization", () => {
     }
   });
 
-  test("falls back for malformed numeric values", () => {
-    expect(normalizePluginSettings({ minNewChars: 0, minIntervalMs: -1 }))
+  test("falls back for malformed numeric values and clamps intervals below ten seconds", () => {
+    expect(normalizePluginSettings({ minNewChars: 0, minIntervalMs: 9_999 }))
       .toMatchObject({
         minNewChars: DEFAULT_PLUGIN_SETTINGS.minNewChars,
-        minIntervalMs: DEFAULT_PLUGIN_SETTINGS.minIntervalMs,
+        minIntervalMs: 10_000,
       });
+    expect(normalizePluginSettings({ minIntervalMs: "fast" }).minIntervalMs)
+      .toBe(DEFAULT_PLUGIN_SETTINGS.minIntervalMs);
   });
 
   test("both new keys default to empty, which is what keeps a user inheriting core's defaults", () => {

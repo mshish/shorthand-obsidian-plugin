@@ -9,7 +9,7 @@ Your notes stay in your vault. You choose which AI backend generates the summary
 - The Shorthand desktop app, running with **Follow live transcript output** enabled under **Advanced**
 - A desktop Obsidian vault
 - One enhancement backend:
-  - Claude Agent SDK, with the `claude` CLI installed and signed in
+  - Claude Code, with the `claude` CLI installed and signed in
   - Codex, with the `codex` CLI installed and `codex login` completed
   - An OpenAI, Anthropic, Ollama, or OpenAI-compatible provider
 
@@ -66,7 +66,7 @@ Obsidian adds the “Shorthand:” prefix in the command palette.
 
 ## Enhancement backends
 
-Claude Agent SDK is the default. It can look up related notes elsewhere in your vault when improving the meeting note.
+Claude Code is the default. It can look up related notes elsewhere in your vault when improving the meeting note.
 
 Codex uses your local Codex login. An LLM provider uses the provider, model, endpoint, and optional API key you enter in the plugin settings. Codex and LLM provider backends receive the current note and transcript, but they do not search the rest of your vault.
 
@@ -84,7 +84,7 @@ Leave the API key field blank to keep the saved key. Use **Clear key** to remove
 
 **Control Shorthand recording** is on by default. Starting and stopping a capture also starts and stops the Shorthand recorder, so you do not need to use its global shortcut.
 
-Starting a Meeting capture cancels any recording already in progress, to guarantee a clean start. Starting an Assisted notes capture instead asks Shorthand to start Assisted notes specifically — it does not disturb a different recording that happens to be running, and it is safe to retry. If you quit Shorthand during a capture, the plugin may reopen it while making sure the recorder is stopped. Turn off **Control Shorthand recording** if you prefer to manage the recorder yourself.
+Starting a Meeting capture cancels any recording already in progress, to guarantee a clean start. Starting an Assisted notes capture instead asks Shorthand to start Assisted notes specifically — it does not disturb a different recording that happens to be running, and it is safe to retry. If Shorthand quits during a capture, the plugin may reopen Shorthand to send the final stop command. Turn off **Control Shorthand recording** if you prefer to manage the recorder yourself.
 
 The three recorder commands remain available as manual controls. They control Shorthand but do not start or stop an Obsidian capture.
 

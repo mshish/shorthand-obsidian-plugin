@@ -1653,8 +1653,6 @@ export default class ShorthandPlugin extends Plugin {
     return describePanel({
       state: this.#state,
       elapsedMs: this.#capture === undefined ? undefined : Date.now() - this.#capture.startedAt,
-      pendingCharacters: this.#capture?.enhancer?.state.pendingCharacters,
-      minNewChars: this.settings.minNewChars,
       noteName: this.#capture?.noteFile.basename,
       hasActiveNote: this.hasActiveNote(),
       hasCapture: this.#capture !== undefined,
@@ -1704,8 +1702,6 @@ export default class ShorthandPlugin extends Plugin {
     const display = describeStatus({
       state: this.#state,
       elapsedMs: this.#capture === undefined ? undefined : Date.now() - this.#capture.startedAt,
-      pendingCharacters: this.#capture?.enhancer?.state.pendingCharacters,
-      minNewChars: this.settings.minNewChars,
     });
     // `hide()`/`show()` rather than clearing the text: an item holding "" still
     // occupies its separator, which is the space this change exists to reclaim.
@@ -1739,9 +1735,9 @@ class ShorthandSettingTab extends PluginSettingTab {
   private displayBasic(containerEl: HTMLElement, displayGeneration: number): void {
     new Setting(containerEl)
       .setName("Enhancement backend")
-      .setDesc("Only the Claude Agent SDK backend can look things up elsewhere in your vault.")
+      .setDesc("Only Claude Code can look things up elsewhere in your vault.")
       .addDropdown((dropdown) => dropdown
-        .addOption("claude-agent-sdk", "Claude Agent SDK")
+        .addOption("claude-agent-sdk", "Claude Code")
         .addOption("codex", "Codex")
         .addOption("llm", "LLM provider")
         .setValue(this.plugin.settings.backend)
@@ -1795,12 +1791,13 @@ class ShorthandSettingTab extends PluginSettingTab {
       .setName("Control Shorthand recording")
       .setDesc(createFragment((desc) => {
         desc.appendText(
-          "Starting and stopping a capture also starts and stops Shorthand's recording, so you don't need its hotkey. "
-          + "Quitting Shorthand mid-capture normally relaunches the app — see ",
+          "Starting and stopping a capture also starts and stops Shorthand's recording. "
+          + "If Shorthand quits during a capture, this plugin may reopen Shorthand to send the final stop command. ",
         );
         desc.createEl("a", {
-          text: "Driving Shorthand's recorder",
+          text: "Read how recorder control works",
           href: "https://github.com/mshish/shorthand-obsidian-plugin#driving-shorthands-recorder",
+          cls: "shorthand-settings-link",
         });
         desc.appendText(".");
       }))
@@ -1955,7 +1952,7 @@ class ShorthandSettingTab extends PluginSettingTab {
           })));
     }
     numberSetting(containerEl, this.plugin, "Minimum new characters", newCharacterThresholdDescription, "minNewChars");
-    numberSetting(containerEl, this.plugin, "Minimum interval", passIntervalDescription, "minIntervalMs");
+    intervalSetting(containerEl, this.plugin);
     new Setting(containerEl)
       .setName("Live enhancement")
       .setDesc("The note is rewritten while the meeting runs, instead of only when you stop or run Enhance now.")
@@ -2253,7 +2250,7 @@ function numberSetting(
   plugin: ShorthandPlugin,
   name: string,
   describe: (value: number) => string,
-  key: "minNewChars" | "minIntervalMs",
+  key: "minNewChars",
 ): void {
   const setting = new Setting(container).setName(name).setDesc(describe(plugin.settings[key]));
   setting.addText((text) => {
@@ -2265,6 +2262,25 @@ function numberSetting(
       if (!Number.isFinite(parsed)) return;
       await plugin.saveSettings({ ...plugin.settings, [key]: parsed });
       setting.setDesc(describe(plugin.settings[key]));
+    });
+  });
+}
+
+function intervalSetting(container: HTMLElement, plugin: ShorthandPlugin): void {
+  const seconds = plugin.settings.minIntervalMs / 1_000;
+  const setting = new Setting(container)
+    .setName("Minimum interval (seconds)")
+    .setDesc(passIntervalDescription(seconds));
+  setting.addText((text) => {
+    text.inputEl.type = "number";
+    text.inputEl.min = "10";
+    text.inputEl.step = "1";
+    text.setValue(String(seconds)).onChange(async (value) => {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return;
+      await plugin.saveSettings({ ...plugin.settings, minIntervalMs: parsed * 1_000 });
+      setting.setDesc(passIntervalDescription(plugin.settings.minIntervalMs / 1_000));
+      text.setValue(String(plugin.settings.minIntervalMs / 1_000));
     });
   });
 }
@@ -2282,6 +2298,8 @@ class ShorthandPanelView extends ItemView {
   #built = false;
   #headlineEl!: HTMLElement;
   #noteEl!: HTMLElement;
+  #activityEl!: HTMLElement;
+  #activityLabelEl!: HTMLElement;
   #detailEl!: HTMLElement;
   #buttonEls: ReadonlyMap<PanelButtonId, HTMLButtonElement> = new Map();
 
@@ -2328,6 +2346,12 @@ class ShorthandPanelView extends ItemView {
     container.addClass("shorthand-panel");
     this.#headlineEl = container.createEl("p", { cls: "shorthand-panel-headline" });
     this.#noteEl = container.createEl("p", { cls: "shorthand-panel-note" });
+    this.#activityEl = container.createDiv({ cls: "shorthand-panel-activity" });
+    const pulse = this.#activityEl.createSpan({ cls: "shorthand-panel-pulse", attr: { "aria-hidden": "true" } });
+    pulse.createSpan();
+    pulse.createSpan();
+    pulse.createSpan();
+    this.#activityLabelEl = this.#activityEl.createSpan();
     this.#detailEl = container.createEl("p", { cls: "shorthand-panel-detail" });
     const buttons = container.createDiv({ cls: "shorthand-panel-buttons" });
     const buttonEls = new Map<PanelButtonId, HTMLButtonElement>();
@@ -2351,6 +2375,8 @@ class ShorthandPanelView extends ItemView {
     this.#headlineEl.textContent = model.headline;
     this.#noteEl.textContent = model.noteName ?? "";
     this.#noteEl.hidden = model.noteName === undefined;
+    this.#activityLabelEl.textContent = model.activityLabel ?? "";
+    this.#activityEl.hidden = model.activityLabel === undefined;
     this.#detailEl.textContent = model.detail ?? "";
     this.#detailEl.hidden = model.detail === undefined;
 
