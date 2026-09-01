@@ -897,6 +897,38 @@ describe("records that are not session-scoped", () => {
   });
 });
 
+/**
+ * `capture_state` replaced the old `idle` record (FOLLOW_STREAM.md). `phase: "idle"` has to
+ * keep doing exactly what `idle` did — clear session state on a reattach — since that is the
+ * one case this module used to have no other way to learn for certain.
+ */
+describe("capture_state", () => {
+  test("phase idle clears session state on reattach, as the old idle record did", async () => {
+    const { recorder } = buildExplicit();
+    recorder.noteAttached();
+    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+    await flush();
+    recorder.observe({ t: "begin", session: 1, mode: "assisted-notes" });
+    expect(await outcomeOf(started)).toBe("started");
+    expect(recorder.sessionLive).toBe(true);
+
+    // Shorthand restarted while the follower was away; the reattach's own capture_state says
+    // idle, definitively — the same positive proof the old `idle` record gave, now carried by
+    // the richer record.
+    recorder.noteAttached();
+    recorder.observe({ t: "capture_state", phase: "idle" });
+    expect(recorder.sessionLive).toBe(false);
+    expect(recorder.mayBeRecording).toBe(false);
+  });
+
+  test("phase idle on a fresh connection is merely confirmatory", () => {
+    const { recorder } = buildExplicit();
+    recorder.observe({ t: "capture_state", phase: "idle" });
+    expect(recorder.sessionLive).toBe(false);
+    expect(recorder.mayBeRecording).toBe(false);
+  });
+});
+
 describe("teardown and backstop", () => {
   test("teardown sends a detached cancel and never a toggle", () => {
     const { control, recorder } = build();
@@ -1027,22 +1059,69 @@ describe("Assisted Notes: the explicit start/stop contract", () => {
   /**
    * P1. A start issued while Assisted Notes is already recording — from Shorthand's own
    * hotkey, say — is the documented success no-op (FOLLOW_STREAM.md's table): Shorthand
-   * answers with silence, no `begin`, because nothing began. Before this fix the shortcut's
-   * `!wasLiveBeforeSend` guard (correctly keeping a pre-existing *unrelated* session from
-   * falsely satisfying it — see the next test) also blocked this case from ever being
-   * recognized, so the race ran to its deadline and the timeout backstop sent `stop`,
-   * ending the very recording this idempotent command was supposed to leave untouched.
+   * answers with silence, no `begin`, because nothing began. Before this fix, this case was
+   * only ever recognized by inferring it from an observed `begin`; a mismatched inference
+   * (`!wasLiveBeforeSend`) let the race run to its deadline and the timeout backstop send
+   * `stop`, ending the very recording this idempotent command was supposed to leave untouched.
+   * `capture_state` now reports the fact directly, so this asserts the adoption is driven by
+   * that report rather than by observing a `begin` at all.
    */
-  test("a start issued while this mode is already recording adopts the session, and stop is never sent", async () => {
+  test("a start issued while this mode is already recording, per capture_state, resolves started and stop is never sent", async () => {
     const { control, recorder } = buildExplicit();
-    // Already recording before this capture's start sequence ever ran.
-    recorder.observe({ t: "begin", session: 1, mode: "assisted-notes" });
+    // Already recording before this capture's start sequence ever ran, reported directly —
+    // FOLLOW_STREAM.md's own example of an already-active, published capture.
+    recorder.observe({ t: "capture_state", phase: "recording", mode: "assisted-notes", publishing: true, session: 1 });
     const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
     expect(await outcomeOf(started)).toBe("started");
     expect(recorder.startFailure).toBeUndefined();
     // The start signal still goes out once — idempotent, so it needs no forced known state —
     // but nothing beyond that, and in particular no `stop-assisted-notes`.
     expect(control.signals()).toEqual([ASSISTED_START]);
+    expect(control.signals()).not.toContain(ASSISTED_STOP);
+  });
+
+  /**
+   * The gap capture_state closes that no observed `begin` ever could: a capture that is not
+   * publishing never emits a `begin` this follower will see at all (FOLLOW_STREAM.md), so the
+   * old `begin`-based inference could not tell "already recording, silently" apart from
+   * "nothing running" — which is exactly what let the P1 backstop fire against a pre-existing,
+   * non-publishing capture.
+   */
+  test("a start issued while this mode is already recording but not publishing still resolves started, and expects no transcript", async () => {
+    const { control, recorder } = buildExplicit();
+    // No `session` at all: a non-publishing capture has no hub session and no `begin` ever
+    // reaches this follower for it (FOLLOW_STREAM.md).
+    recorder.observe({ t: "capture_state", phase: "recording", mode: "assisted-notes", publishing: false });
+    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+    expect(await outcomeOf(started)).toBe("started");
+    expect(recorder.startFailure).toBeUndefined();
+    expect(control.signals()).toEqual([ASSISTED_START]);
+    expect(control.signals()).not.toContain(ASSISTED_STOP);
+    // Nothing will ever announce this capture on this connection, so the recorder must not
+    // believe it is waiting for one: `mayBeRecording` reads false even though the capture is
+    // genuinely, remotely still running. Honest about what this connection can and cannot
+    // prove, rather than parking a stop() behind a `begin` grace that can never resolve.
+    expect(recorder.mayBeRecording).toBe(false);
+    expect(recorder.sessionLive).toBe(false);
+  });
+
+  /**
+   * `#reportedRecordingMode`/`#followedMode` are separate signals for the same question, and
+   * this is the fallback path: a session that began *after* this connection's one-time
+   * capture_state already reported idle can only be known from an observed `begin`, exactly
+   * as before capture_state existed. Kept working, not deleted, for that reason.
+   */
+  test("a session that began after an idle capture_state is still adopted, via the observed begin", async () => {
+    const { control, recorder } = buildExplicit();
+    recorder.observe({ t: "capture_state", phase: "idle" });
+    // Began later, on the strength of a `begin` capture_state's one-time snapshot could not
+    // have carried.
+    recorder.observe({ t: "begin", session: 1, mode: "assisted-notes" });
+    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+    expect(await outcomeOf(started)).toBe("started");
+    expect(recorder.startFailure).toBeUndefined();
+    expect(control.signals()).toEqual([ASSISTED_START]);
+    expect(control.signals()).not.toContain(ASSISTED_STOP);
   });
 
   test("a start while a different mode is recording is refused, not adopted", async () => {
@@ -1056,6 +1135,22 @@ describe("Assisted Notes: the explicit start/stop contract", () => {
     expect(await outcomeOf(started)).toBe("not-started");
     expect(recorder.startFailure).toEqual({ kind: "refused", reason: "busy" });
     expect(control.signals()).toEqual([ASSISTED_START]);
+  });
+
+  /**
+   * Same "busy" scenario, driven by capture_state instead of an observed `begin`: reported
+   * state for a *different* mode must never satisfy this recorder's own adoption check.
+   */
+  test("attach reporting a different mode recording, per capture_state, is refused, not adopted", async () => {
+    const { control, recorder } = buildExplicit();
+    recorder.observe({ t: "capture_state", phase: "recording", mode: "meeting", publishing: true, session: 1 });
+    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+    await flush();
+    recorder.observe({ t: "refused", mode: "assisted-notes", reason: "busy" });
+    expect(await outcomeOf(started)).toBe("not-started");
+    expect(recorder.startFailure).toEqual({ kind: "refused", reason: "busy" });
+    expect(control.signals()).toEqual([ASSISTED_START]);
+    expect(control.signals()).not.toContain(ASSISTED_STOP);
   });
 
   /**
@@ -1155,7 +1250,29 @@ describe("Assisted Notes: the explicit start/stop contract", () => {
     expect(control.signals()).toEqual([ASSISTED_START]);
   });
 
-  test("start_failed surfaces its message", async () => {
+  test("start_failed surfaces both its code and message", async () => {
+    const { control, recorder } = buildExplicit();
+    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+    await flush();
+    recorder.observe({
+      t: "start_failed",
+      mode: "assisted-notes",
+      code: "no-input-device",
+      message: "No input device found",
+    });
+    expect(await outcomeOf(started)).toBe("not-started");
+    expect(recorder.startFailure).toEqual({
+      kind: "start-failed",
+      code: "no-input-device",
+      message: "No input device found",
+    });
+    expect(control.signals()).toEqual([ASSISTED_START]);
+  });
+
+  // An app old enough to predate the `start-failed-code` capability sends `start_failed` with
+  // no `code` at all (FOLLOW_STREAM.md) — that absence must reach `RecorderStartFailure` as
+  // `undefined`, not a guessed or defaulted value.
+  test("start_failed with no code still surfaces its message", async () => {
     const { control, recorder } = buildExplicit();
     const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
     await flush();

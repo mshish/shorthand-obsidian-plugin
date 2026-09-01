@@ -31,6 +31,7 @@ import {
   detectShorthandExecutable,
   EnhanceRunner,
   KNOWN_REFUSAL_REASONS,
+  KNOWN_START_FAILURE_CODES,
   listClaudeModels,
   listCodexModels,
   LlmAgentClient,
@@ -47,6 +48,7 @@ import {
   type EnhanceStatus,
   type ExitDiagnosis,
   type KnownRefusalReason,
+  type KnownStartFailureCode,
   type PassOutcome,
 } from "shorthand-core";
 import {
@@ -167,8 +169,17 @@ const START_ACKNOWLEDGEMENT_MS = 3_000;
  * the toggle dance: keeping two capture paths alive for one mode doubles the state space this
  * change exists to shrink, and the app and plugin ship together, so a build new enough to be
  * running this plugin version is new enough to have both.
+ *
+ * `capture-state` joined this list, not merely a nice-to-have: `ShorthandRecorder`'s start
+ * path now reads `capture_state`'s reported "already recording" fact as authority rather than
+ * inferring it from an observed `begin` (see `recorder.ts`'s `#reportedRecordingMode`), and
+ * that inference had a real gap for a non-publishing capture, which never emits a `begin` this
+ * follower can see at all — see that comment for the P1 it closes. An app that cannot send
+ * `capture_state` can only fall back into that same gap, so it is refused upfront here too,
+ * the same reasoning the other two entries already use.
  */
-const ASSISTED_NOTES_REQUIRED_CAPABILITIES: readonly string[] = ["start-assisted-notes", "stop-assisted-notes"];
+const ASSISTED_NOTES_REQUIRED_CAPABILITIES: readonly string[] =
+  ["start-assisted-notes", "stop-assisted-notes", "capture-state"];
 
 /**
  * How long to wait before re-spawning an idle follower whose Shorthand was not running.
@@ -254,7 +265,7 @@ const START_NOT_RUNNING = (mode: CaptureMode): string =>
  * would only be noise.
  *
  * A `switch` with a `never` default, not a lookup table: two of the five kinds carry data
- * (`refused.reason`, `start-failed.message`) that has to be read, not just named.
+ * (`refused.reason`, `start-failed.code`/`message`) that has to be read, not just named.
  */
 function assistedNotesStartFailureNotice(failure: RecorderStartFailure): string {
   switch (failure.kind) {
@@ -265,7 +276,7 @@ function assistedNotesStartFailureNotice(failure: RecorderStartFailure): string 
     case "refused":
       return refusalNotice(failure.reason);
     case "start-failed":
-      return `Assisted Notes did not start: ${failure.message}`;
+      return startFailedNotice(failure.code, failure.message);
     case "start-timeout":
       return "Assisted Notes did not start, and Shorthand never explained why. Check that Shorthand is running and try again.";
     default: {
@@ -294,6 +305,33 @@ function refusalNotice(reason: string): string {
       return "Assisted Notes did not start: its live transcript output is switched off. In Shorthand, open Settings → Modes → Notetaking → Assisted notes → Advanced, enable Follow live transcript output, and try again.";
     default:
       return `Assisted Notes was refused by Shorthand (${reason}).`;
+  }
+}
+
+/**
+ * Turns a `start_failed.code` into a specific instruction for each of `shorthand-core`'s
+ * `KNOWN_START_FAILURE_CODES`, mirroring `refusalNotice` just above — same reasoning, and the
+ * same deliberately non-exhaustive switch: FOLLOW_STREAM.md is explicit that `code` is an open
+ * set (the classifier can grow a new value without a protocol bump) and `code` itself is
+ * optional (an app old enough to predate `start-failed-code` sends none at all), so both an
+ * unrecognized code and a missing one fall through to `message` verbatim rather than being
+ * treated as defects.
+ */
+function startFailedNotice(code: string | undefined, message: string): string {
+  const known = code !== undefined && (KNOWN_START_FAILURE_CODES as readonly string[]).includes(code)
+    ? (code as KnownStartFailureCode)
+    : undefined;
+  switch (known) {
+    case "no-input-device":
+      return "Assisted Notes did not start: no input device was found. Connect a microphone and try again.";
+    case "microphone-permission-denied":
+      return "Assisted Notes did not start: microphone access was denied. Grant Shorthand microphone permission in your OS settings and try again.";
+    case "audio-capture-failed":
+    default:
+      // `audio-capture-failed` is FOLLOW_STREAM.md's own deliberate catch-all for everything
+      // else the start path's classifier cannot name more specifically, so it gets the same
+      // plain fallback as an unrecognized or absent code: Shorthand's own explanation, verbatim.
+      return `Assisted Notes did not start: ${message}`;
   }
 }
 

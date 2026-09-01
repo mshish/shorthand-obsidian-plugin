@@ -1,4 +1,4 @@
-import type { BeginMode, ControlResult, ControlSignal } from "shorthand-core";
+import type { BeginMode, CapturePhase, ControlResult, ControlSignal } from "shorthand-core";
 
 /**
  * The recorder-driving policy, extracted from the plugin so it can be tested without
@@ -101,7 +101,12 @@ type ExplicitSignals = Extract<RecorderSignals, { kind: "explicit" }>;
  *   closed union, and a caller must show an unrecognized value rather than fail to parse it.
  * - `start-failed`: the command was accepted and acted on, but the capture did not actually
  *   start — no input device, a denied microphone permission — with Shorthand's own
- *   explanation in `message`.
+ *   explanation in `message` and, when the connected app supports `start-failed-code`
+ *   (FOLLOW_STREAM.md), a stable machine-readable `code` a caller can branch on instead of
+ *   matching the English text. `code` is one of `shorthand-core`'s `KNOWN_START_FAILURE_CODES`
+ *   when it is one of those, and a plain, unrecognized string otherwise — same open-set
+ *   handling as `refused`'s `reason` above — or `undefined` for an app old enough to predate
+ *   the capability.
  * - `start-timeout`: Shorthand accepted delivery and then said nothing at all — no `begin`,
  *   no `refused`, no `start_failed` — within the acknowledgement budget. A backstop only:
  *   unlike before the explicit pair, this is no longer the primary way a refusal is
@@ -115,7 +120,7 @@ export type RecorderStartFailure =
   | Readonly<{ kind: "no-hello" }>
   | Readonly<{ kind: "unsupported" }>
   | Readonly<{ kind: "refused"; reason: string }>
-  | Readonly<{ kind: "start-failed"; message: string }>
+  | Readonly<{ kind: "start-failed"; message: string; code?: string }>
   | Readonly<{ kind: "start-timeout" }>;
 
 /** The subset of a `hello` record the capability gate cares about. */
@@ -185,9 +190,16 @@ export type RecorderOptions = {
  * The subset of a wire record this module cares about. `session` is what makes the previous
  * recording's records distinguishable from this capture's — without it, the `cancel` Shorthand
  * emits for the recording the toggle start sequence's own `--cancel` just ended reads exactly
- * like this capture's recording ending. `mode`, `reason` and `message` are only ever present
- * on `begin`, `refused` and `start_failed` respectively — core's own parsing has already
- * validated them by the time they reach here.
+ * like this capture's recording ending. `mode`, `reason`, `message` and `code` are only ever
+ * present on `begin`/`refused`/`start_failed` (`code` on `start_failed` alone), and `phase`
+ * only on `capture_state` — core's own parsing has already validated them by the time they
+ * reach here.
+ *
+ * `publishing` is accepted for the same reason `session` is even where this module does not
+ * read it: so a caller (a test, most concretely) can pass a faithful `capture_state` record.
+ * This module does not branch on it directly — whether a `begin` for a reported session
+ * actually arrives is what distinguishes a publishing capture from a non-publishing one in
+ * practice, and that arrives, or never does, as its own separate record.
  */
 type ObservedRecord = {
   t: string;
@@ -195,6 +207,9 @@ type ObservedRecord = {
   mode?: BeginMode;
   reason?: string;
   message?: string;
+  code?: string;
+  phase?: CapturePhase;
+  publishing?: boolean;
 };
 
 /** Records that end a session. Shorthand sends exactly one of these per recording. */
@@ -225,6 +240,26 @@ export class ShorthandRecorder {
    * arrive on; see `#runExplicitStart`.
    */
   #followedMode: BeginMode | undefined = undefined;
+  /**
+   * The mode `capture_state` most recently reported as recording or processing on this
+   * connection, or `undefined` while it reported idle (or before any `capture_state` has
+   * been observed at all — the two are indistinguishable and treated the same, since neither
+   * is evidence of anything). `capture_state` is sent exactly once per connection, always
+   * immediately after `hello` (FOLLOW_STREAM.md), so this is a single snapshot taken at
+   * attach — not updated again until a reconnect's own fresh `hello` brings a fresh one.
+   *
+   * This is what `#runExplicitStart` reads to know, *before ever sending anything*, whether
+   * its own mode is already recording — replacing an inference (`wasLiveBeforeSend` +
+   * `#followedMode`) that existed only because the app had no way to report the state
+   * directly, and that had a real gap: a non-publishing capture never emits a `begin` this
+   * follower will ever see, so `#sessionLive`/`#followedMode` could never observe one at all.
+   * A pre-existing, non-publishing capture of this recorder's own mode was therefore
+   * indistinguishable from nothing running, which let the timeout backstop stop a recording
+   * this call never started (P1) whenever that pre-existing capture happened not to be
+   * publishing. `#sessionLive`/`#followedMode` remain the fallback for anything that changed
+   * *after* this snapshot — see `#runExplicitStart`.
+   */
+  #reportedRecordingMode: BeginMode | undefined = undefined;
   /**
    * True once any session-scoped record has been observed, ever. Only meaningful as
    * evidence that Shorthand was up and running at some point during this capture.
@@ -299,6 +334,13 @@ export class ShorthandRecorder {
   readonly #startFailedWaiters = new Set<() => void>();
   /** The `message` off the `start_failed` record that last resolved `#startFailedWaiters`. */
   #lastStartFailedMessage: string | undefined = undefined;
+  /**
+   * The `code` off that same record, when it carried one. Optional even when
+   * `#lastStartFailedMessage` is set: an app old enough to predate `start-failed-code`
+   * (FOLLOW_STREAM.md) sends `start_failed` with no `code` at all, and that absence must
+   * reach `RecorderStartFailure` as `undefined` rather than a guessed value.
+   */
+  #lastStartFailedCode: string | undefined = undefined;
   /** Same purpose as `#refusalSeq`, for `start_failed`. */
   #startFailedSeq = 0;
 
@@ -367,9 +409,9 @@ export class ShorthandRecorder {
    * `hello` deliberately does not clear `#sessionLive` on its own. An ordinary mid-recording
    * reconnect produces exactly the same `hello`, and Shorthand does not resend `begin` on
    * reattach; dropping the belief there is what previously made the plugin skip the finalize
-   * and cancel away a live meeting's corrected transcript. `idle`, on the other hand — see
-   * `observe()` — is new information on a reattach and is trusted outright, because it is a
-   * positive statement rather than an absence to interpret.
+   * and cancel away a live meeting's corrected transcript. `capture_state`, on the other hand
+   * — see `observe()` — is new information on a reattach and is trusted outright, because it
+   * is a positive statement rather than an absence to interpret.
    */
   noteAttached(): void {
     if (this.#attachedEver) this.#reattached = true;
@@ -385,23 +427,35 @@ export class ShorthandRecorder {
    * `#activeSessions` on every disconnect and repopulates it only from a fresh `begin`, which
    * Shorthand does not resend when it resumes a session after a reattach. A plugin that trusted
    * that bookkeeping would conclude "nothing is recording" moments after asking Shorthand to
-   * finalize. `idle`, `refused` and `start_failed` are handled first, before the session guard,
-   * because none of the three carries a `session` at all — see FOLLOW_STREAM.md.
+   * finalize. `capture_state`, `refused` and `start_failed` are handled first, before the
+   * session guard, because none of the three carries a plain, always-present `session` the way
+   * `begin`/`partial`/etc. do — see FOLLOW_STREAM.md.
    */
   observe(record: ObservedRecord): void {
-    if (record.t === "idle") {
-      // Positive proof nothing is capturing, as of *this* attach — FOLLOW_STREAM.md is
-      // explicit that `idle` only ever follows `hello`, immediately, and is never sent
-      // mid-connection, so it can never race a start this capture has already sent. On a
-      // fresh connection this is merely confirmatory (`#sessionLive` already starts
-      // `false`); on a *reattach* mid-capture it is new information this module used to
-      // have to approximate from a session-id comparison (`#endsFollowedSession` below) —
-      // this replaces that guess outright for the one case it settles for certain: nothing
-      // at all is running right now.
-      this.#sessionLive = false;
-      this.#followedSession = undefined;
-      this.#followedMode = undefined;
-      this.#expectingSession = false;
+    if (record.t === "capture_state") {
+      // capture_state supersedes the old `idle` record (FOLLOW_STREAM.md): still always the
+      // first thing after `hello`, still never sent mid-connection, so it can still never
+      // race a start this capture has already sent — the guarantee the old `idle` comment
+      // relied on still holds, just for a richer record.
+      if (record.phase === "idle") {
+        // Positive proof nothing is capturing, as of *this* attach. On a fresh connection
+        // this is merely confirmatory (`#sessionLive` already starts `false`); on a
+        // *reattach* mid-capture it is new information this module used to have to
+        // approximate from a session-id comparison (`#endsFollowedSession` below) — this
+        // settles it outright for the one case it can: nothing at all is running right now.
+        this.#sessionLive = false;
+        this.#followedSession = undefined;
+        this.#followedMode = undefined;
+        this.#expectingSession = false;
+        this.#reportedRecordingMode = undefined;
+      } else {
+        // New information `idle` never carried: which mode is already recording, reported
+        // directly rather than left for `#runExplicitStart` to infer from an observed
+        // `begin` — see `#reportedRecordingMode`'s own comment for why that inference had a
+        // real gap. Recorded regardless of `publishing`: a non-publishing capture is still a
+        // real one, even though no `begin` for it will ever reach this follower.
+        this.#reportedRecordingMode = record.mode;
+      }
       return;
     }
     if (record.t === "refused") {
@@ -418,6 +472,7 @@ export class ShorthandRecorder {
     if (record.t === "start_failed") {
       if (this.#signals.kind === "explicit" && record.mode === this.#signals.mode && record.message !== undefined) {
         this.#lastStartFailedMessage = record.message;
+        this.#lastStartFailedCode = record.code;
         this.#startFailedSeq += 1;
         resolveAll(this.#startFailedWaiters);
       }
@@ -579,8 +634,18 @@ export class ShorthandRecorder {
    * so unlike the toggle above it never needs a forced known state to be safe: sending it
    * against an idle, already-capturing, or busy Shorthand each converge on the right answer
    * without help. Nothing here sends a `--cancel`.
+   *
+   * "Already capturing" is read from `#reportedRecordingMode` — capture_state's own report,
+   * taken at attach — rather than inferred from an observed `begin`; see that field's own
+   * comment for why the inference it replaces had a real gap.
    */
   async #runExplicitStart(signals: ExplicitSignals): Promise<RecorderStartOutcome> {
+    // Whether *any* session — of any mode — was already live before this call sent
+    // anything, observed via a `begin`/`partial` this module saw directly (as opposed to
+    // reported by capture_state, checked separately below). Deliberately mode-agnostic: the
+    // timeout backstop further down needs the conservative answer "was anything at all live"
+    // rather than "was ours live", because a session that predates this call was never this
+    // command's to end regardless of whose it is.
     const wasLiveBeforeSend = this.#sessionLive;
     const refusalSeqBeforeSend = this.#refusalSeq;
     const startFailedSeqBeforeSend = this.#startFailedSeq;
@@ -599,6 +664,19 @@ export class ShorthandRecorder {
     // already known to be running.
     this.#expectingSession = !this.#sessionLive;
 
+    // Authoritative, not inferred: capture_state told this recorder, at attach — before this
+    // call ever sent anything — whether `signals.mode` was already recording. See
+    // `#reportedRecordingMode`'s own comment for the P1 gap this closes.
+    if (this.#reportedRecordingMode === signals.mode) {
+      // The documented success no-op (FOLLOW_STREAM.md's table): already recording, so
+      // Shorthand answers this call with silence — no `begin`, because nothing began.
+      // Forced false rather than left at the general `!sessionLive` set above: when this
+      // capture is not publishing, no `begin` for it is ever coming (FOLLOW_STREAM.md), so
+      // there is nothing left for this recorder to wait for or finalize on this connection.
+      this.#expectingSession = false;
+      return "started";
+    }
+
     // Shorthand can announce, refuse or fail the start before the await above resolves —
     // `#send()` only resolves on the forwarding child's exit, not on Shorthand's own reaction
     // to the flag it forwarded. The waiter sets consulted below (and in the race loop further
@@ -606,25 +684,21 @@ export class ShorthandRecorder {
     // exact gap would otherwise have its wakeup silently dropped (`resolveAll` on an empty set)
     // and sit out the whole acknowledgement budget. Everything from here to the loop is closing
     // that gap for each record type that can arrive in it.
+    //
+    // capture_state already covered the "already recording" fast path above; everything from
+    // here down is the fallback for a session that only became knowable *after* that one-time
+    // snapshot — either because it actually began after it, or because the connected app
+    // predates the `begin-mode` capability that would have named it on a `begin`.
     if (wasLiveBeforeSend) {
-      // The documented success no-op (FOLLOW_STREAM.md's table): Assisted Notes was already
-      // recording before this call sent anything, so asking it to start is already true, and
-      // Shorthand answers with silence — no `begin`, because nothing began. The requested
-      // state already holds, so adopt the session already being followed rather than fall
-      // through to a race nothing will ever resolve.
-      //
       // Only when the live session's mode is *known* to be ours, though — unlike the freshly-
       // arrived-`begin` branch below, `undefined` is not treated as a match here.
       // `#followedMode` is `undefined` both for an app old enough to predate the `begin-mode`
       // capability *and* for a mode core does not recognize at all, and that second case is
       // definitely not us — it is some other, unrelated capture, and misreporting it as this
       // command's own success would tell the plugin a note is being taken when it is not. The
-      // plugin already gates `#runExplicitStart` on `start-assisted-notes`/`stop-assisted-notes`,
-      // but nothing documented ties that pair to `begin-mode`, so a begin-mode-less app speaking
-      // the explicit pair is not ruled out — it simply does not get this fast path. It falls
-      // through to the race below, which (after the timeout fix in the `"timeout"` case) can
-      // never stop a session that predates this call either way, so the only cost of not
-      // adopting here is a slower, misreported `start-timeout` instead of `"started"`.
+      // cost of not adopting here is only a slower, misreported `start-timeout` instead of
+      // `"started"`; the timeout fix (see the `"timeout"` case below) makes sure it is never
+      // a stopped recording either way.
       if (this.#followedMode === signals.mode) return "started";
     } else if (this.#sessionLive
       && (this.#followedMode === undefined || this.#followedMode === signals.mode)) {
@@ -645,7 +719,7 @@ export class ShorthandRecorder {
     }
     if (this.#startFailedSeq !== startFailedSeqBeforeSend) {
       this.#expectingSession = false;
-      this.#startFailure = { kind: "start-failed", message: this.#lastStartFailedMessage ?? "" };
+      this.#startFailure = this.#startFailureFromLast();
       return "not-started";
     }
 
@@ -681,7 +755,7 @@ export class ShorthandRecorder {
           return "not-started";
         case "start-failed":
           this.#expectingSession = false;
-          this.#startFailure = { kind: "start-failed", message: this.#lastStartFailedMessage ?? "" };
+          this.#startFailure = this.#startFailureFromLast();
           return "not-started";
         case "stop":
           await this.#send(signals.stop, "recall");
@@ -696,8 +770,12 @@ export class ShorthandRecorder {
           // which is what the backstop exists to guarantee idle against. A session that
           // predates this call was never this command's to end — sending `stop` for one is
           // exactly the bug this module exists to prevent, a retry-safe idempotent command
-          // tearing down a capture it was never asked to touch. When it does apply, it is
-          // otherwise harmless: idempotent, so a no-op if nothing is actually running.
+          // tearing down a capture it was never asked to touch. `#reportedRecordingMode`
+          // matching this mode already returned `"started"` above without ever reaching here,
+          // so the only way to still be here with something pre-existing is `wasLiveBeforeSend`
+          // itself — the same guard as before capture_state existed. When it does apply,
+          // sending `stop` is otherwise harmless: idempotent, so a no-op if nothing is
+          // actually running.
           if (!wasLiveBeforeSend) await this.#send(signals.stop, "backstop");
           this.#expectingSession = false;
           this.#startFailure = { kind: "start-timeout" };
@@ -849,6 +927,22 @@ export class ShorthandRecorder {
     this.#followedMode = undefined;
     this.#expectingSession = false;
     this.#idleGuaranteed = true;
+  }
+
+  /**
+   * Builds the `start-failed` variant of `RecorderStartFailure` from whatever
+   * `#lastStartFailedMessage`/`#lastStartFailedCode` currently hold. Shared by both places
+   * `#runExplicitStart` can observe a `start_failed` (the send-in-flight gap and the wait
+   * loop below it) so the `exactOptionalPropertyTypes`-safe conditional spread for the
+   * optional `code` is not duplicated.
+   */
+  #startFailureFromLast(): RecorderStartFailure {
+    const code = this.#lastStartFailedCode;
+    return {
+      kind: "start-failed",
+      message: this.#lastStartFailedMessage ?? "",
+      ...(code === undefined ? {} : { code }),
+    };
   }
 
   /**
