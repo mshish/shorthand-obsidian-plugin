@@ -14,7 +14,7 @@ describe("ObsidianSidecarStore", () => {
     const vault = memoryVault();
     const store = new ObsidianSidecarStore({ api: vault.api(), path: "Calls/2026/Transcript.md" });
 
-    await expect(store.process((current) => {
+    expect(store.process((current) => {
       expect(current).toBeUndefined();
       return { content: SENTINEL, value: "created" };
     })).resolves.toBe("created");
@@ -29,7 +29,7 @@ describe("ObsidianSidecarStore", () => {
     const file = vault.add("Calls/Transcript.md", "before");
     const store = new ObsidianSidecarStore({ api: vault.api(), path: file.path, file });
 
-    await expect(store.process((current) => ({ content: `${current}\nafter`, value: 7 }))).resolves.toBe(7);
+    expect(store.process((current) => ({ content: `${current}\nafter`, value: 7 }))).resolves.toBe(7);
     expect(vault.processCalls).toBe(1);
     expect(vault.content.get(file.path)).toBe("before\nafter");
   });
@@ -40,7 +40,7 @@ describe("ObsidianSidecarStore", () => {
     const open = openEditor(`${SENTINEL}\n\nfirst line\n\nsecond line`);
     const store = new ObsidianSidecarStore({ path: file.path, file, api: vault.api(() => open) });
 
-    await expect(store.process((current) => ({ content: `${current}\n\nthird line`, value: "editor" })))
+    expect(store.process((current) => ({ content: `${current}\n\nthird line`, value: "editor" })))
       .resolves.toBe("editor");
 
     expect(open.editor.getValue()).toBe(`${SENTINEL}\n\nfirst line\n\nsecond line\n\nthird line`);
@@ -106,12 +106,12 @@ describe("ObsidianSidecarStore", () => {
     const store = new ObsidianSidecarStore({ api: vault.api(), path: file.path, file });
 
     vault.rename(file, "Calls/Renamed transcript.md");
-    await expect(store.process((current) => ({ content: `${current}\nafter`, value: "renamed" })))
+    expect(store.process((current) => ({ content: `${current}\nafter`, value: "renamed" })))
       .resolves.toBe("renamed");
     expect(store.describe).toBe("Calls/Renamed transcript.md");
 
     vault.files.set(file.path, fakeFile(file.path));
-    await expect(store.process((current) => ({ content: current ?? "", value: "replacement" })))
+    expect(store.process((current) => ({ content: current ?? "", value: "replacement" })))
       .rejects.toThrow("deleted or replaced");
   });
 });
@@ -156,7 +156,7 @@ describe("ObsidianSidecarStore under SidecarWriter", () => {
     writer.on("writeError", () => {});
     writer.apply(update("transcript text"));
 
-    await expect(writer.close()).rejects.toThrow("first line must be");
+    expect(writer.close()).rejects.toThrow("first line must be");
     expect(vault.content.get(existing.path)).toBe("# Not a transcript\n\nreal content");
   });
 });

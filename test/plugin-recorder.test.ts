@@ -144,7 +144,7 @@ function buildExplicit(overrides: Partial<RecorderOptions> = {}, signalsOverride
       requiredCapabilities: ASSISTED_CAPABILITIES,
       startAcknowledgementMs: START_ACK_MS,
       ...signalsOverrides,
-    } as RecorderOptions["signals"],
+    },
     ...overrides,
   });
 }

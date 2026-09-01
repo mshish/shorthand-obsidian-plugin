@@ -87,7 +87,7 @@ describe("ensureTranscriptLink", () => {
           transform(frontmatter);
         },
       },
-    } as unknown as TranscriptLinkApi, note, CANDIDATE);
+    }, note, CANDIDATE);
 
     expect(result).toMatchObject({ status: "linked", linkPath: "Transcripts/Someone else" });
   });
@@ -123,7 +123,7 @@ describe("ensureTranscriptLink", () => {
         processFrontMatter: async () => { throw new Error("YAMLParseError: bad indentation"); },
       },
       metadataCache: { getFirstLinkpathDest: () => null },
-    } as unknown as TranscriptLinkApi, note, CANDIDATE);
+    }, note, CANDIDATE);
 
     expect(result).toMatchObject({ status: "error" });
     if (result.status !== "error") return;
@@ -147,7 +147,7 @@ describe("ensureTranscriptLink", () => {
           return resolved;
         },
       },
-    } as unknown as TranscriptLinkApi, note, CANDIDATE);
+    }, note, CANDIDATE);
 
     expect(asked).toEqual(["Older"]);
     expect(result).toMatchObject({ status: "linked", linkPath: "Older", target: resolved });
@@ -162,7 +162,7 @@ function api(frontmatter: Record<string, unknown>): TranscriptLinkApi {
       },
     },
     metadataCache: { getFirstLinkpathDest: () => null },
-  } as unknown as TranscriptLinkApi;
+  };
 }
 
 function sink(content: string): ObsidianNoteSink {

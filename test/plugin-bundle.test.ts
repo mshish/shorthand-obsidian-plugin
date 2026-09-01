@@ -108,7 +108,7 @@ describe("the built plugin bundle", () => {
       await writeFile(join(directory, "node_modules", "obsidian", "index.js"), OBSIDIAN_STUB, "utf8");
       const copied = join(directory, "main.js");
       await copyFile(BUNDLE, copied);
-      const loaded: Record<string, unknown> = createRequire(join(directory, "loader.cjs"))(copied);
+      const loaded = createRequire(join(directory, "loader.cjs"))(copied) as Record<string, unknown>;
       const exported = loaded.default;
       expect(typeof exported).toBe("function");
       const prototype = (exported as new () => unknown).prototype as Record<string, unknown>;

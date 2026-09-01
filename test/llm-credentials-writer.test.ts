@@ -31,9 +31,9 @@ describe("LLM credentials deletion", () => {
       await mkdir(dirname(target), { recursive: true });
       await writeFile(target, "{ malformed", "utf8");
 
-      await expect(deleteLlmCredentials(environment)).resolves.toBe(target);
+      expect(deleteLlmCredentials(environment)).resolves.toBe(target);
       expect(existsSync(target)).toBeFalse();
-      await expect(deleteLlmCredentials(environment)).resolves.toBe(target);
+      expect(deleteLlmCredentials(environment)).resolves.toBe(target);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

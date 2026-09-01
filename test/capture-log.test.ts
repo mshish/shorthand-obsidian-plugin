@@ -44,7 +44,7 @@ describe("a record as one line", () => {
   test("never prints the transcript itself", () => {
     // `final` carries the whole corrected transcript. The note is where that belongs; a log
     // line that copied it would put a meeting's contents in the developer console.
-    const line = describeRecord({ t: "final", session: 7 } as { t: string; session: number });
+    const line = describeRecord({ t: "final", session: 7 });
     expect(line).toBe("final session=7");
   });
 });
