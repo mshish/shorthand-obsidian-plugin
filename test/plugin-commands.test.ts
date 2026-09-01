@@ -13,8 +13,8 @@ describe("command names", () => {
   });
 
   test("name the two recorder toggles symmetrically", () => {
-    expect(COMMAND_NAMES["toggle-shorthand-recording"]).toBe("Toggle Shorthand meeting recording");
-    expect(COMMAND_NAMES["toggle-shorthand-assisted-notes"]).toBe(
+    expect(COMMAND_NAMES["toggle-recording"]).toBe("Toggle Shorthand meeting recording");
+    expect(COMMAND_NAMES["toggle-assisted-notes"]).toBe(
       "Toggle Shorthand assisted notes recording",
     );
   });
@@ -48,9 +48,9 @@ describe("command names", () => {
       "stop-capture",
       "enhance-now",
       "clean-up-this-note",
-      "toggle-shorthand-recording",
-      "toggle-shorthand-assisted-notes",
-      "cancel-shorthand-recording",
+      "toggle-recording",
+      "toggle-assisted-notes",
+      "cancel-recording",
       "open-panel",
     ];
     expect(Object.keys(COMMAND_NAMES).sort()).toEqual([...ids].sort());

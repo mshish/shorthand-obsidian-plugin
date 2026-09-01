@@ -280,8 +280,8 @@ const NOT_RUNNING_NOTICES: Record<Exclude<RecorderPhase, "start"> | "manual", st
 const START_NOT_RUNNING = (mode: CaptureMode): string =>
   `Shorthand was not running, so this capture did not start a recording; Shorthand is starting now. Once it is up, start the recording with Shorthand's shortcut or "${
     mode === "assisted-notes"
-      ? COMMAND_NAMES["toggle-shorthand-assisted-notes"]
-      : COMMAND_NAMES["toggle-shorthand-recording"]
+      ? COMMAND_NAMES["toggle-assisted-notes"]
+      : COMMAND_NAMES["toggle-recording"]
   }" — the capture is already running and will pick it up.`;
 
 /**
@@ -511,21 +511,21 @@ export default class ShorthandPlugin extends Plugin {
     // The user's manual override of Shorthand's recorder, independent of capture: a plain
     // toggle and an unconditional cancel, neither of which touches the capture itself.
     this.addCommand({
-      id: "toggle-shorthand-recording",
-      name: COMMAND_NAMES["toggle-shorthand-recording"],
+      id: "toggle-recording",
+      name: COMMAND_NAMES["toggle-recording"],
       callback: () => { this.fireControl("toggle-transcription"); },
     });
     // Not decoration: a manual recovery that named "Toggle Shorthand meeting recording" would
     // start a *Meeting*. The Assisted Notes recovery path has to select the same mode it was
     // trying to start — see START_NOT_RUNNING, which points here for that signal.
     this.addCommand({
-      id: "toggle-shorthand-assisted-notes",
-      name: COMMAND_NAMES["toggle-shorthand-assisted-notes"],
+      id: "toggle-assisted-notes",
+      name: COMMAND_NAMES["toggle-assisted-notes"],
       callback: () => { this.fireControl("toggle-assisted-notes"); },
     });
     this.addCommand({
-      id: "cancel-shorthand-recording",
-      name: COMMAND_NAMES["cancel-shorthand-recording"],
+      id: "cancel-recording",
+      name: COMMAND_NAMES["cancel-recording"],
       callback: () => { this.fireControl("cancel"); },
     });
     this.addCommand({

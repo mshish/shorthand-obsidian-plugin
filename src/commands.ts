@@ -14,16 +14,25 @@ export type CommandId =
   | "stop-capture"
   | "enhance-now"
   | "clean-up-this-note"
-  | "toggle-shorthand-recording"
-  | "toggle-shorthand-assisted-notes"
-  | "cancel-shorthand-recording"
+  | "toggle-recording"
+  | "toggle-assisted-notes"
+  | "cancel-recording"
   | "open-panel";
 
 /**
- * The ids are frozen. Obsidian keys a user's custom hotkey to
+ * The ids are frozen — from here on. Obsidian keys a user's custom hotkey to
  * `<plugin-id>:<command-id>`, so renaming one silently discards their binding with
- * nothing to say it happened. `start-capture-this-note` therefore keeps a name that
- * no longer describes it, and that is the correct trade.
+ * nothing to say it happened. `start-capture-this-note` already keeps a name that no
+ * longer describes it rather than pay that price.
+ *
+ * `toggle-recording`, `toggle-assisted-notes` and `cancel-recording` were renamed once,
+ * right here, off `toggle-shorthand-recording` / `toggle-shorthand-assisted-notes` /
+ * `cancel-shorthand-recording` — ids that embedded the plugin id Obsidian already
+ * prefixes onto every command, rendering as `shorthand:toggle-shorthand-recording` in
+ * the palette (`obsidianmd/commands/no-plugin-id-in-command-id`). This plugin had not
+ * shipped to the marketplace yet, so no hotkey bound to the old ids existed to break —
+ * the one moment the freeze above could not yet apply to. It will not come again: the
+ * same hotkey-binding reason now freezes these three too.
  *
  * The spellings of the modes come from the app's own settings pane
  * (`shorthand-app/src/shorthand/locales/en.json`: "Meetings", "Assisted notes"), not
@@ -40,8 +49,8 @@ export const COMMAND_NAMES: Readonly<Record<CommandId, string>> = Object.freeze(
   "stop-capture": "Stop capture",
   "enhance-now": "Enhance now",
   "clean-up-this-note": "Clean up this note",
-  "toggle-shorthand-recording": "Toggle Shorthand meeting recording",
-  "toggle-shorthand-assisted-notes": "Toggle Shorthand assisted notes recording",
-  "cancel-shorthand-recording": "Cancel Shorthand recording",
+  "toggle-recording": "Toggle Shorthand meeting recording",
+  "toggle-assisted-notes": "Toggle Shorthand assisted notes recording",
+  "cancel-recording": "Cancel Shorthand recording",
   "open-panel": "Open Shorthand panel",
 });
