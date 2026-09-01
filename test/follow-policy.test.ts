@@ -5,6 +5,7 @@ import {
   decideFollow,
   endsSession,
   pushPendingAttachRecord,
+  type PendingAttachRecord,
 } from "../src/follow-policy.js";
 import { INITIAL_PLUGIN_STATE, reducePluginState } from "../src/state.js";
 
@@ -52,8 +53,9 @@ describe("decideFollow", () => {
   });
 
   test("ignores anything that is not one of the modes it knows", () => {
-    // `mode` arrives as `any` from an untyped EventEmitter listener, so this module is
-    // the only thing standing between the wire and a capture attaching to a note.
+    // `FollowInput.mode` stays `unknown` regardless of what `StreamClient` narrows it to at
+    // the call site — see that field's own comment — so this module is the only thing under
+    // test standing between the wire and a capture attaching to a note.
     for (const junk of ["karaoke", "", 7, null, {}, ["meeting"], true]) {
       expect(decideFollow({ ...base, mode: junk })).toEqual({ kind: "ignore" });
     }
@@ -115,13 +117,15 @@ describe("endsSession", () => {
 
 describe("pushPendingAttachRecord", () => {
   test("buffers a record belonging to the pending session", () => {
-    const entry = { generation: 1, record: { t: "partial", session: 7 } };
+    // `t: "cancel"` here is an arbitrary minimal `WireEvent`: this buffer is content-agnostic,
+    // so nothing about the test depends on which record variant fills the slot.
+    const entry: PendingAttachRecord = { generation: 1, record: { t: "cancel", session: 7 } };
     const buffer = pushPendingAttachRecord(EMPTY_PENDING_ATTACH_BUFFER, 7, entry);
     expect(buffer).toEqual({ records: [entry], droppedCount: 0 });
   });
 
   test("drops a record for any other session, silently", () => {
-    const entry = { generation: 1, record: { t: "partial", session: 9 } };
+    const entry: PendingAttachRecord = { generation: 1, record: { t: "cancel", session: 9 } };
     const buffer = pushPendingAttachRecord(EMPTY_PENDING_ATTACH_BUFFER, 7, entry);
     expect(buffer).toEqual(EMPTY_PENDING_ATTACH_BUFFER);
   });
@@ -129,16 +133,16 @@ describe("pushPendingAttachRecord", () => {
   test("stops appending past the cap and counts what it drops", () => {
     let buffer = EMPTY_PENDING_ATTACH_BUFFER;
     for (let index = 0; index < PENDING_ATTACH_BUFFER_CAP; index += 1) {
-      buffer = pushPendingAttachRecord(buffer, 7, { generation: 1, record: { t: "partial", session: 7 } });
+      buffer = pushPendingAttachRecord(buffer, 7, { generation: 1, record: { t: "cancel", session: 7 } });
     }
     expect(buffer.records.length).toBe(PENDING_ATTACH_BUFFER_CAP);
     expect(buffer.droppedCount).toBe(0);
 
-    const overflowed = pushPendingAttachRecord(buffer, 7, { generation: 1, record: { t: "partial", session: 7 } });
+    const overflowed = pushPendingAttachRecord(buffer, 7, { generation: 1, record: { t: "cancel", session: 7 } });
     expect(overflowed.records.length).toBe(PENDING_ATTACH_BUFFER_CAP);
     expect(overflowed.droppedCount).toBe(1);
 
-    const overflowedAgain = pushPendingAttachRecord(overflowed, 7, { generation: 1, record: { t: "partial", session: 7 } });
+    const overflowedAgain = pushPendingAttachRecord(overflowed, 7, { generation: 1, record: { t: "cancel", session: 7 } });
     expect(overflowedAgain.droppedCount).toBe(2);
   });
 });

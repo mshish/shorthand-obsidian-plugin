@@ -746,8 +746,12 @@ export default class ShorthandPlugin extends Plugin {
             recorder?.noteAttached();
             // `record.capabilities`, when present, already passed core's own defensive parsing
             // (`stringArrayField`): a malformed field is dropped before this event ever fires, so
-            // it is not re-validated here.
-            markAttached({ capabilities: record.capabilities });
+            // it is not re-validated here. Conditional spread, not `capabilities:
+            // record.capabilities`: `exactOptionalPropertyTypes` forbids assigning an explicit
+            // `undefined` to an optional property, and `record.capabilities` is `string[] | undefined`.
+            markAttached({
+              ...(record.capabilities !== undefined ? { capabilities: record.capabilities } : {}),
+            });
           } else recorder?.observe(record);
           // An attached capture has no recorder to notice the recording ending, and
           // StreamClient kills its child on a terminal record only once stopAfterDrain has

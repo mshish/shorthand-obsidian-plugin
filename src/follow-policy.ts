@@ -1,4 +1,4 @@
-import { BEGIN_MODES, type BeginMode } from "shorthand-core";
+import { BEGIN_MODES, type BeginMode, type WireEvent } from "shorthand-core";
 import { canStartCapture, type PluginUiState } from "./state.js";
 
 /**
@@ -18,11 +18,15 @@ export type FollowInput = Readonly<{
   /**
    * The `mode` field off the `begin` record, **unvalidated**.
    *
-   * `unknown`, not `BeginMode | undefined`, and deliberately. `StreamClient` extends a
-   * bare `EventEmitter` with no typed event map, so `client.on("event", ({ record }) => …)`
-   * hands `main.ts` a contextual `any`: `record.mode` compiles whatever core does, and a
-   * signature promising `BeginMode` here would be a promise nothing checks. Validation
-   * happens below, against core's own `BEGIN_MODES`, in the module that has tests.
+   * `unknown`, not `BeginMode | undefined`, and still deliberately. `StreamClient`'s `event`
+   * channel is typed now, so a `begin` record's `mode` narrows to `BeginMode | undefined` at
+   * the call site — core's own `beginModeField` has already dropped anything it does not
+   * recognize. But that narrowing is a promise from another package's parser, relied on inside
+   * `main.ts`, which is never exercised under `bun test` (see `AGENTS.md`): nothing would fail
+   * if a future refactor there read `mode` off the wrong record variant, or off a build of
+   * core that stopped validating it. Keeping this field `unknown` and re-validating below,
+   * against core's own `BEGIN_MODES`, means the one module with tests for this decision does
+   * not depend on `main.ts` getting that right forever.
    */
   mode: unknown;
   state: PluginUiState;
@@ -70,10 +74,11 @@ export function decideFollow(input: FollowInput): FollowDecision {
 }
 
 /**
- * The trust boundary for `record.mode`, which arrives as `any` from an untyped
- * `EventEmitter` listener. Core already drops a mode it does not recognize, so in practice
- * this only ever sees a valid value or nothing — but "in practice" is not a check, and the
- * cost of being wrong here is a dictated sentence written into someone's meeting note.
+ * The trust boundary for `record.mode`. Core's own parser already narrows this to
+ * `BeginMode | undefined` before it reaches `main.ts`, so in practice this only ever sees a
+ * valid value or nothing — but "in practice" is not a check, and the cost of being wrong here
+ * is a dictated sentence written into someone's meeting note. See `FollowInput.mode`'s own
+ * comment for why that makes this function worth keeping rather than trusting the type.
  */
 function beginMode(value: unknown): BeginMode | undefined {
   return (BEGIN_MODES as readonly unknown[]).includes(value) ? (value as BeginMode) : undefined;
@@ -109,7 +114,7 @@ export function endsSession(record: Readonly<{ t: string; session?: number }>, s
 export const PENDING_ATTACH_BUFFER_CAP = 4_000;
 
 /** One buffered wire event, exactly as `StreamClient` emitted it. Replayed verbatim later. */
-export type PendingAttachRecord = Readonly<{ generation: number; record: unknown }>;
+export type PendingAttachRecord = Readonly<{ generation: number; record: WireEvent }>;
 
 export type PendingAttachBuffer = Readonly<{
   records: readonly PendingAttachRecord[];
@@ -130,7 +135,7 @@ export function pushPendingAttachRecord(
   session: number,
   entry: PendingAttachRecord,
 ): PendingAttachBuffer {
-  const recordSession = (entry.record as Readonly<{ session?: unknown }>).session;
+  const recordSession = (entry.record as Readonly<{ session?: number }>).session;
   if (recordSession !== session) return buffer;
   if (buffer.records.length >= PENDING_ATTACH_BUFFER_CAP) {
     return { records: buffer.records, droppedCount: buffer.droppedCount + 1 };
