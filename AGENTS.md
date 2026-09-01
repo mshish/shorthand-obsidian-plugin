@@ -74,6 +74,22 @@ above. Three things bite if a step is skipped, and all three have.
 This lived in `README.md` until that file became user-facing. It is maintainer
 procedure, so it belongs here.
 
+## Cutting a release
+
+BRAT installs from a repo's latest GitHub **Release** assets
+(`manifest.json`, `main.js`, `styles.css`) — it does not read the tree or a
+bare tag, and `main.js` is gitignored, so a tag with no Release attached is
+invisible to it.
+
+1. Bump `manifest.json`, `package.json` and `versions.json` first, and commit.
+2. Push a tag equal to `manifest.json`'s `version` exactly, with no `v`
+   prefix — `.github/workflows/release.yml` checks this and fails the build
+   on a mismatch, because BRAT and Obsidian's directory tooling compare
+   versions by string equality.
+3. The workflow builds and tests, then opens a **draft** release with the
+   three assets attached. Check them, then publish the draft by hand — the
+   draft step is deliberate, matching how 0.1.0 and 0.2.0 were cut.
+
 ## The settings surface
 
 `src/settings.ts` holds every rule — defaults, normalization, validation,
