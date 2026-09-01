@@ -5,13 +5,16 @@ import type { BeginMode, CapturePhase, ControlResult, ControlSignal } from "shor
  * Obsidian and without spawning anything. It owns three things main.ts must not have to
  * reason about at each call site:
  *
- * - the *order* control signals reach Shorthand. Meeting's `toggle-transcription` has no
- *   explicit start/stop pair, so it still needs the disambiguating `--cancel`-then-toggle
- *   dance, including recalling a start sequence that a stop request overtook (a spawned
- *   process cannot be un-spawned, so the only cure is to sequence a `--cancel` after it).
- *   Assisted Notes' `start-assisted-notes`/`stop-assisted-notes` need none of that: both are
- *   idempotent (FOLLOW_STREAM.md), so a stop that overtakes a start simply sends the stop
- *   signal, and a retry of either can never fire the wrong edge — see `#runExplicitStart`;
+ * - the *order* control signals reach Shorthand. Every mode this drives has an explicit
+ *   start/stop pair — `start-transcription`/`stop-transcription` for Meeting,
+ *   `start-assisted-notes`/`stop-assisted-notes` for Assisted Notes — and both halves of
+ *   each are idempotent (FOLLOW_STREAM.md), so a stop that overtakes a start simply sends
+ *   the stop signal, and a retry of either can never fire the wrong edge. This module used
+ *   to carry a second, toggle-driven path for Meeting, which had no explicit pair: a
+ *   `--cancel`-then-toggle dance, plus the machinery to recall a start a stop had
+ *   overtaken. That path is gone, along with the two failures only it could produce — a
+ *   "finalize" toggle *starting* a recording against an idle app, and a stop suppressed
+ *   entirely because the plugin's belief about the app's state was wrong;
  * - what the plugin believes Shorthand's recorder is doing, derived only from records the
  *   plugin itself observed — never from `StreamClient`'s private session bookkeeping,
  *   which a reconnect silently clears;
@@ -38,63 +41,49 @@ export type RecorderPhase = "start" | "recall" | "finalize" | "backstop";
 export type RecorderReport = (phase: RecorderPhase, result: ControlResult) => void;
 
 /**
- * The outcome of a capture start. Meeting's call site ignores it, exactly as it ignored the
- * `void` this replaced. Assisted Notes awaits it, because a `sent` signal is not proof of a
- * live recording the way it is for Meeting: the forwarding process exits 0 as soon as
- * `tauri_plugin_single_instance` hands the flag to a running Shorthand, before Shorthand has
- * evaluated it at all — so a live recording, a refusal (`refused`), and an accepted-but-failed
- * start (`start_failed`) are all still to come on the wire. See `RecorderStartFailure` for how
- * the caller tells those apart.
+ * The outcome of a capture start, which every caller awaits: a `sent` signal is not proof of
+ * a live recording. The forwarding process exits 0 as soon as `tauri_plugin_single_instance`
+ * hands the flag to a running Shorthand, before Shorthand has evaluated it at all — so a live
+ * recording, a refusal (`refused`), and an accepted-but-failed start (`start_failed`) are all
+ * still to come on the wire. See `RecorderStartFailure` for how the caller tells those apart.
  */
 export type RecorderStartOutcome = "started" | "not-started" | "stopped";
 
 /**
- * How this recorder starts and stops a recording, and whether that is a toggle needing
- * disambiguation or the newer explicit pair that does not.
- *
- * - `toggle`: Meeting's `toggle-transcription`. No explicit start/stop pair exists for
- *   Meeting, so this still needs the `--cancel`-first dance (`#runToggleStart`) and
- *   proceeds without any capability gate — any protocol-1 app can serve it, on the theory
- *   that a recording nobody is following still beats no recording.
- * - `explicit`: Assisted Notes' `start-assisted-notes`/`stop-assisted-notes`. Both
- *   idempotent, so a stop that overtakes a start — or a retry of either — can never fire
- *   the wrong edge (`#runExplicitStart`). Gated on every one of `requiredCapabilities`
- *   before anything is sent; `mode` is what tells this recorder's own
- *   `refused`/`start_failed`/`begin` records apart from another mode's, on the one
- *   connection both can arrive on.
+ * How this recorder starts and stops a recording: the mode's explicit, idempotent pair —
+ * `start-transcription`/`stop-transcription` for Meeting,
+ * `start-assisted-notes`/`stop-assisted-notes` for Assisted Notes. Both halves of a pair
+ * are idempotent, so a stop that overtakes a start — or a retry of either — can never fire
+ * the wrong edge (`#runStart`). Gated on every one of `requiredCapabilities` before
+ * anything is sent; `mode` is what tells this recorder's own `refused`/`start_failed`/
+ * `begin` records apart from another mode's, on the one connection both can arrive on.
  */
-export type RecorderSignals =
-  | Readonly<{ kind: "toggle"; signal: ControlSignal }>
-  | Readonly<{
-      kind: "explicit";
-      mode: BeginMode;
-      start: ControlSignal;
-      stop: ControlSignal;
-      requiredCapabilities: readonly string[];
-      /**
-       * How long to wait, once `start` is confirmed delivered, for a `begin`, `refused` or
-       * `start_failed` naming this recorder's own `mode` to arrive — see
-       * `RecorderStartFailure`'s `start-timeout`. Only consulted when nothing at all shows
-       * up in time; a real refusal or failure is reported the moment its record arrives,
-       * never held for this budget to expire.
-       */
-      startAcknowledgementMs: number;
-    }>;
-
-type ExplicitSignals = Extract<RecorderSignals, { kind: "explicit" }>;
+export type RecorderSignals = Readonly<{
+  mode: BeginMode;
+  start: ControlSignal;
+  stop: ControlSignal;
+  requiredCapabilities: readonly string[];
+  /**
+   * How long to wait, once `start` is confirmed delivered, for a `begin`, `refused` or
+   * `start_failed` naming this recorder's own `mode` to arrive — see
+   * `RecorderStartFailure`'s `start-timeout`. Only consulted when nothing at all shows
+   * up in time; a real refusal or failure is reported the moment its record arrives,
+   * never held for this budget to expire.
+   */
+  startAcknowledgementMs: number;
+}>;
 
 /**
- * Why a capability-gated (Assisted Notes only) `start()` resolved `"not-started"`, queried
- * through `startFailure` after `start()` settles. `start()`'s own return stays the plain
- * three-value union above — Meeting reads the same type and must not have to widen anything
- * it does not use — so a caller that needs to distinguish *why* reads this instead.
+ * Why a `start()` resolved `"not-started"`, queried through `startFailure` after `start()`
+ * settles. `start()`'s own return stays the plain three-value union above, so a caller that
+ * needs to distinguish *why* reads this instead.
  *
  * - `no-hello`: the follower never attached within the grace window, so there is no `hello`
  *   to check a capability against at all.
  * - `unsupported`: a `hello` arrived, but its `capabilities` did not name every one of
  *   `requiredCapabilities` — an app old enough to predate the explicit start/stop pair,
  *   most likely.
- * - `refused`: Shorthand accepted delivery of `start-assisted-notes` and declined to act on
+ * - `refused`: Shorthand accepted delivery of the start signal and declined to act on
  *   it, and said why. `reason` is one of `shorthand-core`'s `KNOWN_REFUSAL_REASONS`
  *   (`busy`, `mode-disabled`, `publication-disabled`) when it is one of those, and a plain,
  *   unrecognized string otherwise — FOLLOW_STREAM.md is explicit that `reason` is not a
@@ -109,8 +98,7 @@ type ExplicitSignals = Extract<RecorderSignals, { kind: "explicit" }>;
  *   the capability.
  * - `start-timeout`: Shorthand accepted delivery and then said nothing at all — no `begin`,
  *   no `refused`, no `start_failed` — within the acknowledgement budget. A backstop only:
- *   unlike before the explicit pair, this is no longer the primary way a refusal is
- *   detected, because a real refusal now arrives as its own record instead.
+ *   a real refusal arrives as its own record instead.
  *
  * Left `undefined` when `start()` returns `"not-started"` for an ordinary control failure
  * (`ShorthandControl.send()` itself reporting `not-running` or `error`): that case already has
@@ -127,8 +115,6 @@ export type RecorderStartFailure =
 export type HelloInfo = { capabilities?: string[] };
 
 export type RecorderStopOutcome =
-  /** Shorthand was driven to idle by the start sequence's own recall; nothing left to do. */
-  | "idle"
   /** Shorthand is known not to be running, so no signal was sent at all. */
   | "shorthand-down"
   /** Nothing was believed to be recording, so no finalize signal was sent. */
@@ -188,9 +174,9 @@ export type RecorderOptions = {
 
 /**
  * The subset of a wire record this module cares about. `session` is what makes the previous
- * recording's records distinguishable from this capture's — without it, the `cancel` Shorthand
- * emits for the recording the toggle start sequence's own `--cancel` just ended reads exactly
- * like this capture's recording ending. `mode`, `reason`, `message` and `code` are only ever
+ * recording's records distinguishable from this capture's — without it, the terminal record
+ * Shorthand emits for a recording that was already running when this capture started reads
+ * exactly like this capture's own recording ending. `mode`, `reason`, `message` and `code` are only ever
  * present on `begin`/`refused`/`start_failed` (`code` on `start_failed` alone), and `phase`
  * only on `capture_state` — core's own parsing has already validated them by the time they
  * reach here.
@@ -269,19 +255,10 @@ export class ShorthandRecorder {
    * True once this capture's start signal reached Shorthand and until the session it started
    * announces itself. Shorthand is recording during that window even though no record says so
    * yet, and a stop landing inside it must not conclude "nothing to finalize". Only a
-   * session-scoped record from the new session, or (toggle kind) a confirmed `--cancel`,
-   * clears it — a terminal record arriving inside the window is the *previous* recording
-   * ending.
+   * session-scoped record from the new session clears it — a terminal record arriving inside
+   * the window is the *previous* recording ending.
    */
   #expectingSession = false;
-  /**
-   * True only while the last signal Shorthand received was a `--cancel` that reached it.
-   * Toggle kind only: the explicit pair has no equivalent, because unlike `--cancel` neither
-   * of its signals is a blind, unconditional "make this true" — `stop-assisted-notes` is safe
-   * to send again on every `stop()` instead, so nothing needs to remember that it already ran
-   * once. Always `false` for an explicit-kind recorder.
-   */
-  #idleGuaranteed = false;
   /**
    * True once any control signal was confirmed `sent`. `ShorthandControl.send()` reports `sent`
    * only when the control child exited 0, and it only exits at all because
@@ -462,7 +439,7 @@ export class ShorthandRecorder {
       // Only this recorder's own mode: `refused` carries no request id (FOLLOW_STREAM.md),
       // so a refusal for some other mode, or some other caller's command, is not evidence
       // about this recorder's own outstanding start.
-      if (this.#signals.kind === "explicit" && record.mode === this.#signals.mode && record.reason !== undefined) {
+      if (record.mode === this.#signals.mode && record.reason !== undefined) {
         this.#lastRefusalReason = record.reason;
         this.#refusalSeq += 1;
         resolveAll(this.#refusalWaiters);
@@ -470,7 +447,7 @@ export class ShorthandRecorder {
       return;
     }
     if (record.t === "start_failed") {
-      if (this.#signals.kind === "explicit" && record.mode === this.#signals.mode && record.message !== undefined) {
+      if (record.mode === this.#signals.mode && record.message !== undefined) {
         this.#lastStartFailedMessage = record.message;
         this.#lastStartFailedCode = record.code;
         this.#startFailedSeq += 1;
@@ -504,8 +481,6 @@ export class ShorthandRecorder {
       this.#followedSession = record.session;
       if (record.t === "begin") this.#followedMode = record.mode;
       this.#expectingSession = false;
-      // A recording is running, so whatever cancel preceded it no longer describes Shorthand.
-      this.#idleGuaranteed = false;
       resolveAll(this.#beginWaiters);
       return;
     }
@@ -521,9 +496,9 @@ export class ShorthandRecorder {
   /**
    * Whether a terminal record ends the recording this capture is responsible for.
    *
-   * While `#expectingSession` is set the answer is always no: a toggle-kind start sequence's
-   * own `--cancel` makes Shorthand emit a terminal record for the recording it just ended, and
-   * that record can land *after* the start signal was sent. This capture's own session
+   * While `#expectingSession` is set the answer is always no: a recording Shorthand was
+   * already running when this capture's start signal arrived emits its own terminal record,
+   * and that record can land *after* the start signal was sent. This capture's own session
    * announces itself first — with `begin`, or with a `partial` when `begin` was missed — so a
    * terminal record arriving before any of that belongs to the previous recording. Erring the
    * other way discarded a live recording; erring this way at worst leaves the caller believing
@@ -542,8 +517,8 @@ export class ShorthandRecorder {
     // and means nothing about ours. Once the follower has reconnected, a *lower* id can only
     // have come from a different Shorthand process — so the recording we were following went with
     // the one that exited, and the belief must not carry across. Ending the belief is the safe
-    // direction: a toggle-kind finalize against an idle Shorthand would start a recording rather
-    // than end one, and it suppresses that signal for exactly this reason.
+    // direction: it stops this capture waiting out a finalize budget for a terminal record
+    // that can never arrive from a process that is already gone.
     return this.#reattached && record.session < this.#followedSession;
   }
 
@@ -578,11 +553,9 @@ export class ShorthandRecorder {
     if (this.#stopping) return "stopped";
 
     const signals = this.#signals;
-    if (signals.kind === "toggle") return this.#runToggleStart(signals.signal);
-
-    // Explicit kind must not go out blind, unlike toggle kind above: an older app that
-    // predates the pair would otherwise refuse the flag itself with a clap error surfaced
-    // only after the plugin had already entered capturing state.
+    // The start must not go out blind: an app old enough to predate this mode's explicit
+    // pair would refuse the flag itself with a clap error, surfaced only after the plugin
+    // had already entered capturing state.
     if (!gotHello) {
       this.#startFailure = { kind: "no-hello" };
       return "not-started";
@@ -596,50 +569,16 @@ export class ShorthandRecorder {
   }
 
   /**
-   * Meeting's path. `--cancel` always lands Shorthand in idle and is a no-op when it already
-   * is, so the toggle that follows can only ever turn recording *on*. The two must be
-   * sequential — fired together, the cancel could undo the toggle it raced.
-   *
-   * This whole dance exists only because `signal` is a genuine toggle: no explicit
-   * start/stop pair exists for Meeting. See `#runExplicitStart` for the path that does not
-   * need it.
-   */
-  async #runToggleStart(signal: ControlSignal): Promise<RecorderStartOutcome> {
-    if (!await this.#send("cancel", "start")) return "not-started";
-    this.#markIdle();
-    if (this.#stopping) return "stopped";
-    const toggled = await this.#send(signal, "start");
-    if (toggled) {
-      // Not unconditionally true. Shorthand announces the session when it acts on the
-      // toggle, not when the forwarding process carrying it exits, so a `begin` can already
-      // have arrived during the await above and set this false. Overwriting it here would
-      // claim a session is still pending when the recorder is already following one.
-      this.#expectingSession = !this.#sessionLive;
-      this.#idleGuaranteed = false;
-    }
-    // The one check that cannot be a guard. A stop that arrived while that toggle was in
-    // flight could not stop the spawn — the process was already on its way to Shorthand — so
-    // the only way to end deterministically idle is to sequence a cancel *after* it. This
-    // is also what heals the teardown paths, which cannot await anything.
-    if (this.#stopping) {
-      await this.#recall();
-      return "stopped";
-    }
-    if (!toggled) return "not-started";
-    return "started";
-  }
-
-  /**
-   * Assisted Notes' path. `start-assisted-notes` is idempotent (FOLLOW_STREAM.md's table),
-   * so unlike the toggle above it never needs a forced known state to be safe: sending it
-   * against an idle, already-capturing, or busy Shorthand each converge on the right answer
-   * without help. Nothing here sends a `--cancel`.
+   * The start sequence. The explicit `start` signal is idempotent (FOLLOW_STREAM.md's
+   * table), so it never needs a forced known state to be safe: sending it against an idle,
+   * already-capturing, or busy Shorthand each converge on the right answer without help.
+   * Nothing here sends a `--cancel`.
    *
    * "Already capturing" is read from `#reportedRecordingMode` — capture_state's own report,
    * taken at attach — rather than inferred from an observed `begin`; see that field's own
    * comment for why the inference it replaces had a real gap.
    */
-  async #runExplicitStart(signals: ExplicitSignals): Promise<RecorderStartOutcome> {
+  async #runExplicitStart(signals: RecorderSignals): Promise<RecorderStartOutcome> {
     // Whether *any* session — of any mode — was already live before this call sent
     // anything, observed via a `begin`/`partial` this module saw directly (as opposed to
     // reported by capture_state, checked separately below). Deliberately mode-agnostic: the
@@ -651,7 +590,7 @@ export class ShorthandRecorder {
     const startFailedSeqBeforeSend = this.#startFailedSeq;
     const sent = await this.#send(signals.start, "start");
     if (this.#stopping) {
-      // Nothing to recall if the start was never delivered; `stop-assisted-notes` is
+      // Nothing to recall if the start was never delivered; the `stop` signal is
       // idempotent, so sending it unconditionally otherwise costs nothing even if the start
       // turns out to have been refused a moment later.
       if (sent) await this.#send(signals.stop, "recall");
@@ -821,44 +760,32 @@ export class ShorthandRecorder {
    * waiting for a record that can no longer be delivered by anyone.
    */
   async stop(options: RecorderStopOptions = {}): Promise<RecorderStopOutcome> {
-    this.#stopping = true;
+    // `requestStop()`, not a bare flag write: a start sequence parked on the acknowledgement
+    // wait is *awaiting* that flag rather than re-reading it at a checkpoint, so setting it
+    // alone would leave this stop blocked behind the whole acknowledgement budget before it
+    // could even send the stop signal.
+    this.requestStop();
     await this.#startSequence;
     // Shorthand is gone, so there is no recording left to finalize and no signal worth sending:
     // a control spawn with nothing to forward to *becomes* the Shorthand app starting up, which
     // would answer a dead-Shorthand stop by launching Shorthand.
     if (options.shorthandDown === true) return "shorthand-down";
-    return this.#signals.kind === "toggle"
-      ? this.#stopToggle(this.#signals.signal, options)
-      : this.#stopExplicit(this.#signals, options);
+    return this.#stopExplicit(this.#signals, options);
   }
 
-  async #stopToggle(signal: ControlSignal, options: RecorderStopOptions): Promise<RecorderStopOutcome> {
-    // The start sequence recalled itself; Shorthand is idle and there is nothing to finalize.
-    if (this.#idleGuaranteed) return "idle";
+  async #stopExplicit(signals: RecorderSignals, options: RecorderStopOptions): Promise<RecorderStopOutcome> {
     if (!this.#sessionLive && this.#expectingSession) {
-      // Mirror of the reconnect case: the start toggle landed but `begin` has not arrived
-      // yet (~100ms). Waiting turns the race into an ordinary stop. If `begin` never comes
-      // no toggle is sent — a toggle against an idle Shorthand would *start* a recording —
-      // and the caller's cancel backstop is what still guarantees idle.
-      await Promise.race([this.#waitFor(this.#beginWaiters), this.#delay(this.#beginGraceMs)]);
-    }
-    if (!this.#sessionLive) return "no-session";
-    if (!await this.#send(signal, "finalize")) return "not-finalized";
-    return this.#waitForFinalize(options);
-  }
-
-  async #stopExplicit(signals: ExplicitSignals, options: RecorderStopOptions): Promise<RecorderStopOutcome> {
-    if (!this.#sessionLive && this.#expectingSession) {
-      // Same gap as the toggle path above: the start signal landed but `begin` has not
-      // arrived yet. Waiting turns the race into an ordinary stop.
+      // The start signal landed but `begin` has not arrived yet (~100ms). Waiting turns the
+      // race into an ordinary stop.
       await Promise.race([this.#waitFor(this.#beginWaiters), this.#delay(this.#beginGraceMs)]);
     }
     if (!this.#sessionLive) {
-      // Sent anyway, best-effort: `stop-assisted-notes` is documented idempotent against an
-      // idle Shorthand (FOLLOW_STREAM.md's table) — unlike a toggle it can never itself
-      // start something by mistake — so there is nothing to lose by sending it as a safety
-      // net for a belief this module could have gotten wrong (a missed `begin`), and no
-      // reason to make the caller wait for a terminal record that will never arrive.
+      // Sent anyway, best-effort: the `stop` signal is documented idempotent against an
+      // idle Shorthand (FOLLOW_STREAM.md's table) — unlike the toggle this path replaced it
+      // can never itself start something by mistake — so there is nothing to lose by sending
+      // it as a safety net for a belief this module could have gotten wrong (a missed
+      // `begin`), and no reason to make the caller wait for a terminal record that will
+      // never arrive.
       await this.#send(signals.stop, "finalize");
       return "no-session";
     }
@@ -895,38 +822,22 @@ export class ShorthandRecorder {
    * Synchronous teardown, for Obsidian's shutdown hooks, which do not await. Detached because
    * there is no result anyone could still act on.
    *
-   * Toggle kind sends `--cancel`, never the toggle itself: the toggle would *start* a
-   * recording if Shorthand happened to be idle. Explicit kind sends its own `stop` signal
-   * instead — idempotent, so equally safe against an idle Shorthand, and scoped to this mode
-   * rather than cancelling whatever else might be running.
+   * The mode's own `stop` signal, not `--cancel`: idempotent, so equally safe against an idle
+   * Shorthand, scoped to this mode rather than cancelling whatever else might be running, and
+   * it finalizes the recording rather than discarding what Shorthand has corrected.
    */
   teardown(): void {
     this.#stopping = true;
-    this.#control.sendDetached(this.#signals.kind === "toggle" ? "cancel" : this.#signals.stop);
+    this.#control.sendDetached(this.#signals.stop);
   }
 
   /**
    * Last-resort stop once nothing is left to finalize. Fire-and-forget on purpose:
-   * guaranteeing Shorthand is not left recording outranks everything else here. Toggle kind
-   * sends `--cancel` (a no-op against an idle Shorthand); explicit kind sends its own
-   * idempotent `stop`, for the same reason `teardown()` prefers it — see that method.
+   * guaranteeing Shorthand is not left recording outranks everything else here. The mode's
+   * own idempotent `stop`, for the same reason `teardown()` prefers it — see that method.
    */
   backstop(): void {
-    void this.#send(this.#signals.kind === "toggle" ? "cancel" : this.#signals.stop, "backstop");
-  }
-
-  /** Toggle kind only: sends the disambiguating cancel that ends a recalled start sequence idle. */
-  async #recall(): Promise<void> {
-    if (this.#idleGuaranteed) return;
-    if (await this.#send("cancel", "recall")) this.#markIdle();
-  }
-
-  #markIdle(): void {
-    this.#sessionLive = false;
-    this.#followedSession = undefined;
-    this.#followedMode = undefined;
-    this.#expectingSession = false;
-    this.#idleGuaranteed = true;
+    void this.#send(this.#signals.stop, "backstop");
   }
 
   /**

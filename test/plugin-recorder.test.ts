@@ -11,7 +11,7 @@ import {
 
 /**
  * These tests exist because two shipped defects were both orderings, not values: a start
- * sequence whose spawned toggle could not be recalled once a stop overtook it, and a stop
+ * sequence whose spawned signal could not be recalled once a stop overtook it, and a stop
  * that tore the follower down while Shorthand was still computing the `final`. Nothing that
  * asserts on settings booleans can see either one, so every test here asserts on the
  * *sequence* of control signals and on when `stop()` is allowed to resolve.
@@ -99,10 +99,17 @@ const ATTACH_GRACE_MS = 2_000;
 const BEGIN_GRACE_MS = 1_500;
 const FINALIZE_TIMEOUT_MS = 45_000;
 const START_ACK_MS = 3_000;
-const TOGGLE: ControlSignal = "toggle-transcription";
+const MEETING_START: ControlSignal = "start-transcription";
+const MEETING_STOP: ControlSignal = "stop-transcription";
+const MEETING_CAPABILITIES: string[] = [MEETING_START, MEETING_STOP];
 const ASSISTED_START: ControlSignal = "start-assisted-notes";
 const ASSISTED_STOP: ControlSignal = "stop-assisted-notes";
 const ASSISTED_CAPABILITIES: string[] = [ASSISTED_START, ASSISTED_STOP];
+
+/** The `hello` a Meeting recorder needs before it will send anything at all. */
+function meetingHello(): Promise<HelloInfo> {
+  return Promise.resolve<HelloInfo>({ capabilities: MEETING_CAPABILITIES });
+}
 
 function build(overrides: Partial<RecorderOptions> = {}) {
   const control = new FakeControl();
@@ -110,7 +117,13 @@ function build(overrides: Partial<RecorderOptions> = {}) {
   const reports: Array<{ phase: RecorderPhase; result: ControlResult }> = [];
   const recorder = new ShorthandRecorder({
     control,
-    signals: { kind: "toggle", signal: TOGGLE },
+    signals: {
+      mode: "meeting",
+      start: MEETING_START,
+      stop: MEETING_STOP,
+      requiredCapabilities: MEETING_CAPABILITIES,
+      startAcknowledgementMs: START_ACK_MS,
+    },
     report: (phase, result) => { reports.push({ phase, result }); },
     finalizeTimeoutMs: FINALIZE_TIMEOUT_MS,
     attachGraceMs: ATTACH_GRACE_MS,
@@ -121,11 +134,10 @@ function build(overrides: Partial<RecorderOptions> = {}) {
   return { control, clock, reports, recorder };
 }
 
-/** Assisted Notes' explicit, capability-gated recorder, built with the same fakes. */
+/** Assisted Notes' recorder, built with the same fakes; `build()` is Meeting's. */
 function buildExplicit(overrides: Partial<RecorderOptions> = {}, signalsOverrides: Record<string, unknown> = {}) {
   return build({
     signals: {
-      kind: "explicit",
       mode: "assisted-notes",
       start: ASSISTED_START,
       stop: ASSISTED_STOP,
@@ -135,6 +147,29 @@ function buildExplicit(overrides: Partial<RecorderOptions> = {}, signalsOverride
     } as RecorderOptions["signals"],
     ...overrides,
   });
+}
+
+/**
+ * The ordinary opening of a capture: the start signal goes out, and Shorthand answers with the
+ * `begin` that resolves the start sequence. Unlike the toggle path this replaced, a start does
+ * not settle on the signal being delivered — a `sent` flag is not proof a recording began, so
+ * the sequence waits for `begin`, `refused` or `start_failed`.
+ */
+async function startCapture(recorder: ShorthandRecorder, session = 1): Promise<void> {
+  const started = recorder.start(meetingHello());
+  await flush();
+  recorder.observe({ t: "begin", session, mode: "meeting" });
+  expect(await outcomeOf(started)).toBe("started");
+}
+
+/**
+ * A start that has been delivered but not yet answered: the `begin` gap. The start sequence
+ * is deliberately left unsettled — the recorder retains it, and `stop()` awaits it — so this
+ * returns nothing for a caller to accidentally await.
+ */
+async function startPending(recorder: ShorthandRecorder): Promise<void> {
+  void recorder.start(meetingHello());
+  await flush();
 }
 
 /** Lets every queued microtask and continuation run. */
@@ -213,34 +248,32 @@ describe("what the recorder knows about Shorthand having been reached", () => {
 
   test("a confirmed start sequence records that Shorthand was up", async () => {
     const { recorder } = build();
-    await expectSettled(recorder.start(Promise.resolve()));
+    await startPending(recorder);
     expect(recorder.controlConfirmed).toBe(true);
   });
 
   test("a signal that never reached Shorthand claims nothing", async () => {
     const { control, recorder } = build();
     control.nextResult = { status: "not-running" };
-    await expectSettled(recorder.start(Promise.resolve()));
+    await startPending(recorder);
     expect(recorder.controlConfirmed).toBe(false);
   });
 
   test("a failed signal claims nothing", async () => {
     const { control, recorder } = build();
     control.rejectOnSend = true;
-    await expectSettled(recorder.start(Promise.resolve()));
+    await startPending(recorder);
     expect(recorder.controlConfirmed).toBe(false);
   });
 
-  // The whole reproduced failure, end to end: the follower never attaches and exits 2, but the
-  // start sequence has put Shorthand into recording. Reading that exit as proof skipped the
-  // backstop and left the microphone hot; the recorder's own evidence is what defeats it.
-  test("a recording started against a follower that never attached is not a down Shorthand", async () => {
-    const { control, clock, recorder } = build();
-    const started = recorder.start(new Promise<void>(() => {}));
-    await flush();
-    clock.fire(ATTACH_GRACE_MS);
-    await expectSettled(started);
-    expect(control.signals()).toEqual(["cancel", TOGGLE]);
+  // The whole reproduced failure, end to end: the follower attaches, the start sequence puts
+  // Shorthand into recording, and then the follower dies and exits 2 before any session record
+  // arrives. Reading that exit as proof skipped the backstop and left the microphone hot; the
+  // recorder's own evidence is what defeats it.
+  test("a recording this capture started is not a down Shorthand, whatever the follower's exit says", async () => {
+    const { control, recorder } = build();
+    await startPending(recorder);
+    expect(control.signals()).toEqual([MEETING_START]);
     expect(recorder.mayBeRecording).toBe(true);
     expect(recorder.observedSession).toBe(false);
 
@@ -254,82 +287,93 @@ describe("what the recorder knows about Shorthand having been reached", () => {
 });
 
 describe("the start sequence", () => {
-  test("cancels first and only then toggles, never both at once", async () => {
+  test("sends the mode's start signal once, and nothing else", async () => {
     const { control, recorder } = build();
-    await expectSettled(recorder.start(Promise.resolve()));
+    await startPending(recorder);
     expect(control.log).toEqual([
-      "send:cancel",
-      "done:cancel",
-      `send:${TOGGLE}`,
-      `done:${TOGGLE}`,
+      `send:${MEETING_START}`,
+      `done:${MEETING_START}`,
     ]);
-    // Sequential, not merely ordered: a cancel still in flight could undo the toggle.
+    // No `--cancel` ahead of it. `start-transcription` is idempotent (FOLLOW_STREAM.md's
+    // table), so unlike the toggle this path replaced it never needs a forced known state
+    // to be safe — which is also what removed the second spawn.
     expect(control.maxInFlight).toBe(1);
   });
 
   test("waits for the follower to attach before signalling anything", async () => {
     const { control, recorder } = build();
-    let attach = (): void => {};
-    const attached = new Promise<void>((resolveAttach) => { attach = resolveAttach; });
+    let attach = (info: HelloInfo): void => { void info; };
+    const attached = new Promise<HelloInfo>((resolveAttach) => { attach = resolveAttach; });
     const started = recorder.start(attached);
     await flush();
     expect(control.signals()).toEqual([]);
-    attach();
-    await expectSettled(started);
-    expect(control.signals()).toEqual(["cancel", TOGGLE]);
+    attach({ capabilities: MEETING_CAPABILITIES });
+    await flush();
+    expect(control.signals()).toEqual([MEETING_START]);
+    // Still unsettled: delivery is not proof a recording began, so the sequence waits for
+    // `begin`, `refused` or `start_failed`.
+    expect(await outcomeOf(started.then(() => "settled" as const))).toBe("still-waiting");
   });
 
-  test("signals anyway once the attach grace expires", async () => {
+  /**
+   * The one thing the toggle path did differently, and deliberately no longer does: it
+   * signalled anyway once the attach grace expired, on the theory that a recording nobody is
+   * following beats no recording. An explicit start cannot do that — the capability gate has
+   * nothing to read without a `hello` — and the trade is the right way round now, because a
+   * blind start is exactly what left the plugin unable to tell whether a stop would finalize
+   * a recording or start one.
+   */
+  test("sends nothing at all when no hello arrives before the grace expires", async () => {
     const { control, clock, recorder } = build();
-    const started = recorder.start(new Promise<void>(() => {}));
+    const started = recorder.start(new Promise<HelloInfo>(() => {}));
     await flush();
     expect(control.signals()).toEqual([]);
     clock.fire(ATTACH_GRACE_MS);
-    await expectSettled(started);
-    expect(control.signals()).toEqual(["cancel", TOGGLE]);
+    expect(await outcomeOf(started)).toBe("not-started");
+    expect(recorder.startFailure).toEqual({ kind: "no-hello" });
+    expect(control.signals()).toEqual([]);
   });
 
-  test("does not toggle when the cancel never reached Shorthand", async () => {
-    const { control, reports, recorder } = build();
-    control.nextResult = { status: "not-running" };
-    await expectSettled(recorder.start(Promise.resolve()));
-    // Shorthand's state is unknown again, and a blind toggle is exactly what leaves it
-    // recording with nobody following.
-    expect(control.signals()).toEqual(["cancel"]);
-    expect(reports).toEqual([{ phase: "start", result: { status: "not-running" } }]);
+  test("sends nothing when the app is too old to advertise the pair", async () => {
+    const { control, recorder } = build();
+    const outcome = await recorder.start(Promise.resolve<HelloInfo>({ capabilities: ["toggle-transcription"] }));
+    expect(outcome).toBe("not-started");
+    expect(recorder.startFailure).toEqual({ kind: "unsupported" });
+    expect(control.signals()).toEqual([]);
   });
 });
 
 describe("the stop sequence", () => {
-  test("toggles a live session and waits for the terminal record before returning", async () => {
+  test("stops a live session and waits for the terminal record before returning", async () => {
     const { control, recorder } = build();
-    await expectSettled(recorder.start(Promise.resolve()));
-    recorder.observe({ t: "begin", session: 1 });
+    await startCapture(recorder, 1);
     let settled = false;
     const stopping = recorder.stop().then((outcome) => { settled = true; return outcome; });
     await flush();
-    expect(control.signals()).toEqual(["cancel", TOGGLE, TOGGLE]);
+    expect(control.signals()).toEqual([MEETING_START, MEETING_STOP]);
     // The whole point: the follower may not be torn down while Shorthand is computing `final`.
     expect(settled).toBe(false);
     recorder.observe({ t: "final", session: 1 });
     expect(await outcomeOf(stopping)).toBe("finalized");
   });
 
-  test("sends nothing when no session is live", async () => {
+  /**
+   * The stop signal goes out even when nothing is believed to be live — it is idempotent, so
+   * unlike a toggle it can never start a recording by mistake, and sending it is the safety
+   * net for a belief this module could have got wrong (a missed `begin`). What must never
+   * happen is a *start*.
+   */
+  test("still sends the stop signal when no session is live, and never a start", async () => {
     const { control, recorder } = build();
-    await expectSettled(recorder.start(Promise.resolve()));
-    recorder.observe({ t: "begin", session: 1 });
+    await startCapture(recorder, 1);
     recorder.observe({ t: "final", session: 1 });
-    const before = control.signals().length;
     expect(await outcomeOf(recorder.stop())).toBe("no-session");
-    // A toggle here would *start* a recording that nothing is left to stop.
-    expect(control.signals().length).toBe(before);
+    expect(control.signals()).toEqual([MEETING_START, MEETING_STOP]);
   });
 
   test("stops waiting once the transcript stream is gone", async () => {
     const { recorder } = build();
-    await expectSettled(recorder.start(Promise.resolve()));
-    recorder.observe({ t: "begin", session: 1 });
+    await startCapture(recorder, 1);
     let abandon = (): void => {};
     const abandoned = new Promise<void>((resolveAbandon) => { abandon = resolveAbandon; });
     let settled = false;
@@ -344,8 +388,7 @@ describe("the stop sequence", () => {
 
   test("gives up on the terminal record when the finalize budget expires", async () => {
     const { clock, recorder } = build();
-    await expectSettled(recorder.start(Promise.resolve()));
-    recorder.observe({ t: "begin", session: 1 });
+    await startCapture(recorder, 1);
     const stopping = recorder.stop();
     await flush();
     clock.fire(FINALIZE_TIMEOUT_MS);
@@ -355,8 +398,8 @@ describe("the stop sequence", () => {
   test("treats every session-ending record as terminal", async () => {
     for (const terminal of ["final", "no_speech", "cancel", "error"]) {
       const { recorder } = build();
-      await expectSettled(recorder.start(Promise.resolve()));
-      recorder.observe({ t: "begin", session: 1 });
+      await startPending(recorder);
+      recorder.observe({ t: "begin", session: 1, mode: "meeting" });
       expect(recorder.sessionLive).toBe(true);
       const stopping = recorder.stop();
       await flush();
@@ -376,8 +419,7 @@ describe("the stop sequence", () => {
 describe("a mid-recording reconnect", () => {
   test("does not make the plugin forget the live session it just asked Shorthand to finalize", async () => {
     const { control, recorder } = build();
-    await expectSettled(recorder.start(Promise.resolve()));
-    recorder.observe({ t: "begin", session: 1 });
+    await startCapture(recorder, 1);
     // The reconnect itself: the client's own bookkeeping is cleared here, and Shorthand resumes
     // partials for the same session without a new `begin`. The recorder is told nothing —
     // that is exactly the point, its state may not depend on the client's.
@@ -387,7 +429,7 @@ describe("a mid-recording reconnect", () => {
     let settled = false;
     const stopping = recorder.stop().then((outcome) => { settled = true; return outcome; });
     await flush();
-    expect(control.signals()).toEqual(["cancel", TOGGLE, TOGGLE]);
+    expect(control.signals()).toEqual([MEETING_START, MEETING_STOP]);
     expect(settled).toBe(false);
     recorder.observe({ t: "final", session: 1 });
     expect(await outcomeOf(stopping)).toBe("finalized");
@@ -396,62 +438,64 @@ describe("a mid-recording reconnect", () => {
 
 /**
  * C1. A spawned control process cannot be recalled, so a boolean guard checked *before*
- * the spawn cannot decide anything. Both interleavings must end deterministically idle.
+ * the spawn cannot decide anything. Both interleavings must end deterministically stopped —
+ * which the idempotent pair makes cheap: the recall is the same `stop` signal any other path
+ * would send, not a `--cancel` that discards what Shorthand had corrected.
  */
 describe("a stop that overtakes the start sequence", () => {
-  test("recalls a toggle that was already in flight, sequenced after it", async () => {
+  test("recalls a start that was already in flight, sequenced after it", async () => {
     const { control, recorder } = build();
     control.auto = false;
-    const started = recorder.start(Promise.resolve());
+    const started = recorder.start(meetingHello());
     await flush();
-    expect(control.release()).toBe("cancel");
-    await flush();
-    // The toggle is now a spawned process on its way to Shorthand. Nothing can take it back.
-    expect(control.signals()).toEqual(["cancel", TOGGLE]);
+    // The start is now a spawned process on its way to Shorthand. Nothing can take it back.
+    expect(control.signals()).toEqual([MEETING_START]);
 
     recorder.requestStop();
     const stopping = recorder.stop();
     await flush();
-    // The stop cannot fire its own signals while that toggle is unresolved.
-    expect(control.signals()).toEqual(["cancel", TOGGLE]);
+    // The stop cannot fire its own signals while that start is unresolved.
+    expect(control.signals()).toEqual([MEETING_START]);
 
-    expect(control.release()).toBe(TOGGLE);
+    expect(control.release()).toBe(MEETING_START);
     await flush();
-    expect(control.release()).toBe("cancel");
+    while (control.pending.length > 0) {
+      control.release();
+      await flush();
+    }
     await expectSettled(started);
-    expect(await outcomeOf(stopping)).toBe("idle");
-    expect(control.signals()).toEqual(["cancel", TOGGLE, "cancel"]);
-    // Whichever way the timing fell, the last thing Shorthand heard drives it to idle.
-    expect(control.signals().at(-1)).toBe("cancel");
+    expect(await outcomeOf(stopping)).toBe("no-session");
+    // Whichever way the timing fell, the last thing Shorthand heard drives it to idle — and
+    // only one start was ever sent, so nothing here can have begun a second recording.
+    expect(control.signals().at(-1)).toBe(MEETING_STOP);
+    expect(control.signals().filter((signal) => signal === MEETING_START)).toEqual([MEETING_START]);
   });
 
-  test("never spawns the toggle at all when the stop lands before it", async () => {
+  test("never spawns the start at all when the stop lands before it", async () => {
     const { control, recorder } = build();
-    control.auto = false;
-    const started = recorder.start(Promise.resolve());
-    await flush();
+    const started = recorder.start(meetingHello());
     recorder.requestStop();
     const stopping = recorder.stop();
-    expect(control.release()).toBe("cancel");
     await expectSettled(started);
-    expect(await outcomeOf(stopping)).toBe("idle");
-    expect(control.signals()).toEqual(["cancel"]);
-    expect(control.signals()).not.toContain(TOGGLE);
+    expect(await outcomeOf(stopping)).toBe("no-session");
+    expect(control.signals()).not.toContain(MEETING_START);
+    expect(control.signals().at(-1)).toBe(MEETING_STOP);
   });
 
   test("does not overlap the two sequences", async () => {
     const { control, recorder } = build();
     control.auto = false;
-    const started = recorder.start(Promise.resolve());
-    await flush();
-    control.release();
+    const started = recorder.start(meetingHello());
     await flush();
     recorder.requestStop();
     const stopping = recorder.stop();
     await flush();
     control.release();
     await flush();
-    control.release();
+    while (control.pending.length > 0) {
+      control.release();
+      await flush();
+    }
     await expectSettled(started);
     await expectSettled(stopping);
     expect(control.maxInFlight).toBe(1);
@@ -460,116 +504,117 @@ describe("a stop that overtakes the start sequence", () => {
 
 /**
  * The mirror of the reconnect case: Shorthand is recording but has not said `begin` yet, the
- * ~100ms between the start toggle landing and the session being announced.
+ * ~100ms between the start signal landing and the session being announced.
  */
 describe("a stop inside the begin gap", () => {
   test("waits for the begin and then finalizes normally", async () => {
     const { control, recorder } = build();
-    await expectSettled(recorder.start(Promise.resolve()));
+    await startPending(recorder);
     expect(recorder.sessionLive).toBe(false);
     expect(recorder.mayBeRecording).toBe(true);
 
     const stopping = recorder.stop();
     await flush();
-    // No finalize toggle yet — but no premature "nothing is recording" either.
-    expect(control.signals()).toEqual(["cancel", TOGGLE]);
-    recorder.observe({ t: "begin", session: 1 });
+    // The start sequence was still waiting for its acknowledgement, so the stop wakes it and
+    // it recalls itself with the same idempotent stop signal — no premature "nothing is
+    // recording", and nothing that could start anything.
+    expect(control.signals()).toEqual([MEETING_START, MEETING_STOP]);
+    recorder.observe({ t: "begin", session: 1, mode: "meeting" });
     await flush();
-    expect(control.signals()).toEqual(["cancel", TOGGLE, TOGGLE]);
+    // The recording announced itself after all, so the stop finalizes it properly rather
+    // than leaving it to the caller's backstop.
+    expect(control.signals()).toEqual([MEETING_START, MEETING_STOP, MEETING_STOP]);
     recorder.observe({ t: "final", session: 1 });
     expect(await outcomeOf(stopping)).toBe("finalized");
   });
 
-  test("sends no toggle when the begin never arrives", async () => {
+  test("still sends the stop when the begin never arrives", async () => {
     const { control, clock, recorder } = build();
-    await expectSettled(recorder.start(Promise.resolve()));
+    await startPending(recorder);
     const stopping = recorder.stop();
     await flush();
     expect(clock.pending(BEGIN_GRACE_MS)).toBe(true);
     clock.fire(BEGIN_GRACE_MS);
     expect(await outcomeOf(stopping)).toBe("no-session");
-    // The caller's cancel backstop is what guarantees idle here; a toggle would be a coin
-    // flip between finalizing and starting a recording nobody asked for.
-    expect(control.signals()).toEqual(["cancel", TOGGLE]);
+    // Best-effort, and safe: the stop signal cannot itself start anything, so there is
+    // nothing to lose by sending it against a belief that may simply be wrong — once as the
+    // start sequence's own recall, once as the stop itself.
+    expect(control.signals()).toEqual([MEETING_START, MEETING_STOP, MEETING_STOP]);
+    expect(control.signals().filter((signal) => signal === MEETING_START)).toEqual([MEETING_START]);
   });
 });
 
 /**
- * The start sequence deliberately proceeds when the follower has not attached within the
- * grace ("a recording nobody is following is still better than no recording"), and Shorthand
- * does not resend `begin` to a follower that attached late or reattached. Trusting only
- * `begin` therefore lost whole meetings: partials streamed in and filled the sidecar while
- * the recorder believed nothing was recording, so the stop sent no finalize and the backstop
- * cancel threw the corrected `final` away.
+ * Shorthand does not resend `begin` to a follower that reattached, so a whole meeting can
+ * stream in as partials with its `begin` never observed by anyone. Trusting only `begin` lost
+ * whole meetings: partials filled the sidecar while the recorder believed nothing was
+ * recording, so the stop sent no finalize and the backstop threw the corrected `final` away.
  */
 describe("a `begin` nobody was there to see", () => {
   test("finalizes on the strength of partials alone", async () => {
-    const { control, clock, recorder } = build();
-    const started = recorder.start(new Promise<void>(() => {}));
-    await flush();
-    // The follower never attaches; the sequence goes ahead once the grace expires, and the
-    // `begin` Shorthand emits moments later reaches nobody.
-    clock.fire(ATTACH_GRACE_MS);
-    await expectSettled(started);
+    const { control, recorder } = build();
+    await startPending(recorder);
+    // The follower reconnects and Shorthand resumes the session it never re-announces.
+    recorder.noteAttached();
     recorder.observe({ t: "partial", session: 4 });
     expect(recorder.sessionLive).toBe(true);
 
     const stopping = recorder.stop();
     await flush();
-    expect(control.signals()).toEqual(["cancel", TOGGLE, TOGGLE]);
+    expect(control.signals()).toEqual([MEETING_START, MEETING_STOP]);
     recorder.observe({ t: "final", session: 4 });
     expect(await outcomeOf(stopping)).toBe("finalized");
   });
 });
 
 /**
- * The start sequence's own `--cancel` makes Shorthand emit a terminal record for the recording
- * it just ended, and that record can land after the start toggle was already sent. Without
+ * A recording Shorthand was already running when this capture's start signal arrived emits
+ * its own terminal record, and that record can land after the start was already sent. Without
  * the session id it is indistinguishable from this capture's recording ending — and reading
  * it that way discarded the recording that had only just begun.
  */
 describe("records from the previous recording", () => {
-  test("the cancel of the recording the start sequence ended is not this capture's", async () => {
+  test("the previous recording ending is not this capture's session ending", async () => {
     const { control, recorder } = build();
-    await expectSettled(recorder.start(Promise.resolve()));
+    await startPending(recorder);
     expect(recorder.mayBeRecording).toBe(true);
 
     recorder.observe({ t: "cancel", session: 7 });
     expect(recorder.mayBeRecording).toBe(true);
 
-    recorder.observe({ t: "begin", session: 8 });
+    recorder.observe({ t: "begin", session: 8, mode: "meeting" });
     const stopping = recorder.stop();
     await flush();
-    expect(control.signals()).toEqual(["cancel", TOGGLE, TOGGLE]);
+    expect(control.signals()).toEqual([MEETING_START, MEETING_STOP]);
     recorder.observe({ t: "final", session: 8 });
     expect(await outcomeOf(stopping)).toBe("finalized");
   });
 
   test("a stop waiting for its session is not released by the previous one ending", async () => {
     const { control, recorder } = build();
-    await expectSettled(recorder.start(Promise.resolve()));
+    await startPending(recorder);
     const stopping = recorder.stop();
     await flush();
-    expect(control.signals()).toEqual(["cancel", TOGGLE]);
+    // One stop so far: the start sequence's own recall, woken by the stop request.
+    expect(control.signals()).toEqual([MEETING_START, MEETING_STOP]);
 
-    // The `--cancel` this very start sequence sent, ending the recording that was already
-    // running, reported back late. Taking it for this capture's session ends the stop with
-    // no finalize — and the recording it just started is then cancelled away unfinished.
+    // The previous recording, ended by Shorthand's own hotkey moments earlier, reported back
+    // late. Taking it for this capture's session ends the stop with no finalize — and the
+    // recording it just started is then left to the backstop unfinished.
     recorder.observe({ t: "cancel", session: 7 });
     await flush();
-    expect(control.signals()).toEqual(["cancel", TOGGLE]);
+    expect(control.signals()).toEqual([MEETING_START, MEETING_STOP]);
 
-    recorder.observe({ t: "begin", session: 8 });
+    recorder.observe({ t: "begin", session: 8, mode: "meeting" });
     await flush();
-    expect(control.signals()).toEqual(["cancel", TOGGLE, TOGGLE]);
+    expect(control.signals()).toEqual([MEETING_START, MEETING_STOP, MEETING_STOP]);
     recorder.observe({ t: "final", session: 8 });
     expect(await outcomeOf(stopping)).toBe("finalized");
   });
 
   test("a terminal record for another session does not end the live one", async () => {
     const { recorder } = build();
-    await expectSettled(recorder.start(Promise.resolve()));
-    recorder.observe({ t: "begin", session: 8 });
+    await startCapture(recorder, 8);
     recorder.observe({ t: "cancel", session: 7 });
     expect(recorder.sessionLive).toBe(true);
   });
@@ -577,7 +622,7 @@ describe("records from the previous recording", () => {
   test("are still proof that Shorthand was up and narrating", async () => {
     const { recorder } = build();
     expect(recorder.observedSession).toBe(false);
-    await expectSettled(recorder.start(Promise.resolve()));
+    await startPending(recorder);
     expect(recorder.observedSession).toBe(false);
     // Ignored as the previous recording's, but the caller needs it for a different question:
     // the follower's exit code 2 means "Shorthand is not running" *or* "streaming is off / the
@@ -589,14 +634,13 @@ describe("records from the previous recording", () => {
 
 /**
  * Shorthand quitting mid-capture can beat the stream's own settled handler to the user's Stop
- * press. A finalize toggle spawned then has no Shorthand to forward to, so it *becomes* Shorthand
+ * press. A stop signal spawned then has no Shorthand to forward to, so it *becomes* Shorthand
  * starting up — a dead-Shorthand stop that launches the app.
  */
 describe("a stop with Shorthand known to be gone", () => {
-  test("sends no finalize toggle even though a session looks live", async () => {
+  test("sends no stop signal even though a session looks live", async () => {
     const { control, recorder } = build();
-    await expectSettled(recorder.start(Promise.resolve()));
-    recorder.observe({ t: "begin", session: 1 });
+    await startCapture(recorder, 1);
     const before = control.signals().length;
     expect(await outcomeOf(recorder.stop({ shorthandDown: true }))).toBe("shorthand-down");
     expect(control.signals().length).toBe(before);
@@ -605,17 +649,15 @@ describe("a stop with Shorthand known to be gone", () => {
   test("still waits for the start sequence to finish first", async () => {
     const { control, recorder } = build();
     control.auto = false;
-    const started = recorder.start(Promise.resolve());
-    await flush();
-    expect(control.release()).toBe("cancel");
+    const started = recorder.start(meetingHello());
     await flush();
     const stopping = recorder.stop({ shorthandDown: true });
-    // Suppressing the toggle must not also drop the guarantee that the two sequences never
-    // overlap: the toggle already spawned is still on its way to Shorthand.
+    // Suppressing the stop must not also drop the guarantee that the two sequences never
+    // overlap: the start already spawned is still on its way to Shorthand.
     expect(await outcomeOf(stopping)).toBe("still-waiting");
-    expect(control.release()).toBe(TOGGLE);
+    expect(control.release()).toBe(MEETING_START);
     await flush();
-    expect(control.release()).toBe("cancel");
+    while (control.pending.length > 0) control.release();
     await expectSettled(started);
     expect(await outcomeOf(stopping)).toBe("shorthand-down");
   });
@@ -631,54 +673,46 @@ describe("requestStop on its own", () => {
   test("recalls an in-flight start with no stop() to back it up", async () => {
     const { control, recorder } = build();
     control.auto = false;
-    const started = recorder.start(Promise.resolve());
+    const started = recorder.start(meetingHello());
     await flush();
-    expect(control.release()).toBe("cancel");
-    await flush();
-    // The toggle is a spawned process now; nothing can take it back.
-    expect(control.signals()).toEqual(["cancel", TOGGLE]);
+    // The start is a spawned process now; nothing can take it back.
+    expect(control.signals()).toEqual([MEETING_START]);
 
     recorder.requestStop();
-    expect(control.release()).toBe(TOGGLE);
+    expect(control.release()).toBe(MEETING_START);
     await flush();
-    expect(control.release()).toBe("cancel");
+    expect(control.release()).toBe(MEETING_STOP);
     await expectSettled(started);
-    expect(control.signals()).toEqual(["cancel", TOGGLE, "cancel"]);
-    expect(control.signals().at(-1)).toBe("cancel");
+    expect(control.signals()).toEqual([MEETING_START, MEETING_STOP]);
   });
 
-  test("takes effect synchronously, in the same tick the toggle settles", async () => {
+  test("takes effect synchronously, in the same tick the start settles", async () => {
     const { control, recorder } = build();
     control.auto = false;
-    const started = recorder.start(Promise.resolve());
+    const started = recorder.start(meetingHello());
     await flush();
-    expect(control.release()).toBe("cancel");
-    await flush();
-    // The tightest interleaving: the toggle settles and the stop request lands before the
+    // The tightest interleaving: the start settles and the stop request lands before the
     // start sequence has resumed. A flag that took even one microtask to become visible
     // would let the sequence finish believing nothing had asked it to stop.
-    expect(control.release()).toBe(TOGGLE);
+    expect(control.release()).toBe(MEETING_START);
     recorder.requestStop();
     await flush();
-    expect(control.release()).toBe("cancel");
+    expect(control.release()).toBe(MEETING_STOP);
     await expectSettled(started);
-    expect(control.signals()).toEqual(["cancel", TOGGLE, "cancel"]);
+    expect(control.signals()).toEqual([MEETING_START, MEETING_STOP]);
   });
 
-  test("sends no second cancel when the toggle it recalls never reached Shorthand", async () => {
+  test("sends no recall when the start it would recall never reached Shorthand", async () => {
     const { control, recorder } = build();
     control.auto = false;
-    const started = recorder.start(Promise.resolve());
-    await flush();
-    control.release();                          // the cancel lands: Shorthand is idle
+    const started = recorder.start(meetingHello());
     await flush();
     recorder.requestStop();
-    control.release({ status: "not-running" }); // ...and the toggle never got there
+    control.release({ status: "not-running" }); // the start never got there
     await expectSettled(started);
-    // Nothing has changed Shorthand's state since the cancel that already proved it idle, so a
-    // recall would only be another spawn — and against a Shorthand that is not running, that
-    // spawn *is* the app starting up.
-    expect(control.signals()).toEqual(["cancel", TOGGLE]);
+    // Nothing was started, so there is nothing to recall — and against a Shorthand that is
+    // not running, another spawn *is* the app starting up.
+    expect(control.signals()).toEqual([MEETING_START]);
   });
 
   /**
@@ -694,14 +728,14 @@ describe("requestStop on its own", () => {
    */
   test("is visible to a start sequence unblocked by the very resolution that led here", async () => {
     const { control, recorder } = build();
-    let attach = (): void => {};
-    const attached = new Promise<void>((resolveAttach) => { attach = resolveAttach; });
+    let attach = (info: HelloInfo): void => { void info; };
+    const attached = new Promise<HelloInfo>((resolveAttach) => { attach = resolveAttach; });
     const started = recorder.start(attached);
     await flush();
     expect(control.signals()).toEqual([]);
 
     // The `close` handler: the buffered `hello` is flushed synchronously...
-    attach();
+    attach({ capabilities: MEETING_CAPABILITIES });
     // ...and `settled`'s own reaction, one hop later, is where `captureSettled` calls this.
     void Promise.resolve().then(() => { recorder.requestStop(); });
 
@@ -714,17 +748,18 @@ describe("requestStop on its own", () => {
   test("stop() sets the same flag itself, with no separate request", async () => {
     const { control, recorder } = build();
     control.auto = false;
-    const started = recorder.start(Promise.resolve());
-    await flush();
-    expect(control.release()).toBe("cancel");
+    const started = recorder.start(meetingHello());
     await flush();
     const stopping = recorder.stop();
-    expect(control.release()).toBe(TOGGLE);
+    expect(control.release()).toBe(MEETING_START);
     await flush();
-    expect(control.release()).toBe("cancel");
+    while (control.pending.length > 0) {
+      control.release();
+      await flush();
+    }
     await expectSettled(started);
-    expect(await outcomeOf(stopping)).toBe("idle");
-    expect(control.signals()).toEqual(["cancel", TOGGLE, "cancel"]);
+    expect(await outcomeOf(stopping)).toBe("no-session");
+    expect(control.signals().at(-1)).toBe(MEETING_STOP);
   });
 });
 
@@ -735,27 +770,25 @@ describe("requestStop on its own", () => {
  * on the recording *that* capture had just started.
  */
 describe("waiting for the start sequence on its own", () => {
-  test("does not resolve until the recall sequenced behind the toggle has landed", async () => {
+  test("does not resolve until the recall sequenced behind the start has landed", async () => {
     const { control, recorder } = build();
     control.auto = false;
-    const started = recorder.start(Promise.resolve());
+    const started = recorder.start(meetingHello());
     await flush();
-    expect(control.release()).toBe("cancel");
-    await flush();
-    // The toggle is spawned and unrecallable; the stream has just died.
+    // The start is spawned and unrecallable; the stream has just died.
     recorder.requestStop();
     const waiting = recorder.whenStartSettled();
     expect(await outcomeOf(waiting.then(() => "settled" as const))).toBe("still-waiting");
 
-    expect(control.release()).toBe(TOGGLE);
+    expect(control.release()).toBe(MEETING_START);
     await flush();
     // Still not settled: the recall this sequence owes has not even been answered yet.
     expect(await outcomeOf(waiting.then(() => "settled" as const))).toBe("still-waiting");
-    expect(control.release()).toBe("cancel");
+    expect(control.release()).toBe(MEETING_STOP);
 
     await expectSettled(waiting);
     await expectSettled(started);
-    expect(control.signals()).toEqual(["cancel", TOGGLE, "cancel"]);
+    expect(control.signals()).toEqual([MEETING_START, MEETING_STOP]);
   });
 
   test("resolves immediately when no start sequence was ever run", async () => {
@@ -774,15 +807,12 @@ describe("what the recorder believes after its own recall", () => {
   test("a recalled start sequence leaves nothing believed to be recording", async () => {
     const { control, recorder } = build();
     control.auto = false;
-    const started = recorder.start(Promise.resolve());
+    const started = recorder.start(meetingHello());
     await flush();
-    expect(control.release()).toBe("cancel");
-    await flush();
-    expect(control.release()).toBe(TOGGLE);   // the toggle lands: Shorthand is recording
+    expect(control.release()).toBe(MEETING_START); // the start lands: Shorthand is recording
     recorder.requestStop();
     await flush();
-    expect(recorder.mayBeRecording).toBe(true);
-    expect(control.release()).toBe("cancel"); // ...and the recall lands: it is not any more
+    expect(control.release()).toBe(MEETING_STOP);  // ...and the recall lands: it is not any more
     await expectSettled(started);
     expect(recorder.mayBeRecording).toBe(false);
     expect(recorder.sessionLive).toBe(false);
@@ -791,54 +821,50 @@ describe("what the recorder believes after its own recall", () => {
 
 /**
  * MEDIUM-3. Shorthand's session counter is process-local and restarts at 1, so a session id is
- * only a name within one Shorthand process. A capture that followed session 5 and then lost Shorthand
- * to a restart kept believing session 5 was live — and a stop then sent the recording toggle
- * to an idle Shorthand, which *starts* a recording rather than ending one.
+ * only a name within one Shorthand process. A capture that followed session 5 and then lost
+ * Shorthand to a restart kept believing session 5 was live.
  */
 describe("a Shorthand restart in the middle of a capture", () => {
-  test("a toggle answered by a recording starting is not a finalize", async () => {
+  test("a different session beginning during the finalize wait ends it at once", async () => {
     const { control, recorder } = build();
     recorder.noteAttached();                    // the follower's first `hello`
-    await expectSettled(recorder.start(Promise.resolve()));
-    recorder.observe({ t: "begin", session: 5 });
+    await startCapture(recorder, 5);
     // Shorthand is killed. The recording dies with it and no terminal record reaches anyone; the
     // follower reconnects on its own and says `hello` to the *new* Shorthand, which is idle.
     recorder.noteAttached();
 
     const stopping = recorder.stop();
     await flush();
-    // Nothing contradicted the belief, so the finalize toggle is sent — and lands on an idle
-    // Shorthand, which answers it by starting a recording numbered from 1 again.
-    expect(control.signals()).toEqual(["cancel", TOGGLE, TOGGLE]);
+    // Nothing contradicted the belief, so the stop signal is sent — harmlessly, since it is a
+    // documented no-op against an idle app.
+    expect(control.signals()).toEqual([MEETING_START, MEETING_STOP]);
     expect(await outcomeOf(stopping)).toBe("still-waiting");
-    recorder.observe({ t: "begin", session: 1 });
-    // Said at once rather than after the whole 45s budget with a live microphone; the caller's
-    // `--cancel` backstop is what ends the recording that just started.
+    // A recording starting now — the user's own hotkey on the restarted app — proves the
+    // session being waited on is gone. Said at once rather than after the whole 45s budget
+    // with a live microphone.
+    recorder.observe({ t: "begin", session: 1, mode: "meeting" });
     expect(await outcomeOf(stopping)).toBe("restarted");
   });
 
   test("a lower session id after a reconnect ends the belief instead of carrying it across", async () => {
     const { control, recorder } = build();
     recorder.noteAttached();                    // the follower's first `hello`
-    await expectSettled(recorder.start(Promise.resolve()));
-    recorder.observe({ t: "begin", session: 5 });
+    await startCapture(recorder, 5);
     recorder.noteAttached();                    // ...and the reconnect's, to a restarted Shorthand
     // The restarted Shorthand's own first recording, started and ended by the user's hotkey. Id 1
     // cannot belong to the process that numbered ours 5.
     recorder.observe({ t: "cancel", session: 1 });
     expect(recorder.sessionLive).toBe(false);
 
-    const before = control.signals().length;
     expect(await outcomeOf(recorder.stop())).toBe("no-session");
-    // A toggle here would start a recording nothing is left to stop.
-    expect(control.signals().length).toBe(before);
+    // Best-effort and idempotent; never a start.
+    expect(control.signals()).toEqual([MEETING_START, MEETING_STOP]);
   });
 
   test("without a reconnect a lower id is just another session of the same Shorthand", async () => {
     const { recorder } = build();
     recorder.noteAttached();
-    await expectSettled(recorder.start(Promise.resolve()));
-    recorder.observe({ t: "begin", session: 5 });
+    await startCapture(recorder, 5);
     // The previous recording's terminal record, reported late. Same Shorthand, so ids are
     // comparable and this one simply is not ours.
     recorder.observe({ t: "cancel", session: 4 });
@@ -848,8 +874,7 @@ describe("a Shorthand restart in the middle of a capture", () => {
   test("a plain mid-recording reconnect does not forget the live session", async () => {
     const { control, recorder } = build();
     recorder.noteAttached();
-    await expectSettled(recorder.start(Promise.resolve()));
-    recorder.observe({ t: "begin", session: 5 });
+    await startCapture(recorder, 5);
     // The same Shorthand, still recording: a fresh follower, a fresh `hello`, and Shorthand resumes
     // partials for session 5 without a new `begin`. Dropping the belief here is what used to
     // cancel a live meeting away unfinalized.
@@ -858,7 +883,7 @@ describe("a Shorthand restart in the middle of a capture", () => {
     expect(recorder.sessionLive).toBe(true);
     const stopping = recorder.stop();
     await flush();
-    expect(control.signals()).toEqual(["cancel", TOGGLE, TOGGLE]);
+    expect(control.signals()).toEqual([MEETING_START, MEETING_STOP]);
     recorder.observe({ t: "final", session: 5 });
     expect(await outcomeOf(stopping)).toBe("finalized");
   });
@@ -874,8 +899,7 @@ describe("a Shorthand restart in the middle of a capture", () => {
 describe("records that are not session-scoped", () => {
   test("a session-less record is ignored rather than trusted", async () => {
     const { control, recorder } = build();
-    await expectSettled(recorder.start(Promise.resolve()));
-    recorder.observe({ t: "begin", session: 3 });
+    await startCapture(recorder, 3);
 
     // What a mis-routed connection-level error would look like.
     recorder.observe({ t: "error" });
@@ -883,7 +907,7 @@ describe("records that are not session-scoped", () => {
 
     const stopping = recorder.stop();
     await flush();
-    expect(control.signals()).toEqual(["cancel", TOGGLE, TOGGLE]);
+    expect(control.signals()).toEqual([MEETING_START, MEETING_STOP]);
     recorder.observe({ t: "final", session: 3 });
     expect(await outcomeOf(stopping)).toBe("finalized");
   });
@@ -930,57 +954,55 @@ describe("capture_state", () => {
 });
 
 describe("teardown and backstop", () => {
-  test("teardown sends a detached cancel and never a toggle", () => {
+  test("teardown sends the mode's stop signal, detached", () => {
     const { control, recorder } = build();
     recorder.teardown();
-    expect(control.log).toEqual(["detached:cancel"]);
+    expect(control.log).toEqual([`detached:${MEETING_STOP}`]);
   });
 
   test("teardown during an in-flight start still ends idle", async () => {
     const { control, recorder } = build();
     control.auto = false;
-    const started = recorder.start(Promise.resolve());
+    const started = recorder.start(meetingHello());
     await flush();
-    control.release();
-    await flush();
-    // Obsidian is quitting; nothing here can await the toggle that is already in flight.
+    // Obsidian is quitting; nothing here can await the start that is already in flight.
     recorder.teardown();
-    expect(control.release()).toBe(TOGGLE);
+    expect(control.release()).toBe(MEETING_START);
     await flush();
-    expect(control.release()).toBe("cancel");
+    while (control.pending.length > 0) {
+      control.release();
+      await flush();
+    }
     await expectSettled(started);
-    expect(control.signals()).toEqual(["cancel", TOGGLE, "cancel", "cancel"]);
-    expect(control.signals().at(-1)).toBe("cancel");
+    expect(control.signals().at(-1)).toBe(MEETING_STOP);
+    expect(control.signals().filter((signal) => signal === MEETING_START)).toEqual([MEETING_START]);
   });
 
-  test("the backstop is a single cancel", () => {
+  test("the backstop is a single stop signal", () => {
     const { control, reports, recorder } = build();
     recorder.backstop();
-    expect(control.signals()).toEqual(["cancel"]);
+    expect(control.signals()).toEqual([MEETING_STOP]);
     expect(reports.every(({ phase }) => phase === "backstop")).toBe(true);
   });
 });
 
+/**
+ * The start signal never reached Shorthand, so this capture started nothing — and then the
+ * user pressed Shorthand's own hotkey. A stop that concluded "nothing of mine is running"
+ * would finalize nothing and lose a live recording the capture is already ingesting.
+ */
 describe("a recording that started outside the start sequence", () => {
-  test("is finalized even though the last thing Shorthand confirmed was a cancel", async () => {
+  test("is finalized even though this capture's own start never landed", async () => {
     const { control, recorder } = build();
-    control.auto = false;
-    const started = recorder.start(Promise.resolve());
-    await flush();
-    control.release();                          // the cancel lands: Shorthand is idle
-    await flush();
-    control.release({ status: "not-running" }); // ...and the toggle never reaches it
-    await expectSettled(started);
-    expect(control.signals()).toEqual(["cancel", TOGGLE]);
+    control.nextResult = { status: "not-running" };
+    await startPending(recorder);
+    expect(control.signals()).toEqual([MEETING_START]);
 
-    // Shorthand comes up and the user presses its own hotkey. The cancel this sequence confirmed
-    // no longer describes Shorthand, and a stop that still believed it would return "idle" and
-    // finalize nothing — losing a live recording the capture is ingesting.
-    control.auto = true;
-    recorder.observe({ t: "begin", session: 1 });
+    control.nextResult = { status: "sent" };
+    recorder.observe({ t: "begin", session: 1, mode: "meeting" });
     const stopping = recorder.stop();
     await flush();
-    expect(control.signals()).toEqual(["cancel", TOGGLE, TOGGLE]);
+    expect(control.signals()).toEqual([MEETING_START, MEETING_STOP]);
     recorder.observe({ t: "final", session: 1 });
     expect(await outcomeOf(stopping)).toBe("finalized");
   });
@@ -990,15 +1012,14 @@ describe("control failures", () => {
   test("a rejected send neither throws nor unwinds the sequence", async () => {
     const { control, reports, recorder } = build();
     control.rejectOnSend = true;
-    await expectSettled(recorder.start(Promise.resolve()));
+    await startPending(recorder);
     expect(await outcomeOf(recorder.stop())).toBe("no-session");
     expect(reports[0]).toEqual({ phase: "start", result: { status: "error", message: "spawn rejected" } });
   });
 
   test("a rejected finalize resolves the stop rather than rejecting it", async () => {
     const { control, recorder } = build();
-    await expectSettled(recorder.start(Promise.resolve()));
-    recorder.observe({ t: "begin", session: 1 });
+    await startCapture(recorder, 1);
     control.rejectOnSend = true;
     // `start()` has its own catch; `stop()` has none, so a rejection here would propagate
     // out of Stop capture and unwind a capture that is otherwise perfectly healthy.
@@ -1008,7 +1029,7 @@ describe("control failures", () => {
   test("a send that throws synchronously is reported, not propagated", async () => {
     const { control, reports, recorder } = build();
     control.throwOnSend = true;
-    await expectSettled(recorder.start(Promise.resolve()));
+    await startPending(recorder);
     expect(reports.map(({ phase }) => phase)).toEqual(["start"]);
     expect(reports[0]?.result).toEqual({ status: "error", message: "spawn exploded" });
   });
@@ -1023,7 +1044,7 @@ describe("control failures", () => {
  * clearly and early, and to give a genuinely silent one a bound, while a real refusal or
  * failure is reported the moment its own record arrives rather than waited out.
  */
-describe("Assisted Notes: the explicit start/stop contract", () => {
+describe("the explicit start/stop contract", () => {
   test("capability present: starts directly (no cancel), and a begin resolves started", async () => {
     const { control, recorder } = buildExplicit();
     const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
@@ -1407,14 +1428,13 @@ describe("Assisted Notes: the explicit start/stop contract", () => {
     expect(control.signals()).not.toContain(ASSISTED_START);
   });
 
-  test("Meeting is unaffected: toggle kind keeps the legacy fire-and-forget contract", async () => {
+  test("Meeting takes the same contract, with its own signals", async () => {
     const { control, recorder } = build();
-    const started = recorder.start(Promise.resolve());
+    const started = recorder.start(meetingHello());
     await flush();
-    // No acknowledgement to wait for, so a confirmed toggle resolves "started" immediately —
-    // exactly the point at which the old `void`-returning start() used to settle.
+    expect(control.signals()).toEqual([MEETING_START]);
+    recorder.observe({ t: "begin", session: 1, mode: "meeting" });
     expect(await outcomeOf(started)).toBe("started");
     expect(recorder.startFailure).toBeUndefined();
-    expect(control.signals()).toEqual(["cancel", TOGGLE]);
   });
 });

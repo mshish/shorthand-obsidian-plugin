@@ -78,11 +78,14 @@ export type ShorthandPluginSettings = Readonly<{
    */
   noteTakingGuidance: string;
   /**
-   * Logs every enhancement status, plus core's per-transition machine trace, to the
-   * console. Off by default because the trace is one line per microstep. It exists
-   * because the two self-healing outcomes — a plain re-queue and a timeout — are
-   * deliberately silent in the UI, so a capture that keeps re-queueing looks identical
-   * to one that is idle. Snapshotted per capture, so it applies to the next one.
+   * Logs every enhancement status, plus core's per-transition machine trace, plus every
+   * capture lifecycle event (`src/capture-log.ts`), to the console. Off by default because
+   * the trace is one line per microstep. It exists because the outcomes that matter most are
+   * the ones with no UI: the two self-healing enhancement outcomes — a plain re-queue and a
+   * timeout — are deliberately silent, so a capture that keeps re-queueing looks identical to
+   * one that is idle, and every control signal that *worked* used to be invisible too, which
+   * left a misbehaving start or stop with no evidence but the user's recollection.
+   * Snapshotted per capture for the enhancement half, so that applies to the next one.
    */
   debugLogging: boolean;
   /** Advanced opt-in; local Claude/Codex history is deleted when false. */

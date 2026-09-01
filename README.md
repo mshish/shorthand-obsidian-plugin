@@ -84,7 +84,7 @@ Leave the API key field blank to keep the saved key. Use **Clear key** to remove
 
 **Control Shorthand recording** is on by default. Starting and stopping a capture also starts and stops the Shorthand recorder, so you do not need to use its global shortcut.
 
-Starting a Meeting capture cancels any recording already in progress, to guarantee a clean start. Starting an Assisted notes capture instead asks Shorthand to start Assisted notes specifically — it does not disturb a different recording that happens to be running, and it is safe to retry. If Shorthand quits during a capture, the plugin may reopen Shorthand to send the final stop command. Turn off **Control Shorthand recording** if you prefer to manage the recorder yourself.
+Starting a capture asks Shorthand to start that mode specifically — Meetings or Assisted notes — rather than toggling whatever it happens to be doing. It does not disturb a different recording that is already running, it is safe to retry, and Shorthand reports why if it declines. Stopping works the same way, so a stop can never start a recording by mistake. If Shorthand quits during a capture, the plugin may reopen Shorthand to send the final stop command. Turn off **Control Shorthand recording** if you prefer to manage the recorder yourself.
 
 The three recorder commands remain available as manual controls. They control Shorthand but do not start or stop an Obsidian capture.
 
