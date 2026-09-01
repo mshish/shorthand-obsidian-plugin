@@ -717,9 +717,11 @@ export default class ShorthandPlugin extends Plugin {
           enhancer?.appendTranscript(delta);
           if (enhancer !== undefined && this.settings.enableLiveEnhancement) {
             enhancer.requestTick();
-            console.log(
-              `[shorthand] transcript +${delta.length} chars; pending ${enhancer.state.pendingCharacters}/${this.settings.minNewChars} toward next pass`,
-            );
+            if (this.settings.debugLogging) {
+              console.log(
+                `[shorthand] transcript +${delta.length} chars; pending ${enhancer.state.pendingCharacters}/${this.settings.minNewChars} toward next pass`,
+              );
+            }
           }
           this.#render();
         });
@@ -1923,14 +1925,10 @@ class ShorthandSettingTab extends PluginSettingTab {
   }
 
   /**
-   * Always visible, at the bottom, no expander. This is what Obsidian core's own General,
-   * Editor, and Files and links tabs do.
-   *
-   * It is not a fallback for something better: the `visible` predicate that would hide these
-   * rows behind a condition belongs to the declarative settings API, which requires app
-   * version 1.13.0, and `manifest.json` declares `minAppVersion: 1.5.0`. `SettingGroup`
-   * (1.11.0) is out for the same reason, and the pre-1.13 imperative API has no documented
-   * collapsible primitive. Raising the floor to reach any of them means dropping users.
+   * Always visible, at the bottom, no expander. This settings tab still uses the imperative
+   * API throughout. The 1.13.7 marketplace floor makes the declarative API available, but
+   * converting only this section would split one surface across two ownership models. Keep
+   * Advanced visible until the whole tab and its conditional rows can migrate together.
    */
   private displayAdvanced(containerEl: HTMLElement): void {
     new Setting(containerEl).setName("Advanced").setHeading();
@@ -2407,13 +2405,11 @@ type PromptFieldHandle = Readonly<{ value: () => string; focus: () => void }>;
 /**
  * Both multi-line settings live in a modal rather than in the settings tab.
  *
- * Obsidian's declarative settings API has a first-class textarea control and its docs say to
- * start there — but it requires Obsidian 1.13.0 and this plugin's `minAppVersion` is 1.5.0, so
- * adopting it would mean dropping every user below 1.13.0 to add one setting. For the
- * imperative `display()` API this plugin does use, the documented answer to multi-line input
- * is a form modal. `Setting.addTextArea` exists but is the undocumented path, so the fields
- * here are raw textareas built the way ScaffoldModal builds its own buttons, and the mode
- * control is a `Setting` dropdown because Obsidian's imperative API has no radio group.
+ * Obsidian 1.13.7 makes the declarative settings API and its textarea control available. This
+ * modal remains part of the existing imperative settings surface until that surface migrates
+ * as a whole: it owns tested Default/Custom state, validation, focus recovery, and save timing
+ * that a one-control substitution would bypass. The raw textareas follow ScaffoldModal's form
+ * pattern, and the mode control remains an Obsidian `Setting` dropdown.
  */
 class NotePromptModal extends Modal {
   #settled = false;

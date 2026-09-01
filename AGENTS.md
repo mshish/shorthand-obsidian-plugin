@@ -113,10 +113,13 @@ falls back; nothing throws.
 
 ## Obsidian API constraints
 
-`manifest.json` declares `minAppVersion: 1.5.0` and the repo builds against
-`obsidian: 1.5.7` typings. The declarative settings API — the one with a
-first-class `textarea` control — requires 1.13.0+ and is therefore unavailable.
-Do not reach for it without raising the floor, which means dropping users.
+`manifest.json` declares `minAppVersion: 1.13.7` and the repo builds against
+`obsidian: 1.13.1`, the newest published typings for that app line. The
+declarative settings API is available at this floor and is the default for new
+settings surfaces. The existing settings tab
+predates it and remains wholly imperative until a dedicated migration can move
+its conditional rows, validation and focus behavior together; do not mix the
+two ownership models piecemeal.
 
 For the imperative `display()` API this plugin uses, Obsidian's guidance is that
 multi-line input belongs in a form modal rather than a settings-tab textarea.

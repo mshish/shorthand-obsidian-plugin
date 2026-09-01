@@ -10,6 +10,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   release:
@@ -63,6 +65,16 @@ jobs:
 
       - name: Unit tests
         run: npm test
+
+      # Obsidian recommends signed build provenance for Community directory submissions.
+      # Attest exactly the three files the directory installs from the GitHub Release.
+      - name: Generate artifact attestation
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            main.js
+            manifest.json
+            styles.css
 
       # Draft, not published: a human checks the attached assets and publishes by hand,
       # the same way 0.1.0 and 0.2.0 were cut. This also keeps a failed or half-finished

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createRequire } from "node:module";
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -47,6 +47,7 @@ const BUNDLE_SOURCES = [
   "package.json",
   "package-lock.json",
   "esbuild.config.mjs",
+  "third-party-licenses.mjs",
   "tsconfig.json",
 ];
 
@@ -83,6 +84,17 @@ function ensureBundle(): void {
 }
 
 describe("the built plugin bundle", () => {
+  test("embeds the license inventory users receive with the plugin", () => {
+    ensureBundle();
+    const bundle = readFileSync(BUNDLE, "utf8");
+    expect(bundle).toContain("/*! Shorthand third-party license notices");
+    expect(bundle).toContain("@anthropic-ai/claude-agent-sdk@");
+    expect(bundle).toContain("© Anthropic PBC. All rights reserved.");
+    expect(bundle).toContain("@openai/codex-sdk@");
+    expect(bundle).toContain("Apache License");
+    expect(bundle).toContain("shorthand-core@");
+  });
+
   test("loads under a stub obsidian and exports a Plugin class with onload/onunload", async () => {
     ensureBundle();
     const directory = await mkdtemp(join(tmpdir(), "shorthand-plugin-load-"));

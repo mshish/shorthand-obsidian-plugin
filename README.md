@@ -70,6 +70,8 @@ Claude Agent SDK is the default. It can look up related notes elsewhere in your 
 
 Codex uses your local Codex login. An LLM provider uses the provider, model, endpoint, and optional API key you enter in the plugin settings. Codex and LLM provider backends receive the current note and transcript, but they do not search the rest of your vault.
 
+Claude and Codex may send that material to the services associated with the account you signed in to. OpenAI and Anthropic provider profiles send it to those providers; an OpenAI-compatible profile sends it to the endpoint you configure. Ollama and other local compatible endpoints can keep that traffic on your machine. Shorthand itself does not collect telemetry.
+
 Provider credentials are stored outside the vault, so they are not copied by vault sync:
 
 - Windows: `%APPDATA%\Shorthand\llm-credentials.json`
@@ -108,6 +110,12 @@ Under **Note writing**, you can change the instructions used to write notes and 
 - Other notes in your vault only when the Claude backend performs a lookup
 - The local Shorthand transcript stream
 - The local AI command or provider you selected
+
+Outside the vault, the plugin launches the configured Shorthand, Claude, or Codex executable so it can receive transcripts or run the backend you selected. It directly manages the provider-credential file at the platform-specific path above and may create temporary or retained session files for the agent backends; the launched tools use their own account and configuration files. Those accesses are required to connect the recorder and enhancement backend. The plugin does not install or update those programs.
+
+## Third-party code
+
+The plugin's own source is MIT-licensed. The compiled `main.js` also bundles third-party libraries. In particular, the Anthropic Claude Agent SDK is non-open-source software, copyright Anthropic PBC, and its use is subject to [Anthropic's legal agreements](https://code.claude.com/docs/en/legal-and-compliance). The build appends an inventory and the applicable license text for every bundled dependency to `main.js`, so the file installed by Obsidian carries those notices.
 
 The plugin runs on desktop only. It does not include Shorthand, an AI model, or a cloud service.
 
