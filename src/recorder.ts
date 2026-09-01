@@ -283,10 +283,24 @@ export class ShorthandRecorder {
   readonly #refusalWaiters = new Set<() => void>();
   /** The `reason` off the `refused` record that last resolved `#refusalWaiters`. */
   #lastRefusalReason: string | undefined = undefined;
+  /**
+   * Incremented every time a `refused` matching this recorder's own mode arrives. `#send()`
+   * resolves only on the forwarding child's exit, not on Shorthand's own reaction to the flag
+   * it forwarded, so a refusal can land while a send is still in flight — before
+   * `#refusalWaiters` has any waiter registered with it (that only happens once the wait loop
+   * in `#runExplicitStart` starts) and before there is any other way to notice. `#runExplicitStart`
+   * snapshots this count immediately before its own send and compares it after, so only a
+   * refusal that arrived *during that exact send* trips the check — one recorded by an earlier
+   * capture already advanced the count before the snapshot was taken, so it cannot be replayed
+   * as this call's own answer.
+   */
+  #refusalSeq = 0;
   /** Explicit kind only: resolved when a `start_failed` matching this recorder's own mode arrives. */
   readonly #startFailedWaiters = new Set<() => void>();
   /** The `message` off the `start_failed` record that last resolved `#startFailedWaiters`. */
   #lastStartFailedMessage: string | undefined = undefined;
+  /** Same purpose as `#refusalSeq`, for `start_failed`. */
+  #startFailedSeq = 0;
 
   constructor(options: RecorderOptions) {
     this.#control = options.control;
@@ -396,6 +410,7 @@ export class ShorthandRecorder {
       // about this recorder's own outstanding start.
       if (this.#signals.kind === "explicit" && record.mode === this.#signals.mode && record.reason !== undefined) {
         this.#lastRefusalReason = record.reason;
+        this.#refusalSeq += 1;
         resolveAll(this.#refusalWaiters);
       }
       return;
@@ -403,6 +418,7 @@ export class ShorthandRecorder {
     if (record.t === "start_failed") {
       if (this.#signals.kind === "explicit" && record.mode === this.#signals.mode && record.message !== undefined) {
         this.#lastStartFailedMessage = record.message;
+        this.#startFailedSeq += 1;
         resolveAll(this.#startFailedWaiters);
       }
       return;
@@ -566,6 +582,8 @@ export class ShorthandRecorder {
    */
   async #runExplicitStart(signals: ExplicitSignals): Promise<RecorderStartOutcome> {
     const wasLiveBeforeSend = this.#sessionLive;
+    const refusalSeqBeforeSend = this.#refusalSeq;
+    const startFailedSeqBeforeSend = this.#startFailedSeq;
     const sent = await this.#send(signals.start, "start");
     if (this.#stopping) {
       // Nothing to recall if the start was never delivered; `stop-assisted-notes` is
@@ -583,16 +601,52 @@ export class ShorthandRecorder {
 
     // Shorthand can announce, refuse or fail the start before the await above resolves —
     // `#send()` only resolves on the forwarding child's exit, not on Shorthand's own reaction
-    // to the flag it forwarded. `#beginWaiters` is only populated once the wait loop below
-    // registers with it, so a `begin` landing in this exact gap would otherwise have its
-    // wakeup silently dropped (`resolveAll` on an empty set) and sit out the whole
-    // acknowledgement budget for a session that had already started. `wasLiveBeforeSend` is
-    // what keeps this safe against a session that was already live, for some *other* reason,
-    // before this capture ever sent anything: only one that became live *during this very
-    // call* can be the one `start-assisted-notes` just started.
-    if (this.#sessionLive && !wasLiveBeforeSend
+    // to the flag it forwarded. The waiter sets consulted below (and in the race loop further
+    // down) are only populated once that loop registers with them, so a record landing in this
+    // exact gap would otherwise have its wakeup silently dropped (`resolveAll` on an empty set)
+    // and sit out the whole acknowledgement budget. Everything from here to the loop is closing
+    // that gap for each record type that can arrive in it.
+    if (wasLiveBeforeSend) {
+      // The documented success no-op (FOLLOW_STREAM.md's table): Assisted Notes was already
+      // recording before this call sent anything, so asking it to start is already true, and
+      // Shorthand answers with silence — no `begin`, because nothing began. The requested
+      // state already holds, so adopt the session already being followed rather than fall
+      // through to a race nothing will ever resolve.
+      //
+      // Only when the live session's mode is *known* to be ours, though — unlike the freshly-
+      // arrived-`begin` branch below, `undefined` is not treated as a match here.
+      // `#followedMode` is `undefined` both for an app old enough to predate the `begin-mode`
+      // capability *and* for a mode core does not recognize at all, and that second case is
+      // definitely not us — it is some other, unrelated capture, and misreporting it as this
+      // command's own success would tell the plugin a note is being taken when it is not. The
+      // plugin already gates `#runExplicitStart` on `start-assisted-notes`/`stop-assisted-notes`,
+      // but nothing documented ties that pair to `begin-mode`, so a begin-mode-less app speaking
+      // the explicit pair is not ruled out — it simply does not get this fast path. It falls
+      // through to the race below, which (after the timeout fix in the `"timeout"` case) can
+      // never stop a session that predates this call either way, so the only cost of not
+      // adopting here is a slower, misreported `start-timeout` instead of `"started"`.
+      if (this.#followedMode === signals.mode) return "started";
+    } else if (this.#sessionLive
       && (this.#followedMode === undefined || this.#followedMode === signals.mode)) {
+      // Became live *during this call*, unlike the branch above: a `begin` arriving in direct
+      // response to the start just sent is far likelier to be it than a coincidental, unrelated
+      // capture racing the exact same window, so an unknown mode is treated as a match here.
       return "started";
+    }
+    // A `refused` or `start_failed` for our own mode landing in the same send-in-flight gap.
+    // The sequence numbers were snapshotted immediately before the send above, so a reason
+    // recorded by an *earlier* capture — which would already have advanced the count before
+    // this call ever started — cannot be mistaken for this one's answer; only a change that
+    // happened during this exact window trips these.
+    if (this.#refusalSeq !== refusalSeqBeforeSend) {
+      this.#expectingSession = false;
+      this.#startFailure = { kind: "refused", reason: this.#lastRefusalReason ?? "" };
+      return "not-started";
+    }
+    if (this.#startFailedSeq !== startFailedSeqBeforeSend) {
+      this.#expectingSession = false;
+      this.#startFailure = { kind: "start-failed", message: this.#lastStartFailedMessage ?? "" };
+      return "not-started";
     }
 
     // Backstop only, from here down: a real refusal or failure is caught by the race below
@@ -636,10 +690,15 @@ export class ShorthandRecorder {
           // Never a second start: Shorthand accepted delivery and simply never replied — a
           // genuinely silent app, not a refusal (those arrive as their own record) — so
           // retrying here would only risk a second identical command racing the first's own
-          // eventual, merely-late reply. `stop` is sent as a backstop instead: idempotent, so
-          // harmless if nothing is actually running, and the only way to guarantee idle if
-          // the silence hid a start this module never got to see confirmed.
-          await this.#send(signals.stop, "backstop");
+          // eventual, merely-late reply. `stop` is sent as a backstop instead, but only when
+          // nothing was already live *before this call's own send* (`wasLiveBeforeSend`):
+          // only then can the silence be hiding a start this call itself might have caused,
+          // which is what the backstop exists to guarantee idle against. A session that
+          // predates this call was never this command's to end — sending `stop` for one is
+          // exactly the bug this module exists to prevent, a retry-safe idempotent command
+          // tearing down a capture it was never asked to touch. When it does apply, it is
+          // otherwise harmless: idempotent, so a no-op if nothing is actually running.
+          if (!wasLiveBeforeSend) await this.#send(signals.stop, "backstop");
           this.#expectingSession = false;
           this.#startFailure = { kind: "start-timeout" };
           return "not-started";

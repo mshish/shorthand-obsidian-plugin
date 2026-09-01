@@ -1024,6 +1024,62 @@ describe("Assisted Notes: the explicit start/stop contract", () => {
     expect(recorder.startFailure).toBeUndefined();
   });
 
+  /**
+   * P1. A start issued while Assisted Notes is already recording — from Shorthand's own
+   * hotkey, say — is the documented success no-op (FOLLOW_STREAM.md's table): Shorthand
+   * answers with silence, no `begin`, because nothing began. Before this fix the shortcut's
+   * `!wasLiveBeforeSend` guard (correctly keeping a pre-existing *unrelated* session from
+   * falsely satisfying it — see the next test) also blocked this case from ever being
+   * recognized, so the race ran to its deadline and the timeout backstop sent `stop`,
+   * ending the very recording this idempotent command was supposed to leave untouched.
+   */
+  test("a start issued while this mode is already recording adopts the session, and stop is never sent", async () => {
+    const { control, recorder } = buildExplicit();
+    // Already recording before this capture's start sequence ever ran.
+    recorder.observe({ t: "begin", session: 1, mode: "assisted-notes" });
+    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+    expect(await outcomeOf(started)).toBe("started");
+    expect(recorder.startFailure).toBeUndefined();
+    // The start signal still goes out once — idempotent, so it needs no forced known state —
+    // but nothing beyond that, and in particular no `stop-assisted-notes`.
+    expect(control.signals()).toEqual([ASSISTED_START]);
+  });
+
+  test("a start while a different mode is recording is refused, not adopted", async () => {
+    const { control, recorder } = buildExplicit();
+    // A different mode is already recording; this is exactly the "busy" row of
+    // FOLLOW_STREAM.md's table, not a success no-op, and must not be adopted as one.
+    recorder.observe({ t: "begin", session: 1, mode: "meeting" });
+    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+    await flush();
+    recorder.observe({ t: "refused", mode: "assisted-notes", reason: "busy" });
+    expect(await outcomeOf(started)).toBe("not-started");
+    expect(recorder.startFailure).toEqual({ kind: "refused", reason: "busy" });
+    expect(control.signals()).toEqual([ASSISTED_START]);
+  });
+
+  /**
+   * `#followedMode` is `undefined` both for an app old enough to predate `begin-mode` and for
+   * a mode core does not recognize — the second of those is a genuinely different, unrelated
+   * capture, so an unknown mode must not be adopted the way a freshly-arrived `begin` is. The
+   * cost of that caution is only a slower, misreported `start-timeout` instead of `"started"`;
+   * it must never be a stopped recording, which the timeout fix below still guarantees.
+   */
+  test("a pre-existing session with unknown mode is not adopted, and still ends safely", async () => {
+    const { control, clock, recorder } = buildExplicit();
+    recorder.observe({ t: "begin", session: 1 }); // no `mode` field at all
+    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+    await flush();
+    expect(await outcomeOf(started.then(() => "settled" as const))).toBe("still-waiting");
+    clock.fire(START_ACK_MS);
+    expect(await outcomeOf(started)).toBe("not-started");
+    expect(recorder.startFailure).toEqual({ kind: "start-timeout" });
+    // The point of the timeout fix: a session that predates this call, of any mode including
+    // an unrecognized one, is never stopped by the backstop.
+    expect(control.signals()).toEqual([ASSISTED_START]);
+    expect(control.signals()).not.toContain(ASSISTED_STOP);
+  });
+
   test("capability missing: not-started, with no control signal sent", async () => {
     for (const capabilities of [[], [ASSISTED_START], [ASSISTED_STOP]]) {
       const { control, recorder } = buildExplicit();
@@ -1107,6 +1163,82 @@ describe("Assisted Notes: the explicit start/stop contract", () => {
     expect(await outcomeOf(started)).toBe("not-started");
     expect(recorder.startFailure).toEqual({ kind: "start-failed", message: "no input device" });
     expect(control.signals()).toEqual([ASSISTED_START]);
+  });
+
+  /**
+   * P2. The same silent-drop gap `#beginWaiters` has (see "a begin that arrives while the
+   * start child is still exiting" above): `#send()` only resolves on the forwarding child's
+   * exit, and Shorthand can refuse the request before that exit. `#refusalWaiters` is not
+   * registered until the race loop starts, so a `refused` landing in this window used to have
+   * nowhere to land — the caller was told `start-timeout` ("Shorthand never explained why")
+   * instead of the real, actionable reason.
+   */
+  test("a refusal that arrives while the start child is still exiting still surfaces its reason", async () => {
+    for (const reason of ["busy", "mode-disabled", "publication-disabled"]) {
+      const { control, recorder } = buildExplicit();
+      control.auto = false;
+      const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+      await flush();
+      // The start signal is spawned and still in flight; Shorthand has already refused it.
+      recorder.observe({ t: "refused", mode: "assisted-notes", reason });
+      expect(control.release()).toBe(ASSISTED_START);
+      expect(await outcomeOf(started)).toBe("not-started");
+      expect(recorder.startFailure).toEqual({ kind: "refused", reason });
+      expect(control.signals()).toEqual([ASSISTED_START]);
+    }
+  });
+
+  test("a start_failed that arrives while the start child is still exiting still surfaces its message", async () => {
+    const { control, recorder } = buildExplicit();
+    control.auto = false;
+    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+    await flush();
+    recorder.observe({ t: "start_failed", mode: "assisted-notes", message: "no input device" });
+    expect(control.release()).toBe(ASSISTED_START);
+    expect(await outcomeOf(started)).toBe("not-started");
+    expect(recorder.startFailure).toEqual({ kind: "start-failed", message: "no input device" });
+    expect(control.signals()).toEqual([ASSISTED_START]);
+  });
+
+  /**
+   * The staleness trap the sequence-number guard exists for: a reason recorded during an
+   * earlier capture on this same recorder must not be replayed as a later capture's answer.
+   * Without the snapshot-and-compare, checking `#lastRefusalReason` directly would find the
+   * leftover value from the first attempt and report the second as refused before it was ever
+   * given a chance to be answered.
+   */
+  test("a refusal recorded during an earlier capture is not consumed by a later one", async () => {
+    const { recorder } = buildExplicit();
+    const firstStart = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+    await flush();
+    recorder.observe({ t: "refused", mode: "assisted-notes", reason: "busy" });
+    expect(await outcomeOf(firstStart)).toBe("not-started");
+    expect(recorder.startFailure).toEqual({ kind: "refused", reason: "busy" });
+
+    // A later capture, with nothing refusing it this time. The stale reason above must not
+    // leak in as an immediate, false refusal.
+    const secondStart = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+    await flush();
+    expect(await outcomeOf(secondStart.then(() => "settled" as const))).toBe("still-waiting");
+    recorder.observe({ t: "begin", session: 9, mode: "assisted-notes" });
+    expect(await outcomeOf(secondStart)).toBe("started");
+    expect(recorder.startFailure).toBeUndefined();
+  });
+
+  test("a start_failed recorded during an earlier capture is not consumed by a later one", async () => {
+    const { recorder } = buildExplicit();
+    const firstStart = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+    await flush();
+    recorder.observe({ t: "start_failed", mode: "assisted-notes", message: "no input device" });
+    expect(await outcomeOf(firstStart)).toBe("not-started");
+    expect(recorder.startFailure).toEqual({ kind: "start-failed", message: "no input device" });
+
+    const secondStart = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+    await flush();
+    expect(await outcomeOf(secondStart.then(() => "settled" as const))).toBe("still-waiting");
+    recorder.observe({ t: "begin", session: 9, mode: "assisted-notes" });
+    expect(await outcomeOf(secondStart)).toBe("started");
+    expect(recorder.startFailure).toBeUndefined();
   });
 
   test("the backstop timeout still fires when the app says nothing at all", async () => {
