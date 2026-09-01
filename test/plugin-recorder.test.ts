@@ -1022,7 +1022,7 @@ describe("control failures", () => {
     await startCapture(recorder, 1);
     control.rejectOnSend = true;
     // `start()` has its own catch; `stop()` has none, so a rejection here would propagate
-    // out of Stop capture and unwind a capture that is otherwise perfectly healthy.
+    // out of Stop taking notes and unwind a capture that is otherwise perfectly healthy.
     expect(await outcomeOf(recorder.stop())).toBe("not-finalized");
   });
 
