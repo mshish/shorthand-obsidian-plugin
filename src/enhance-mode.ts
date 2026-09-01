@@ -57,8 +57,8 @@ export function resolveEnhanceMode(request: EnhanceRequest): EnhanceMode {
       return {
         kind: "unavailable",
         message: request.captureEnhancerReady
-          ? "Shorthand is capturing this note. Run \"Enhance now\" to fold in the transcript so far."
-          : "Shorthand is capturing this note but could not start enhancement. Stop the capture, then run this command again.",
+          ? "Shorthand is taking notes on this note. Run \"Enhance now\" to fold in the transcript so far."
+          : "Shorthand is taking notes on this note but could not start enhancement. Stop taking notes, then run this command again.",
       };
     }
     if (request.transcriptLink !== undefined) {
@@ -76,7 +76,7 @@ export function resolveEnhanceMode(request: EnhanceRequest): EnhanceMode {
     // The user's route out is to stop the capture, which is what the message says.
     return {
       kind: "unavailable",
-      message: "Shorthand is capturing this note but could not start enhancement. Stop the capture, then run this command again.",
+      message: "Shorthand is taking notes on this note but could not start enhancement. Stop taking notes, then run this command again.",
     };
   }
   if (request.transcriptLink !== undefined) {
@@ -85,7 +85,7 @@ export function resolveEnhanceMode(request: EnhanceRequest): EnhanceMode {
   return {
     kind: "unavailable",
     message: request.writeTranscriptNote
-      ? "This note has no shorthand-transcript wikilink. Start capture once to create and link a sidecar, or run \"Clean up this note\" to enhance the note as written."
-      : "This note has no shorthand-transcript wikilink, and \"Transcript notes\" is off. Turn it on in Shorthand settings and start capture once, or run \"Clean up this note\" to enhance the note as written.",
+      ? "This note has no shorthand-transcript wikilink. Start taking notes once to create and link a sidecar, or run \"Clean up this note\" to enhance the note as written."
+      : "This note has no shorthand-transcript wikilink, and \"Transcript notes\" is off. Turn it on in Shorthand settings and start taking notes once, or run \"Clean up this note\" to enhance the note as written.",
   };
 }

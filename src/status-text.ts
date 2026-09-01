@@ -42,13 +42,13 @@ export function describeStatus(input: StatusInput): StatusDisplay {
     return {
       visible: true,
       text: `Shorthand${clock} · wrapping up`,
-      tooltip: "Running final cleanup before finishing the capture.",
+      tooltip: "Running final cleanup before finishing up.",
     };
   }
 
   switch (state.mode) {
     case "starting":
-      return { visible: true, text: "Shorthand · starting", tooltip: "Starting the capture." };
+      return { visible: true, text: "Shorthand · starting", tooltip: "Starting to take notes." };
     case "capturing":
       return {
         visible: true,
@@ -59,19 +59,19 @@ export function describeStatus(input: StatusInput): StatusDisplay {
       return {
         visible: true,
         text: `Shorthand${clock} · writing`,
-        tooltip: "Writing the note. Click to stop the capture.",
+        tooltip: "Writing the note. Click to stop.",
       };
     case "stopping":
       return {
         visible: true,
         text: `Shorthand${clock} · wrapping up`,
-        tooltip: "Running final cleanup before finishing the capture.",
+        tooltip: "Running final cleanup before finishing up.",
       };
     case "enhancement-stopped":
       return {
         visible: true,
         text: `Shorthand${clock} · enhancement stopped`,
-        tooltip: state.message ?? "Enhancement stopped; capture continues.",
+        tooltip: state.message ?? "Enhancement stopped; note-taking continues.",
       };
     case "error": {
       // Tied to the same signal as `clock` rather than to `state.captureActive`: the

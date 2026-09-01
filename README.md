@@ -35,26 +35,26 @@ Add `mshish/shorthand-obsidian-plugin` as a beta plugin in BRAT. BRAT installs t
 
 1. Open the meeting note in Obsidian.
 2. Make sure the Shorthand desktop app is running.
-3. Run **Shorthand: Start meeting capture on this note** from the command palette.
-4. Run **Shorthand: Stop capture** when the meeting ends.
+3. Run **Shorthand: Start meeting notes on this note** from the command palette.
+4. Run **Shorthand: Stop taking notes** when the meeting ends.
 
 If the note has not been prepared for Shorthand, the plugin adds the required sections. Turn off **Automatic note scaffolding** in settings if you would rather be asked first. Your own writing stays outside the section maintained by AI.
 
-Turn on **Transcript notes** if you also want a linked note containing the raw transcript. This is optional. **Enhance now** can use that saved transcript after the live capture has ended.
+Turn on **Transcript notes** if you also want a linked note containing the raw transcript. This is optional. **Enhance now** can use that saved transcript after note-taking has ended.
 
 ## The Shorthand panel
 
-**Open Shorthand panel**, or the microphone icon in the ribbon, opens a panel in the right sidebar with Start and Stop buttons, the current state, the elapsed time, and the note being captured. It is not opened automatically.
+**Open Shorthand panel**, or the microphone icon in the ribbon, opens a panel in the right sidebar with Start and Stop buttons, the current state, the elapsed time, and which note is being updated. It is not opened automatically.
 
-While a capture is running, the status bar shows the elapsed time and clicking it stops the capture. It is hidden when nothing is capturing.
+While the plugin is taking notes, the status bar shows the elapsed time and clicking it stops taking notes. It is hidden while idle.
 
 ## Commands
 
 Obsidian adds the “Shorthand:” prefix in the command palette.
 
-- **Start meeting capture on this note**
-- **Start assisted notes capture on this note**
-- **Stop capture**
+- **Start meeting notes on this note**
+- **Start assisted notes on this note**
+- **Stop taking notes**
 - **Enhance now**
 - **Clean up this note**
 - **Toggle Shorthand meeting recording**
@@ -82,19 +82,19 @@ Leave the API key field blank to keep the saved key. Use **Clear key** to remove
 
 ## Driving Shorthand's recorder
 
-**Control Shorthand recording** is on by default. Starting and stopping a capture also starts and stops the Shorthand recorder, so you do not need to use its global shortcut.
+**Control Shorthand recording** is on by default. Starting and stopping note-taking also starts and stops the Shorthand recorder, so you do not need to use its global shortcut.
 
-Starting a capture asks Shorthand to start that mode specifically — Meetings or Assisted notes — rather than toggling whatever it happens to be doing. It does not disturb a different recording that is already running, it is safe to retry, and Shorthand reports why if it declines. Stopping works the same way, so a stop can never start a recording by mistake. If Shorthand quits during a capture, the plugin may reopen Shorthand to send the final stop command. Turn off **Control Shorthand recording** if you prefer to manage the recorder yourself.
+Starting note-taking asks Shorthand to start that mode specifically — Meetings or Assisted notes — rather than toggling whatever it happens to be doing. It does not disturb a different recording that is already running, it is safe to retry, and Shorthand reports why if it declines. Stopping works the same way, so a stop can never start a recording by mistake. If Shorthand quits while you're taking notes, the plugin may reopen Shorthand to send the final stop command. Turn off **Control Shorthand recording** if you prefer to manage the recorder yourself.
 
-The three recorder commands remain available as manual controls. They control Shorthand but do not start or stop an Obsidian capture.
+The three recorder commands remain available as manual controls. They control Shorthand but do not start or stop note-taking in Obsidian.
 
 ## Following Shorthand's recordings
 
-**Follow Shorthand's recordings** is off by default. Turn it on and starting a Meetings or Assisted notes recording with Shorthand's own hotkey also starts a capture on the note you have open in Obsidian.
+**Follow Shorthand's recordings** is off by default. Turn it on and starting a Meetings or Assisted notes recording with Shorthand's own hotkey also starts taking notes on the note you have open in Obsidian.
 
 While it is on, the plugin keeps a connection to Shorthand open so it can see those recordings — reopening it roughly every 30 seconds, indefinitely, whenever Shorthand is not running. Dictation is never followed.
 
-A capture started this way does not stop Shorthand's recording when you stop it, because it was not the one that started it. Stop the recording the way you started it.
+Note-taking started this way does not stop Shorthand's recording when you stop it, because it did not start the recording. Stop the recording the way you started it.
 
 This needs a Shorthand build that reports which mode a recording is. **No shipped build does this yet** — the `shorthand-app` half that reports it is on an unmerged pull request — so today the plugin always sees a recording started but not what kind, and does nothing rather than guess. Turning the setting on has no effect until that build ships.
 
@@ -157,7 +157,7 @@ npm test
 
 ## Architecture
 
-Capture, transcript handling, note updates, and enhancement live in [`shorthand-core`](https://github.com/mshish/shorthand-core). Its [design](https://github.com/mshish/shorthand-core/blob/main/docs/DESIGN.md) and [consumer contract](https://github.com/mshish/shorthand-core/blob/main/docs/CONTRACT.md) describe the implementation boundaries.
+Recorder control, transcript handling, note updates, and enhancement live in [`shorthand-core`](https://github.com/mshish/shorthand-core). Its [design](https://github.com/mshish/shorthand-core/blob/main/docs/DESIGN.md) and [consumer contract](https://github.com/mshish/shorthand-core/blob/main/docs/CONTRACT.md) describe the implementation boundaries.
 
 ## License
 

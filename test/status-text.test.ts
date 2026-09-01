@@ -19,7 +19,7 @@ describe("describeStatus", () => {
     expect(describeStatus({ ...base, state: starting })).toEqual({
       visible: true,
       text: "Shorthand · starting",
-      tooltip: "Starting the capture.",
+      tooltip: "Starting to take notes.",
     });
   });
 
@@ -36,7 +36,7 @@ describe("describeStatus", () => {
     expect(describeStatus({ ...base, state: enhancing, elapsedMs: 754_000 })).toEqual({
       visible: true,
       text: "Shorthand 12:34 · writing",
-      tooltip: "Writing the note. Click to stop the capture.",
+      tooltip: "Writing the note. Click to stop.",
     });
   });
 
@@ -45,7 +45,7 @@ describe("describeStatus", () => {
     expect(describeStatus({ ...base, state: stopping, elapsedMs: 754_000 })).toEqual({
       visible: true,
       text: "Shorthand 12:34 · wrapping up",
-      tooltip: "Running final cleanup before finishing the capture.",
+      tooltip: "Running final cleanup before finishing up.",
     });
   });
 
@@ -55,21 +55,21 @@ describe("describeStatus", () => {
     expect(describeStatus({ ...base, state: finalCleanup, elapsedMs: 754_000 })).toEqual({
       visible: true,
       text: "Shorthand 12:34 · wrapping up",
-      tooltip: "Running final cleanup before finishing the capture.",
+      tooltip: "Running final cleanup before finishing up.",
     });
   });
 
   test("never shows a mode union member to the user", () => {
     const stopped = reducePluginState(capturing, {
       type: "enhancement-stopped",
-      message: "Enhancement stopped after the maximum capture window; capture continues.",
+      message: "Enhancement stopped after the maximum note-taking window; note-taking continues.",
     });
     const display = describeStatus({ ...base, state: stopped, elapsedMs: 60_000 });
     expect(display.visible).toBe(true);
     if (!display.visible) return;
     expect(display.text).not.toContain("enhancement-stopped");
     expect(display.text).toBe("Shorthand 1:00 · enhancement stopped");
-    expect(display.tooltip).toBe("Enhancement stopped after the maximum capture window; capture continues.");
+    expect(display.tooltip).toBe("Enhancement stopped after the maximum note-taking window; note-taking continues.");
   });
 
   test("stays visible for an error after the capture has ended", () => {

@@ -273,18 +273,18 @@ type CaptureRuntime = {
  * sends its own `stop-assisted-notes` for both, not `--cancel` — see `ShorthandRecorder`.
  */
 const NOT_RUNNING_NOTICES: Record<Exclude<RecorderPhase, "start"> | "manual", string> = {
-  recall: "Shorthand did not confirm ending the recording this capture had just started. Check that Shorthand is not still recording.",
+  recall: "Shorthand did not confirm ending the recording that had just started. Check that Shorthand is not still recording.",
   finalize: "Shorthand was not running, so there was no recording to finalize. The transcript keeps whatever Shorthand had already sent.",
   backstop: "Shorthand did not confirm the final stop. Check that Shorthand is not still recording.",
   manual: "Shorthand was not running; it is starting now. Run the command again once it is up.",
 };
 
 const START_NOT_RUNNING = (mode: CaptureMode): string =>
-  `Shorthand was not running, so this capture did not start a recording; Shorthand is starting now. Once it is up, start the recording with Shorthand's shortcut or "${
+  `Shorthand was not running, so the recording did not start; Shorthand is starting now. Once it is up, start the recording with Shorthand's shortcut or "${
     mode === "assisted-notes"
       ? COMMAND_NAMES["toggle-assisted-notes"]
       : COMMAND_NAMES["toggle-recording"]
-  }" — the capture is already running and will pick it up.`;
+  }" — note-taking is already underway and will pick it up.`;
 
 /**
  * How each mode names itself in a notice. The app's own settings pane spells these
@@ -566,7 +566,7 @@ export default class ShorthandPlugin extends Plugin {
     // assigned further down — so two starts fired inside the setup window both passed it,
     // and the second orphaned the first's follower, control and enhancer.
     if (!canStartCapture(this.#state)) {
-      new Notice("Shorthand is already capturing. Stop it before starting another note.");
+      new Notice("Shorthand is already taking notes. Stop it before starting another note.");
       return;
     }
     this.dispatch({ type: "capture-starting" });
@@ -656,7 +656,7 @@ export default class ShorthandPlugin extends Plugin {
           );
           unownedEnhancer = enhancer;
         } catch (error) {
-          enhancementUnavailable = `${errorMessage(error)} Capture will continue with transcript only.`;
+          enhancementUnavailable = `${errorMessage(error)} Note-taking will continue with transcript only.`;
         }
         const command = this.shorthandCommand();
         // Adopted, not replaced, when attaching. The app replays a session only while it is
@@ -847,7 +847,7 @@ export default class ShorthandPlugin extends Plugin {
         ).catch((error: unknown) => {
           // Nothing else is watching this chain; an unhandled rejection here would take the
           // failure out of the user's sight entirely.
-          this.fail(`Capture shutdown failed: ${errorMessage(error)}`);
+          this.fail(`Wrapping up failed: ${errorMessage(error)}`);
         });
         // Gated on `adopted`, not on `attachToSession`: only a client we did NOT adopt needs
         // starting. Gating this on "is this an attach" instead conflates that question with
@@ -859,7 +859,7 @@ export default class ShorthandPlugin extends Plugin {
         if (recorder === undefined) {
           // Nothing to start: an attach follows a recording Shorthand is already running, and
           // a capture with control switched off is driven by Shorthand's own hotkey.
-          new Notice(`Shorthand capture started: ${file.path}`);
+          new Notice(`Shorthand started taking notes: ${file.path}`);
         } else {
           // Both modes take the bounded acknowledgement: a `sent` signal is not proof
           // Shorthand actually started recording (see `START_ACKNOWLEDGEMENT_MS`), so the
@@ -877,7 +877,7 @@ export default class ShorthandPlugin extends Plugin {
               // whichever order wins, `finishRuntime` dispatches `capture-stopped` right behind
               // it and the mode self-heals.
               this.dispatch({ type: "capture-started" });
-              new Notice(`Shorthand capture started: ${file.path}`);
+              new Notice(`Shorthand started taking notes: ${file.path}`);
               return;
             }
             if (outcome === "stopped") {
@@ -892,7 +892,7 @@ export default class ShorthandPlugin extends Plugin {
             // above). This `.then` body is the sole clearer of `starting` on this path: a
             // throw here — before it reaches `abortCaptureStart` on its own — would otherwise
             // leave `starting` stuck true for the rest of the session, refusing every later
-            // start with "already capturing" until a plugin reload.
+            // start with "already taking notes" until a plugin reload.
             this.fail(`${modeLabel(mode)} start failed: ${errorMessage(error)}`);
             void this.abortCaptureStart(runtime);
           });
@@ -929,7 +929,7 @@ export default class ShorthandPlugin extends Plugin {
       }
     } finally {
       // Any path that left without handing ownership to a live runtime has to release
-      // `starting`, or the plugin refuses every later start with "already capturing".
+      // `starting`, or the plugin refuses every later start with "already taking notes".
       // `capture-start-failed` returns to idle only from `starting`, so a setup error
       // that already dispatched a sticky `error` keeps its message.
       if (!handedOff) this.dispatch({ type: "capture-start-failed" });
@@ -939,7 +939,7 @@ export default class ShorthandPlugin extends Plugin {
   async stopCapture(): Promise<void> {
     const runtime = this.#capture;
     if (runtime === undefined) {
-      new Notice("Shorthand is not capturing.");
+      new Notice("Shorthand is not taking notes.");
       return;
     }
     // `#capture` is not cleared until finishRuntime(), which is up to a full drain timeout
@@ -981,7 +981,7 @@ export default class ShorthandPlugin extends Plugin {
       // restarted while the follower was away and the recording this capture followed died
       // with the old process. Draining would wait on that brand-new session; the backstop
       // below is what ends it.
-      this.fail("Shorthand was restarted during this capture, so the recording it was following was already gone and the stop request started a new one. That new recording is being cancelled; the transcript keeps whatever Shorthand had already sent.");
+      this.fail("Shorthand was restarted while taking notes, so the recording it was following was already gone and the stop request started a new one. That new recording is being cancelled; the transcript keeps whatever Shorthand had already sent.");
       runtime.client.forceStop();
     } else {
       runtime.client.stopAfterDrain();
@@ -1026,7 +1026,7 @@ export default class ShorthandPlugin extends Plugin {
    * ever arrived — `startCaptureOnActiveNote()`'s `not-started` branch calls this rather than
    * `finishRuntime()`, because nothing here was ever driven to "capturing" in the sense that
    * path expects: there is no finalized transcript worth a closing enhancement pass, and
-   * "Shorthand capture stopped" would tell the user a capture had run when it never actually
+   * "Shorthand stopped taking notes" would tell the user a capture had run when it never actually
    * started recording. Unlike `forceStopCapture()` this can and does await the follower's exit
    * and the sidecar's flush, since it runs from inside the start sequence, not a shutdown hook.
    */
@@ -1468,9 +1468,9 @@ export default class ShorthandPlugin extends Plugin {
       } finally {
         await runtime.enhancer?.dispose();
       }
-      new Notice("Shorthand capture stopped.");
+      new Notice("Shorthand stopped taking notes.");
     } catch (error) {
-      this.fail(`Capture shutdown failed: ${errorMessage(error)}`);
+      this.fail(`Wrapping up failed: ${errorMessage(error)}`);
     } finally {
       if (this.#capture === runtime) this.#capture = undefined;
       this.dispatch({ type: "capture-stopped" });
@@ -1880,7 +1880,7 @@ class ShorthandSettingTab extends PluginSettingTab {
       this.llmProfileGroup(),
       {
         name: "Transcript notes",
-        desc: "Each capture also saves the raw transcript in its own linked note.",
+        desc: "Each note-taking session also saves the raw transcript in its own linked note.",
         control: { type: "toggle", key: "writeTranscriptNote" },
       },
       {
@@ -1896,8 +1896,8 @@ class ShorthandSettingTab extends PluginSettingTab {
         name: "Control Shorthand recording",
         desc: createFragment((desc) => {
           desc.appendText(
-            "Starting and stopping a capture also starts and stops Shorthand's recording. "
-            + "If Shorthand quits during a capture, this plugin may reopen Shorthand to send the final stop command. ",
+            "Starting and stopping note-taking also starts and stops Shorthand's recording. "
+            + "If Shorthand quits while you're taking notes, this plugin may reopen Shorthand to send the final stop command. ",
           );
           desc.createEl("a", {
             text: "Read how recorder control works",
@@ -2079,7 +2079,7 @@ class ShorthandSettingTab extends PluginSettingTab {
         },
         {
           name: "Agent session history",
-          desc: "Keeps local Claude or Codex transcripts after a capture or one-off enhancement ends.",
+          desc: "Keeps local Claude or Codex transcripts after a note-taking session or one-off enhancement ends.",
           control: { type: "toggle", key: "retainAgentSessionHistory" },
           visible: () => this.plugin.settings.backend === "claude-agent-sdk" || this.plugin.settings.backend === "codex",
         },
@@ -2104,7 +2104,7 @@ class ShorthandSettingTab extends PluginSettingTab {
           name: "Follow Shorthand's recordings",
           desc: createFragment((desc) => {
             desc.appendText(
-              "Starting a recording with Shorthand's own hotkey also starts a capture on the note you have open — see ",
+              "Starting a recording with Shorthand's own hotkey also starts taking notes on the note you have open — see ",
             );
             desc.createEl("a", {
               text: "Following Shorthand's recordings",
@@ -2116,7 +2116,7 @@ class ShorthandSettingTab extends PluginSettingTab {
         },
         {
           name: "Debug logging",
-          desc: "Logs capture and enhancement activity to the developer console. Turn this on if a capture does not start or stop as expected, or a note stops updating during capture.",
+          desc: "Logs note-taking and enhancement activity to the developer console. Turn this on if note-taking does not start or stop as expected, or a note stops updating while you're taking notes.",
           control: { type: "toggle", key: "debugLogging" },
         },
       ],

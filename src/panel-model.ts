@@ -62,9 +62,9 @@ export function describePanel(input: PanelInput): PanelModel {
   const headline = ((): string => {
     if (state.stopping) return clock === undefined ? "Wrapping up…" : `Wrapping up — ${clock}`;
     switch (state.mode) {
-      case "idle": return "Not capturing";
+      case "idle": return "Not taking notes";
       case "starting": return "Starting…";
-      case "capturing": return clock === undefined ? "Capturing" : `Capturing — ${clock}`;
+      case "capturing": return clock === undefined ? "Taking notes" : `Taking notes — ${clock}`;
       case "enhancing": return clock === undefined ? "Writing the note" : `Writing the note — ${clock}`;
       case "stopping": return "Wrapping up…";
       case "enhancement-stopped": return "Enhancement stopped";
@@ -81,7 +81,7 @@ export function describePanel(input: PanelInput): PanelModel {
   // three disabled buttons and nothing telling them what to do about it.
   const idleWithoutNote = state.mode === "idle" && !hasActiveNote;
 
-  const detail = state.message ?? (idleWithoutNote ? "Open a Markdown note to start a capture." : undefined);
+  const detail = state.message ?? (idleWithoutNote ? "Open a Markdown note to start taking notes." : undefined);
   const activityLabel = state.captureActive
     && !state.stopping
     && state.mode !== "error"

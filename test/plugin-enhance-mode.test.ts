@@ -24,7 +24,7 @@ describe("enhancement mode selection", () => {
       writeTranscriptNote: true,
     });
     expect(mode.kind).toBe("unavailable");
-    expect(mode).toHaveProperty("message", expect.stringContaining("Stop the capture"));
+    expect(mode).toHaveProperty("message", expect.stringContaining("Stop taking notes"));
   });
 
   test("a capture whose enhancer failed refuses Clean up this note without a dead-end pointer", () => {
@@ -38,7 +38,7 @@ describe("enhancement mode selection", () => {
     expect(mode.kind).toBe("unavailable");
     expect(mode).not.toEqual({ kind: "notes-only" });
     // Must not send the user to a command that refuses for the same reason.
-    expect(mode).toHaveProperty("message", expect.stringContaining("Stop the capture"));
+    expect(mode).toHaveProperty("message", expect.stringContaining("Stop taking notes"));
     expect(mode).toHaveProperty("message", expect.not.stringContaining("Enhance now"));
   });
 

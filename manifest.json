@@ -3,7 +3,7 @@
   "name": "Shorthand",
   "version": "0.5.0",
   "minAppVersion": "1.13.7",
-  "description": "Capture Shorthand transcripts and maintain an AI-owned meeting-note summary.",
+  "description": "Turn Shorthand transcripts into an AI-owned meeting-note summary.",
   "author": "Shorthand contributors",
   "isDesktopOnly": true
 }

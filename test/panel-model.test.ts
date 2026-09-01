@@ -23,7 +23,7 @@ const enabled = (model: ReturnType<typeof describePanel>): string[] =>
 describe("describePanel", () => {
   test("offers both starts and no stop when idle", () => {
     const model = describePanel({ ...base, state: INITIAL_PLUGIN_STATE });
-    expect(model.headline).toBe("Not capturing");
+    expect(model.headline).toBe("Not taking notes");
     expect(enabled(model)).toEqual(["start-meeting", "start-assisted-notes"]);
   });
 
@@ -38,7 +38,7 @@ describe("describePanel", () => {
 
   test("offers only stop while capturing, and shows the clock", () => {
     const model = describePanel({ ...base, state: capturing, hasCapture: true, elapsedMs: 754_000, noteName: "Weekly sync" });
-    expect(model.headline).toBe("Capturing — 12:34");
+    expect(model.headline).toBe("Taking notes — 12:34");
     expect(model.noteName).toBe("Weekly sync");
     expect(model.activityLabel).toBe("Taking notes");
     expect(enabled(model)).toEqual(["stop"]);
@@ -67,7 +67,7 @@ describe("describePanel", () => {
     expect(enabled(model)).toEqual([]);
     // Idle with no note and no error is the one case where every button is disabled and
     // no other message exists to say why.
-    expect(model.detail).toBe("Open a Markdown note to start a capture.");
+    expect(model.detail).toBe("Open a Markdown note to start taking notes.");
   });
 
   test("offers nothing while a start (with no runtime yet) or a stop is in flight", () => {

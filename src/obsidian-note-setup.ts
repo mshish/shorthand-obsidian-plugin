@@ -80,7 +80,7 @@ export async function ensureTranscriptLink(
     return {
       status: "error",
       message: `This note's shorthand-transcript property is not a wikilink (${describe(occupied)}). `
-        + "Point it at a transcript note as [[Folder/Note]], or clear it, then start capture again.",
+        + "Point it at a transcript note as [[Folder/Note]], or clear it, then start taking notes again.",
     };
   }
   if (chosen === undefined) return { status: "error", message: "Obsidian did not return a transcript link." };
