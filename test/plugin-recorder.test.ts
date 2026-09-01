@@ -100,7 +100,9 @@ const BEGIN_GRACE_MS = 1_500;
 const FINALIZE_TIMEOUT_MS = 45_000;
 const START_ACK_MS = 3_000;
 const TOGGLE: ControlSignal = "toggle-transcription";
-const ASSISTED: ControlSignal = "toggle-assisted-notes";
+const ASSISTED_START: ControlSignal = "start-assisted-notes";
+const ASSISTED_STOP: ControlSignal = "stop-assisted-notes";
+const ASSISTED_CAPABILITIES: string[] = [ASSISTED_START, ASSISTED_STOP];
 
 function build(overrides: Partial<RecorderOptions> = {}) {
   const control = new FakeControl();
@@ -108,7 +110,7 @@ function build(overrides: Partial<RecorderOptions> = {}) {
   const reports: Array<{ phase: RecorderPhase; result: ControlResult }> = [];
   const recorder = new ShorthandRecorder({
     control,
-    recordingSignal: TOGGLE,
+    signals: { kind: "toggle", signal: TOGGLE },
     report: (phase, result) => { reports.push({ phase, result }); },
     finalizeTimeoutMs: FINALIZE_TIMEOUT_MS,
     attachGraceMs: ATTACH_GRACE_MS,
@@ -117,6 +119,22 @@ function build(overrides: Partial<RecorderOptions> = {}) {
     ...overrides,
   });
   return { control, clock, reports, recorder };
+}
+
+/** Assisted Notes' explicit, capability-gated recorder, built with the same fakes. */
+function buildExplicit(overrides: Partial<RecorderOptions> = {}, signalsOverrides: Record<string, unknown> = {}) {
+  return build({
+    signals: {
+      kind: "explicit",
+      mode: "assisted-notes",
+      start: ASSISTED_START,
+      stop: ASSISTED_STOP,
+      requiredCapabilities: ASSISTED_CAPABILITIES,
+      startAcknowledgementMs: START_ACK_MS,
+      ...signalsOverrides,
+    } as RecorderOptions["signals"],
+    ...overrides,
+  });
 }
 
 /** Lets every queued microtask and continuation run. */
@@ -965,140 +983,318 @@ describe("control failures", () => {
 });
 
 /**
- * Assisted Notes' start contract. Unlike Meeting, `ShorthandControl.send()` reporting `sent`
- * is not proof the recording actually began: Shorthand's disabled-mode refusal still exits the
- * forwarding process 0, and installing this plugin ahead of an older app binary can put the
- * unsupported flag in front of Shorthand's clap parser instead. `requiredCapability` and
- * `startAcknowledgementMs` exist to fail both of those clearly and early rather than leaving
- * Obsidian "capturing" against a Shorthand that never started, or a signal that never reached
- * a Shorthand that understood it.
+ * Assisted Notes' explicit start contract. Unlike Meeting, `ShorthandControl.send()` reporting
+ * `sent` is not proof the recording actually began: the forwarding child exits 0 as soon as
+ * `tauri_plugin_single_instance` hands the flag to a running Shorthand, before Shorthand has
+ * evaluated it — so a `begin`, a `refused`, or a `start_failed` are all still to come on the
+ * wire. `requiredCapabilities` and `startAcknowledgementMs` exist to fail an unsupported app
+ * clearly and early, and to give a genuinely silent one a bound, while a real refusal or
+ * failure is reported the moment its own record arrives rather than waited out.
  */
-describe("Assisted Notes: the capability-gated start contract", () => {
-  function buildGated(overrides: Partial<RecorderOptions> = {}) {
-    return build({
-      recordingSignal: ASSISTED,
-      requiredCapability: ASSISTED,
-      startAcknowledgementMs: START_ACK_MS,
-      ...overrides,
-    });
-  }
-
-  test("capability present: cancels, toggles, and a begin resolves started", async () => {
-    const { control, recorder } = buildGated();
-    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: [ASSISTED] }));
+describe("Assisted Notes: the explicit start/stop contract", () => {
+  test("capability present: starts directly (no cancel), and a begin resolves started", async () => {
+    const { control, recorder } = buildExplicit();
+    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
     await flush();
-    expect(control.signals()).toEqual(["cancel", ASSISTED]);
+    // No `--cancel`: `start-assisted-notes` is idempotent, so unlike Meeting's toggle it never
+    // needs a forced known state to be safe.
+    expect(control.signals()).toEqual([ASSISTED_START]);
     recorder.observe({ t: "begin", session: 1 });
     expect(await outcomeOf(started)).toBe("started");
     expect(recorder.startFailure).toBeUndefined();
   });
 
   /**
-   * Shorthand announces the session when it acts on the toggle, not when the forwarding
-   * process it was sent through exits — and on Windows the gap runs the wrong way: `begin`
-   * was observed ~20ms before the child's exit. The acknowledgement wait is only entered
-   * after `send()` resolves on that exit, so the record lands while `#beginWaiters` is still
-   * empty and its wakeup is dropped. The start then sat out the whole budget waiting for a
-   * `begin` that had already arrived, and reported `start-timeout` — which tells the user to
-   * go and enable a mode that was enabled all along.
+   * Shorthand can act on the flag and announce the session before the forwarding child it was
+   * sent through actually exits — and on Windows the gap runs the wrong way: `begin` was
+   * observed ~20ms before the child's exit. The wait loop only registers with `#beginWaiters`
+   * after `send()` resolves on that exit, so a record landing in this exact gap would
+   * otherwise have its wakeup silently dropped (`resolveAll` on an empty set) and sit out the
+   * whole acknowledgement budget for a session that had already started.
    */
-  test("a begin that arrives while the toggle child is still exiting still counts as started", async () => {
-    const { control, recorder } = buildGated();
+  test("a begin that arrives while the start child is still exiting still counts as started", async () => {
+    const { control, recorder } = buildExplicit();
     control.auto = false;
-    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: [ASSISTED] }));
+    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
     await flush();
-    expect(control.release()).toBe("cancel");
-    await flush();
-    // The toggle has been spawned and is still in flight. Shorthand has already acted on it.
+    // The start signal has been spawned and is still in flight. Shorthand has already acted on it.
     recorder.observe({ t: "begin", session: 1 });
-    expect(control.release()).toBe(ASSISTED);
+    expect(control.release()).toBe(ASSISTED_START);
     expect(await outcomeOf(started)).toBe("started");
     expect(recorder.startFailure).toBeUndefined();
   });
 
-  test("capability missing: not-started, with neither cancel nor the unsupported flag sent", async () => {
-    const { control, recorder } = buildGated();
-    const outcome = await recorder.start(Promise.resolve<HelloInfo>({ capabilities: [] }));
-    expect(outcome).toBe("not-started");
-    expect(recorder.startFailure).toBe("unsupported");
-    expect(control.signals()).toEqual([]);
+  /**
+   * P1. A start issued while Assisted Notes is already recording — from Shorthand's own
+   * hotkey, say — is the documented success no-op (FOLLOW_STREAM.md's table): Shorthand
+   * answers with silence, no `begin`, because nothing began. Before this fix the shortcut's
+   * `!wasLiveBeforeSend` guard (correctly keeping a pre-existing *unrelated* session from
+   * falsely satisfying it — see the next test) also blocked this case from ever being
+   * recognized, so the race ran to its deadline and the timeout backstop sent `stop`,
+   * ending the very recording this idempotent command was supposed to leave untouched.
+   */
+  test("a start issued while this mode is already recording adopts the session, and stop is never sent", async () => {
+    const { control, recorder } = buildExplicit();
+    // Already recording before this capture's start sequence ever ran.
+    recorder.observe({ t: "begin", session: 1, mode: "assisted-notes" });
+    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+    expect(await outcomeOf(started)).toBe("started");
+    expect(recorder.startFailure).toBeUndefined();
+    // The start signal still goes out once — idempotent, so it needs no forced known state —
+    // but nothing beyond that, and in particular no `stop-assisted-notes`.
+    expect(control.signals()).toEqual([ASSISTED_START]);
+  });
+
+  test("a start while a different mode is recording is refused, not adopted", async () => {
+    const { control, recorder } = buildExplicit();
+    // A different mode is already recording; this is exactly the "busy" row of
+    // FOLLOW_STREAM.md's table, not a success no-op, and must not be adopted as one.
+    recorder.observe({ t: "begin", session: 1, mode: "meeting" });
+    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+    await flush();
+    recorder.observe({ t: "refused", mode: "assisted-notes", reason: "busy" });
+    expect(await outcomeOf(started)).toBe("not-started");
+    expect(recorder.startFailure).toEqual({ kind: "refused", reason: "busy" });
+    expect(control.signals()).toEqual([ASSISTED_START]);
+  });
+
+  /**
+   * `#followedMode` is `undefined` both for an app old enough to predate `begin-mode` and for
+   * a mode core does not recognize — the second of those is a genuinely different, unrelated
+   * capture, so an unknown mode must not be adopted the way a freshly-arrived `begin` is. The
+   * cost of that caution is only a slower, misreported `start-timeout` instead of `"started"`;
+   * it must never be a stopped recording, which the timeout fix below still guarantees.
+   */
+  test("a pre-existing session with unknown mode is not adopted, and still ends safely", async () => {
+    const { control, clock, recorder } = buildExplicit();
+    recorder.observe({ t: "begin", session: 1 }); // no `mode` field at all
+    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+    await flush();
+    expect(await outcomeOf(started.then(() => "settled" as const))).toBe("still-waiting");
+    clock.fire(START_ACK_MS);
+    expect(await outcomeOf(started)).toBe("not-started");
+    expect(recorder.startFailure).toEqual({ kind: "start-timeout" });
+    // The point of the timeout fix: a session that predates this call, of any mode including
+    // an unrecognized one, is never stopped by the backstop.
+    expect(control.signals()).toEqual([ASSISTED_START]);
+    expect(control.signals()).not.toContain(ASSISTED_STOP);
+  });
+
+  test("capability missing: not-started, with no control signal sent", async () => {
+    for (const capabilities of [[], [ASSISTED_START], [ASSISTED_STOP]]) {
+      const { control, recorder } = buildExplicit();
+      const outcome = await recorder.start(Promise.resolve<HelloInfo>({ capabilities }));
+      expect(outcome).toBe("not-started");
+      expect(recorder.startFailure).toEqual({ kind: "unsupported" });
+      expect(control.signals()).toEqual([]);
+    }
   });
 
   test("a hello with no capabilities field at all is also unsupported, never a crash", async () => {
-    const { control, recorder } = buildGated();
+    const { control, recorder } = buildExplicit();
     const outcome = await recorder.start(Promise.resolve<HelloInfo>({}));
     expect(outcome).toBe("not-started");
-    expect(recorder.startFailure).toBe("unsupported");
+    expect(recorder.startFailure).toEqual({ kind: "unsupported" });
     expect(control.signals()).toEqual([]);
   });
 
   test("no hello by the attach deadline: not-started, no control signals", async () => {
-    const { control, clock, recorder } = buildGated();
+    const { control, clock, recorder } = buildExplicit();
     const started = recorder.start(new Promise<HelloInfo>(() => {}));
     await flush();
     expect(control.signals()).toEqual([]);
     clock.fire(ATTACH_GRACE_MS);
     expect(await outcomeOf(started)).toBe("not-started");
-    expect(recorder.startFailure).toBe("no-hello");
+    expect(recorder.startFailure).toEqual({ kind: "no-hello" });
     expect(control.signals()).toEqual([]);
   });
 
-  test("a toggle error is reported verbatim and the outcome is not-started", async () => {
-    const { control, reports, recorder } = buildGated();
+  test("an ordinary control error is reported verbatim and the outcome is not-started", async () => {
+    const { control, reports, recorder } = buildExplicit();
     control.auto = false;
-    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: [ASSISTED] }));
+    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
     await flush();
-    expect(control.release()).toBe("cancel");
-    await flush();
-    const clapError = { status: "error" as const, message: "error: unrecognized argument '--toggle-assisted-notes'" };
-    expect(control.release(clapError)).toBe(ASSISTED);
+    const controlError = { status: "error" as const, message: "shorthand exited unexpectedly" };
+    expect(control.release(controlError)).toBe(ASSISTED_START);
     expect(await outcomeOf(started)).toBe("not-started");
     // Not a synthesized reason: the ordinary control-failure report already said exactly what
     // went wrong, and a second, generic notice on top of that would only be noise.
     expect(recorder.startFailure).toBeUndefined();
-    expect(reports.at(-1)).toEqual({ phase: "start", result: clapError });
+    expect(reports.at(-1)).toEqual({ phase: "start", result: controlError });
   });
 
-  test("acknowledgement timeout sends a cancel backstop, resolves not-started, and leaves nothing believed recording", async () => {
-    const { control, clock, recorder } = buildGated();
-    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: [ASSISTED] }));
+  /**
+   * A `refused` record gives the real reason instead of leaving it to a timeout to guess at.
+   * Covers all three of `shorthand-core`'s `KNOWN_REFUSAL_REASONS`, plus a value this build
+   * does not recognize — FOLLOW_STREAM.md is explicit that `reason` is not a closed union, so
+   * an unrecognized value must still surface, verbatim, rather than fail to parse.
+   */
+  test("a refusal surfaces as a distinguishable not-started, whatever its reason", async () => {
+    for (const reason of ["busy", "mode-disabled", "publication-disabled", "some-future-reason"]) {
+      const { control, recorder } = buildExplicit();
+      const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+      await flush();
+      recorder.observe({ t: "refused", mode: "assisted-notes", reason });
+      expect(await outcomeOf(started)).toBe("not-started");
+      expect(recorder.startFailure).toEqual({ kind: "refused", reason });
+      // A refusal is definitive; nothing more is sent chasing it.
+      expect(control.signals()).toEqual([ASSISTED_START]);
+    }
+  });
+
+  test("a refusal for a different mode is not evidence about this recorder's own start", async () => {
+    const { control, recorder } = buildExplicit();
+    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
     await flush();
-    expect(control.signals()).toEqual(["cancel", ASSISTED]);
+    // Some other caller's meeting start was refused; ours is still pending.
+    recorder.observe({ t: "refused", mode: "meeting", reason: "busy" });
+    expect(await outcomeOf(started.then(() => "settled" as const))).toBe("still-waiting");
+    recorder.observe({ t: "refused", mode: "assisted-notes", reason: "busy" });
+    expect(await outcomeOf(started)).toBe("not-started");
+    expect(recorder.startFailure).toEqual({ kind: "refused", reason: "busy" });
+    expect(control.signals()).toEqual([ASSISTED_START]);
+  });
+
+  test("start_failed surfaces its message", async () => {
+    const { control, recorder } = buildExplicit();
+    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+    await flush();
+    recorder.observe({ t: "start_failed", mode: "assisted-notes", message: "no input device" });
+    expect(await outcomeOf(started)).toBe("not-started");
+    expect(recorder.startFailure).toEqual({ kind: "start-failed", message: "no input device" });
+    expect(control.signals()).toEqual([ASSISTED_START]);
+  });
+
+  /**
+   * P2. The same silent-drop gap `#beginWaiters` has (see "a begin that arrives while the
+   * start child is still exiting" above): `#send()` only resolves on the forwarding child's
+   * exit, and Shorthand can refuse the request before that exit. `#refusalWaiters` is not
+   * registered until the race loop starts, so a `refused` landing in this window used to have
+   * nowhere to land — the caller was told `start-timeout` ("Shorthand never explained why")
+   * instead of the real, actionable reason.
+   */
+  test("a refusal that arrives while the start child is still exiting still surfaces its reason", async () => {
+    for (const reason of ["busy", "mode-disabled", "publication-disabled"]) {
+      const { control, recorder } = buildExplicit();
+      control.auto = false;
+      const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+      await flush();
+      // The start signal is spawned and still in flight; Shorthand has already refused it.
+      recorder.observe({ t: "refused", mode: "assisted-notes", reason });
+      expect(control.release()).toBe(ASSISTED_START);
+      expect(await outcomeOf(started)).toBe("not-started");
+      expect(recorder.startFailure).toEqual({ kind: "refused", reason });
+      expect(control.signals()).toEqual([ASSISTED_START]);
+    }
+  });
+
+  test("a start_failed that arrives while the start child is still exiting still surfaces its message", async () => {
+    const { control, recorder } = buildExplicit();
+    control.auto = false;
+    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+    await flush();
+    recorder.observe({ t: "start_failed", mode: "assisted-notes", message: "no input device" });
+    expect(control.release()).toBe(ASSISTED_START);
+    expect(await outcomeOf(started)).toBe("not-started");
+    expect(recorder.startFailure).toEqual({ kind: "start-failed", message: "no input device" });
+    expect(control.signals()).toEqual([ASSISTED_START]);
+  });
+
+  /**
+   * The staleness trap the sequence-number guard exists for: a reason recorded during an
+   * earlier capture on this same recorder must not be replayed as a later capture's answer.
+   * Without the snapshot-and-compare, checking `#lastRefusalReason` directly would find the
+   * leftover value from the first attempt and report the second as refused before it was ever
+   * given a chance to be answered.
+   */
+  test("a refusal recorded during an earlier capture is not consumed by a later one", async () => {
+    const { recorder } = buildExplicit();
+    const firstStart = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+    await flush();
+    recorder.observe({ t: "refused", mode: "assisted-notes", reason: "busy" });
+    expect(await outcomeOf(firstStart)).toBe("not-started");
+    expect(recorder.startFailure).toEqual({ kind: "refused", reason: "busy" });
+
+    // A later capture, with nothing refusing it this time. The stale reason above must not
+    // leak in as an immediate, false refusal.
+    const secondStart = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+    await flush();
+    expect(await outcomeOf(secondStart.then(() => "settled" as const))).toBe("still-waiting");
+    recorder.observe({ t: "begin", session: 9, mode: "assisted-notes" });
+    expect(await outcomeOf(secondStart)).toBe("started");
+    expect(recorder.startFailure).toBeUndefined();
+  });
+
+  test("a start_failed recorded during an earlier capture is not consumed by a later one", async () => {
+    const { recorder } = buildExplicit();
+    const firstStart = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+    await flush();
+    recorder.observe({ t: "start_failed", mode: "assisted-notes", message: "no input device" });
+    expect(await outcomeOf(firstStart)).toBe("not-started");
+    expect(recorder.startFailure).toEqual({ kind: "start-failed", message: "no input device" });
+
+    const secondStart = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+    await flush();
+    expect(await outcomeOf(secondStart.then(() => "settled" as const))).toBe("still-waiting");
+    recorder.observe({ t: "begin", session: 9, mode: "assisted-notes" });
+    expect(await outcomeOf(secondStart)).toBe("started");
+    expect(recorder.startFailure).toBeUndefined();
+  });
+
+  test("the backstop timeout still fires when the app says nothing at all", async () => {
+    const { control, clock, recorder } = buildExplicit();
+    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
+    await flush();
+    expect(control.signals()).toEqual([ASSISTED_START]);
     clock.fire(START_ACK_MS);
     expect(await outcomeOf(started)).toBe("not-started");
-    expect(recorder.startFailure).toBe("start-timeout");
-    // Exactly one backstop cancel — never a second toggle, which could turn a late recording
-    // off or on ambiguously.
-    expect(control.signals()).toEqual(["cancel", ASSISTED, "cancel"]);
+    expect(recorder.startFailure).toEqual({ kind: "start-timeout" });
+    // A stop backstop, idempotent and harmless either way — never a second start, which could
+    // race a merely-late reply to the first.
+    expect(control.signals()).toEqual([ASSISTED_START, ASSISTED_STOP]);
     expect(recorder.mayBeRecording).toBe(false);
   });
 
-  test("a begin just before the deadline resolves started, with no backstop cancel", async () => {
-    const { control, recorder } = buildGated();
-    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: [ASSISTED] }));
+  test("a begin just before the deadline resolves started, with no backstop stop", async () => {
+    const { control, recorder } = buildExplicit();
+    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
     await flush();
     recorder.observe({ t: "begin", session: 1 });
     expect(await outcomeOf(started)).toBe("started");
-    expect(control.signals()).toEqual(["cancel", ASSISTED]);
+    expect(control.signals()).toEqual([ASSISTED_START]);
   });
 
-  test("a stop during the acknowledgement wait recalls at once and resolves stopped", async () => {
-    const { control, recorder } = buildGated();
-    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: [ASSISTED] }));
+  test("a stop during the acknowledgement wait recalls at once via the stop signal and resolves stopped", async () => {
+    const { control, recorder } = buildExplicit();
+    const started = recorder.start(Promise.resolve<HelloInfo>({ capabilities: ASSISTED_CAPABILITIES }));
     await flush();
-    expect(control.signals()).toEqual(["cancel", ASSISTED]);
+    expect(control.signals()).toEqual([ASSISTED_START]);
     // Reacts immediately rather than waiting out the whole acknowledgement budget: this is the
     // one wait `requestStop()` has to interrupt directly, because it is what is being awaited.
     recorder.requestStop();
     expect(await outcomeOf(started)).toBe("stopped");
-    expect(control.signals()).toEqual(["cancel", ASSISTED, "cancel"]);
+    expect(control.signals()).toEqual([ASSISTED_START, ASSISTED_STOP]);
   });
 
-  test("Meeting is unaffected: no requiredCapability means the legacy fire-and-forget contract", async () => {
+  /**
+   * `stop-assisted-notes` is documented idempotent (FOLLOW_STREAM.md's table): a no-op against
+   * an idle Shorthand, never able to start one by mistake the way a toggle could. Calling
+   * `stop()` on a recorder that never started must therefore be safe without ever sending the
+   * start signal.
+   */
+  test("a stop against an idle app is a safe no-op that does not start a recording", async () => {
+    const { control, recorder } = buildExplicit();
+    const outcome = await recorder.stop();
+    expect(outcome).toBe("no-session");
+    expect(control.signals()).toEqual([ASSISTED_STOP]);
+    expect(control.signals()).not.toContain(ASSISTED_START);
+  });
+
+  test("Meeting is unaffected: toggle kind keeps the legacy fire-and-forget contract", async () => {
     const { control, recorder } = build();
     const started = recorder.start(Promise.resolve());
     await flush();
-    // No acknowledgement configured, so a confirmed toggle resolves "started" immediately —
+    // No acknowledgement to wait for, so a confirmed toggle resolves "started" immediately —
     // exactly the point at which the old `void`-returning start() used to settle.
     expect(await outcomeOf(started)).toBe("started");
     expect(recorder.startFailure).toBeUndefined();

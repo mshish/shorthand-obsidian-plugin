@@ -19,14 +19,14 @@ describe("decideFollow", () => {
   test("attaches a meeting recording to the open note", () => {
     expect(decideFollow({ ...base, mode: "meeting" })).toEqual({
       kind: "attach",
-      signal: "toggle-transcription",
+      mode: "meeting",
     });
   });
 
   test("attaches an assisted notes recording", () => {
     expect(decideFollow({ ...base, mode: "assisted-notes" })).toEqual({
       kind: "attach",
-      signal: "toggle-assisted-notes",
+      mode: "assisted-notes",
     });
   });
 
