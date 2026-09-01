@@ -260,7 +260,10 @@ function applyPreservingViewport(
  * environments rather than for a real vault.
  */
 function defaultScheduleFrame(run: () => void): void {
-  if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+  // `typeof window !== "undefined"` first: the test/bundle environment this fallback exists
+  // for has no `window` global at all, and referencing it directly (unlike `typeof`) would
+  // throw a ReferenceError rather than fall through to the microtask branch.
+  if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") window.requestAnimationFrame(run);
   else void Promise.resolve().then(run);
 }
 

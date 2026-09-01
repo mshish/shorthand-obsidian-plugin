@@ -944,7 +944,7 @@ function resolveAll(waiters: Set<() => void>): void {
 }
 
 function realDelay(ms: number): Promise<void> {
-  return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
+  return new Promise((resolveDelay) => window.setTimeout(resolveDelay, ms));
 }
 
 function errorMessage(error: unknown): string {

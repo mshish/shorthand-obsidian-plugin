@@ -109,8 +109,21 @@ function readFrontmatterLink(value: unknown): FrontmatterLink {
 
 function describe(value: unknown): string {
   if (Array.isArray(value)) return "a list";
-  if (typeof value === "object") return "a nested value";
-  return `"${String(value)}"`;
+  // Frontmatter is parsed YAML, so `value` is never really a function or a symbol — this
+  // takes `unknown` only because Obsidian's frontmatter cache is untyped. But excluding
+  // "object" from `unknown` by negation (`if (typeof value !== "object") …`) still leaves
+  // TypeScript unable to prove `String(value)` safe: it collapses the remainder to `{}`, whose
+  // `toString` it cannot distinguish from `Object.prototype`'s "[object Object]". Listing every
+  // other `typeof` tag as its own case narrows each one for real, so the shared `String(value)`
+  // is over a union of types that truly do have their own `toString` — and, with no `default`,
+  // the case list covering all eight `typeof` results is what proves the function always
+  // returns, not a fallback that could silently swallow a ninth one.
+  switch (typeof value) {
+    case "object": return "a nested value";
+    case "string": case "number": case "boolean": case "bigint":
+    case "function": case "symbol": case "undefined":
+      return `"${String(value)}"`;
+  }
 }
 
 function errorMessage(error: unknown): string {

@@ -331,7 +331,7 @@ function enumValue<const Values extends readonly string[]>(
 ): Values[number] | "" {
   if (value === "") return "";
   return typeof value === "string" && (values as readonly string[]).includes(value)
-    ? value as Values[number]
+    ? value
     : fallback;
 }
 

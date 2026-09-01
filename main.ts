@@ -72,7 +72,6 @@ import {
   resolveTemplateSections,
   storedPromptFieldValue,
   validatePromptSettings,
-  type PromptFieldState,
   type ShorthandPluginSettings,
 } from "./src/settings.js";
 import {
@@ -771,7 +770,7 @@ export default class ShorthandPlugin extends Plugin {
           if (enhancer !== undefined && this.settings.enableLiveEnhancement) {
             enhancer.requestTick();
             if (this.settings.debugLogging) {
-              console.log(
+              console.debug(
                 `[shorthand] transcript +${delta.length} chars; pending ${enhancer.state.pendingCharacters}/${this.settings.minNewChars} toward next pass`,
               );
             }
@@ -1754,7 +1753,7 @@ export default class ShorthandPlugin extends Plugin {
     const leaf = existing[0] ?? this.app.workspace.getRightLeaf(false);
     if (leaf === null || leaf === undefined) return;
     if (existing.length === 0) await leaf.setViewState({ type: SHORTHAND_PANEL_VIEW, active: true });
-    this.app.workspace.revealLeaf(leaf);
+    await this.app.workspace.revealLeaf(leaf);
   }
 
   /**

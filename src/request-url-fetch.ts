@@ -21,7 +21,7 @@ export type RequestUrl = (
  * memory but cannot corrupt conversation history: LlmAgentClient checks both the pass generation
  * and signal.aborted before appending a late response.
  */
-export function createRequestUrlFetch(requestUrl: RequestUrl): typeof globalThis.fetch {
+export function createRequestUrlFetch(requestUrl: RequestUrl): typeof window.fetch {
   const fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = new Request(input, init);
     const headers: Record<string, string> = {};
@@ -51,5 +51,5 @@ export function createRequestUrlFetch(requestUrl: RequestUrl): typeof globalThis
   // Bun's test globals add a non-standard `fetch.preconnect` member to typeof fetch.
   // The AI SDK consumes the standard call signature only, and Obsidian's Chromium fetch
   // has no such member, so manufacturing a misleading no-op property would hide that fact.
-  return fetch as typeof globalThis.fetch;
+  return fetch as typeof window.fetch;
 }
