@@ -63,9 +63,14 @@ export function describePanel(input: PanelInput): PanelModel {
   // Not `state.captureActive`: Assisted Notes defers `capture-started` into its bounded
   // acknowledgement, so a real runtime can be running for that whole window with
   // `captureActive` still false. `hasCapture` answers whether there is something to stop.
-  const canStop = hasCapture && !state.stopping;
-  const showStartChoices = !hasCapture && canStartCapture(state);
-  const showStop = hasCapture;
+  // The reducer's idle mode is the authoritative "nothing is running" state. `hasCapture`
+  // is intentionally separate because Assisted Notes owns a runtime during its acknowledgement
+  // window, but a stale runtime reference must not put Stop back on an idle panel (or hide the
+  // two valid starts). This keeps the UI self-consistent without weakening the control guard.
+  const captureInFlight = hasCapture && state.mode !== "idle";
+  const canStop = captureInFlight && !state.stopping;
+  const showStartChoices = !captureInFlight && canStartCapture(state);
+  const showStop = captureInFlight;
 
   const modeName = captureMode === "assisted-notes" ? "Assisted notes" : "Meeting";
   const buttons: readonly PanelButton[] = [

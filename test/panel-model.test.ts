@@ -40,6 +40,13 @@ describe("describePanel", () => {
       .toEqual(["stop"]);
   });
 
+  test("does not let a stale runtime reference put Stop on an idle panel", () => {
+    const model = describePanel({ ...base, state: INITIAL_PLUGIN_STATE, hasCapture: true });
+    expect(model.buttons.filter(({ visible }) => visible).map(({ id }) => id))
+      .toEqual(["start-meeting", "start-assisted-notes"]);
+    expect(enabled(model)).toEqual(["start-meeting", "start-assisted-notes"]);
+  });
+
   test("makes a live meeting's mode, clock, note and next action explicit", () => {
     const model = describePanel({
       ...base,
