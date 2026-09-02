@@ -1,6 +1,5 @@
-/* Obsidian's plugin guidelines forbid hardcoded styling — `el.style.width = "100%"` in a
-   plugin overrides whatever the user's theme and font-size settings decided. Values that need
-   a number come from Obsidian's own CSS variables so they track the active theme. */
+/* Obsidian's plugin guidelines forbid hardcoded styling. Measurements and colors here come
+   from Obsidian's own variables so the panel follows the active theme and font settings. */
 
 /* Both states of a prompt field: the editable textarea and the read-only view of the
    effective default. They share the class so the field does not change width when the user
@@ -11,27 +10,150 @@
   resize: vertical;
 }
 
-/* The right-sidebar panel. Spacing comes from Obsidian's own variables so it tracks the
-   active theme; the guidelines forbid hardcoded values for exactly this reason. */
-.shorthand-panel-headline {
-  font-weight: var(--font-semibold);
-  margin-bottom: var(--size-4-1);
+/* Right-sidebar panel ------------------------------------------------------ */
+
+.shorthand-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-4);
 }
 
-.shorthand-panel-note,
+.shorthand-panel-status {
+  --shorthand-panel-accent: var(--color-green);
+  --shorthand-panel-soft: color-mix(in srgb, var(--shorthand-panel-accent) 10%, var(--background-primary));
+
+  background-color: var(--shorthand-panel-soft);
+  border: var(--border-width) solid color-mix(
+    in srgb,
+    var(--shorthand-panel-accent) 24%,
+    var(--background-modifier-border)
+  );
+  border-radius: var(--radius-l);
+  box-shadow: inset var(--size-2-1) 0 0 var(--shorthand-panel-accent);
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2);
+  padding: var(--size-4-4);
+}
+
+.shorthand-panel-status.is-meeting {
+  --shorthand-panel-accent: var(--color-orange);
+}
+
+.shorthand-panel-status.is-assisted-notes {
+  --shorthand-panel-accent: var(--color-purple);
+}
+
+.shorthand-panel-status.is-working {
+  --shorthand-panel-accent: var(--interactive-accent);
+}
+
+.shorthand-panel-status.is-warning {
+  --shorthand-panel-accent: var(--color-orange);
+}
+
+.shorthand-panel-status.is-error {
+  --shorthand-panel-accent: var(--color-red);
+}
+
+.shorthand-panel-status-top {
+  align-items: center;
+  display: flex;
+  gap: var(--size-4-2);
+  justify-content: space-between;
+}
+
+.shorthand-panel-mode {
+  align-items: center;
+  color: var(--shorthand-panel-accent);
+  display: flex;
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+  gap: var(--size-4-2);
+  letter-spacing: var(--letter-spacing);
+  min-width: 0;
+  text-transform: uppercase;
+}
+
+.shorthand-panel-mode-icon {
+  align-items: center;
+  background-color: color-mix(in srgb, var(--shorthand-panel-accent) 14%, transparent);
+  border-radius: var(--radius-s);
+  display: inline-flex;
+  flex: 0 0 auto;
+  justify-content: center;
+  padding: var(--size-2-2);
+}
+
+.shorthand-panel-mode-icon svg,
+.shorthand-panel-note-icon svg,
+.shorthand-panel-button-icon svg {
+  height: var(--icon-size);
+  width: var(--icon-size);
+}
+
+.shorthand-panel-status.is-working .shorthand-panel-mode-icon svg {
+  animation: shorthand-panel-spin 1.4s linear infinite;
+}
+
+.shorthand-panel-elapsed {
+  color: var(--text-normal);
+  font-size: calc(var(--font-ui-large) * 1.35);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--font-semibold);
+  letter-spacing: var(--letter-spacing);
+  line-height: var(--line-height-tight);
+}
+
+.shorthand-panel-headline {
+  color: var(--text-normal);
+  font-size: var(--font-ui-large);
+  font-weight: var(--font-semibold);
+  line-height: var(--line-height-tight);
+  margin: var(--size-4-1) 0 0;
+}
+
+.shorthand-panel-note {
+  align-items: center;
+  color: var(--text-muted);
+  display: flex;
+  font-size: var(--font-ui-small);
+  gap: var(--size-4-2);
+  min-width: 0;
+  text-decoration: none;
+  width: fit-content;
+}
+
+.shorthand-panel-note:hover {
+  color: var(--text-accent);
+  text-decoration: underline;
+  text-underline-offset: var(--size-2-1);
+}
+
+.shorthand-panel-note-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.shorthand-panel-note-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .shorthand-panel-detail {
   color: var(--text-muted);
   font-size: var(--font-ui-small);
-  margin: 0 0 var(--size-4-1) 0;
+  line-height: var(--line-height-normal);
+  margin: 0;
 }
 
 .shorthand-panel-activity {
   align-items: center;
   color: var(--text-muted);
   display: flex;
-  font-size: var(--font-ui-small);
+  font-size: var(--font-ui-smaller);
   gap: var(--size-4-2);
-  margin-bottom: var(--size-4-1);
 }
 
 .shorthand-panel-pulse {
@@ -41,7 +163,7 @@
 
 .shorthand-panel-pulse > span {
   animation: shorthand-note-pulse 1.4s ease-in-out infinite;
-  background: var(--interactive-accent);
+  background: var(--shorthand-panel-accent);
   border-radius: var(--radius-s);
   height: var(--size-2-2);
   opacity: 0.3;
@@ -56,24 +178,136 @@
   animation-delay: 0.32s;
 }
 
+.shorthand-panel-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2);
+}
+
+.shorthand-panel-actions-label {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+  letter-spacing: var(--letter-spacing);
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.shorthand-panel-buttons {
+  display: grid;
+  gap: var(--size-4-2);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+button.shorthand-panel-button {
+  --shorthand-button-accent: var(--interactive-accent);
+
+  align-items: flex-start;
+  background-color: color-mix(in srgb, var(--shorthand-button-accent) 9%, var(--background-primary));
+  border: var(--border-width) solid color-mix(
+    in srgb,
+    var(--shorthand-button-accent) 22%,
+    var(--background-modifier-border)
+  );
+  border-radius: var(--radius-m);
+  box-shadow: none;
+  color: var(--text-normal);
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-3);
+  height: auto;
+  justify-content: space-between;
+  min-height: calc(var(--input-height) * 2);
+  padding: var(--size-4-3);
+  text-align: left;
+  white-space: normal;
+}
+
+button.shorthand-panel-button:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--shorthand-button-accent) 16%, var(--background-primary));
+  border-color: color-mix(in srgb, var(--shorthand-button-accent) 44%, var(--background-modifier-border));
+  transform: translateY(calc(-1 * var(--size-2-1)));
+}
+
+button.shorthand-panel-button:focus-visible {
+  box-shadow: 0 0 0 var(--size-2-1) color-mix(in srgb, var(--shorthand-button-accent) 38%, transparent);
+}
+
+button.shorthand-panel-button:disabled {
+  opacity: var(--disabled-opacity);
+}
+
+button.shorthand-panel-button.is-start-meeting {
+  --shorthand-button-accent: var(--color-orange);
+}
+
+button.shorthand-panel-button.is-start-assisted-notes {
+  --shorthand-button-accent: var(--color-purple);
+}
+
+.shorthand-panel-button-icon {
+  color: var(--shorthand-button-accent);
+  display: inline-flex;
+}
+
+.shorthand-panel-button-copy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-2-1);
+}
+
+.shorthand-panel-button-label {
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold);
+  line-height: var(--line-height-tight);
+}
+
+.shorthand-panel-button-hint {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-normal);
+  line-height: var(--line-height-tight);
+}
+
+button.shorthand-panel-button.is-stop {
+  --shorthand-button-accent: var(--color-red);
+
+  align-items: center;
+  align-self: flex-start;
+  flex-direction: row;
+  gap: var(--size-4-2);
+  justify-content: flex-start;
+  margin-top: var(--size-4-2);
+  min-height: var(--input-height);
+  padding: var(--size-4-2) var(--size-4-4);
+}
+
+button.shorthand-panel-button.is-stop .shorthand-panel-button-copy {
+  display: inline-flex;
+}
+
 @keyframes shorthand-note-pulse {
   0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
   30% { opacity: 1; transform: translateY(calc(-1 * var(--size-2-1))); }
 }
 
+@keyframes shorthand-panel-spin {
+  to { transform: rotate(1turn); }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .shorthand-panel-pulse > span { animation: none; opacity: 0.7; }
+  .shorthand-panel-pulse > span,
+  .shorthand-panel-status.is-working .shorthand-panel-mode-icon svg {
+    animation: none;
+  }
+
+  button.shorthand-panel-button:hover:not(:disabled) {
+    transform: none;
+  }
 }
 
 .shorthand-settings-link {
   color: var(--text-accent);
   text-decoration: underline;
   text-underline-offset: var(--size-2-1);
-}
-
-.shorthand-panel-buttons {
-  display: flex;
-  flex-direction: column;
-  gap: var(--size-4-1);
-  margin-top: var(--size-4-2);
 }
