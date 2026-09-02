@@ -6,6 +6,9 @@
   "description": "Take meeting notes live, using the Claude or ChatGPT plan you already have.",
   "author": "Shorthand contributors",
   "authorUrl": "https://shorthand.ing",
-  "fundingUrl": "https://donate.stripe.com/fZufZh6T31Jwdig89afEk00",
+  "fundingUrl": {
+    "Donate": "https://donate.stripe.com/fZufZh6T31Jwdig89afEk00",
+    "GitHub Sponsors": "https://github.com/sponsors/mshish"
+  },
   "isDesktopOnly": true
 }
