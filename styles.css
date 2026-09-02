@@ -14,6 +14,14 @@
 
 /* Right-sidebar panel ------------------------------------------------------ */
 
+/* `#patch` hides Stop, the note link and the activity dots with `el.hidden`, which only works
+   through the UA stylesheet's `[hidden] { display: none }`. Every author rule below that sets
+   `display` on those elements outranks it, so without this an idle panel shows a Stop button
+   that does nothing. Scoped to the panel: nothing else in the plugin toggles `hidden`. */
+.shorthand-panel [hidden] {
+  display: none;
+}
+
 .shorthand-panel {
   --shorthand-panel-green: #4d8b74;
   --shorthand-panel-orange: #bc7049;

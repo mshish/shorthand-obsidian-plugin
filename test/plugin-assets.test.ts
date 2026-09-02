@@ -19,6 +19,16 @@ describe("the plugin stylesheet", () => {
     expect(css).toContain(".shorthand-panel-buttons");
   });
 
+  test("lets the panel's `hidden` attribute win over its own display rules", () => {
+    // `#patch` hides Stop, the note link and the activity dots with `el.hidden`, which only
+    // works through the UA stylesheet's `[hidden] { display: none }`. Any author rule that
+    // sets `display` on those elements outranks it, and `.shorthand-panel-note`,
+    // `.shorthand-panel-activity` and `button.shorthand-panel-button` all do — so without a
+    // scoped `[hidden]` rule, an idle panel shows a Stop button that does nothing.
+    const css = readFileSync(resolve(process.cwd(), "styles.css"), "utf8");
+    expect(css).toMatch(/\.shorthand-panel \[hidden\]\s*\{\s*display: none;\s*\}/);
+  });
+
   test("keeps the panel's semantic accents stable across Obsidian themes", () => {
     const css = readFileSync(resolve(process.cwd(), "styles.css"), "utf8");
     expect(css).toContain("--shorthand-panel-green: #4d8b74");
