@@ -1796,6 +1796,17 @@ export default class ShorthandPlugin extends Plugin {
 type SettingsKey = keyof ShorthandPluginSettings | "minIntervalSeconds";
 
 class ShorthandSettingTab extends PluginSettingTab {
+  /**
+   * The most recent catalog fetched for each agent backend, read by that backend's sign-in row
+   * `visible` predicate (see `agentCatalogItem`) and written when its model row's `render`
+   * callback's fetch lands. Lives on the tab instance rather than inside that `render`'s own
+   * closure because `visible` is a sibling property the framework evaluates independently of
+   * `render` — a closure-local variable would be out of scope for it. Cleared when the model
+   * row is torn down, so a fresh render always starts the sign-in row from "unknown" (hidden)
+   * rather than the previous selection's stale answer.
+   */
+  #agentCatalogs: Map<"claude" | "codex", AgentCatalog> = new Map();
+
   constructor(app: App, private readonly plugin: ShorthandPlugin) {
     super(app, plugin);
   }
@@ -1832,9 +1843,15 @@ class ShorthandSettingTab extends PluginSettingTab {
    *
    * A control's own row has no reactive `desc`, so a row whose description is computed from its
    * current value (docs/settings-copy-style.md rule 4) goes stale after a commit unless
-   * `getSettingDefinitions()` runs again — `update()` is what re-runs it. `backend` and
-   * `writeTranscriptNote` instead gate *other* rows' `visible` predicates; re-evaluating those
-   * is `refreshDomState()`'s job and does not need a full rebuild.
+   * `getSettingDefinitions()` runs again — `update()` is what re-runs it. `writeTranscriptNote`
+   * gates a plain `control` row's `visible` predicate (the transcript folder row) and nothing
+   * else about it — that row is already built, so re-evaluating the predicate is
+   * `refreshDomState()`'s job and does not need a full rebuild. `backend`, though, gates rows
+   * built by a `render` callback (the agent sign-in/model/effort groups, the LLM profile group)
+   * that has never executed for a backend the user has not yet had selected; `refreshDomState()`
+   * only toggles CSS on rows that already exist; it cannot conjure a row whose `render` has
+   * never run. `backend` therefore goes through the full `update()` rebuild instead, via
+   * `RESTRUCTURING_KEYS`.
    */
   async setControlValue(key: string, value: unknown): Promise<void> {
     if (key === "minIntervalSeconds") {
@@ -1844,7 +1861,9 @@ class ShorthandSettingTab extends PluginSettingTab {
       return;
     }
     await this.plugin.saveSettings({ ...this.plugin.settings, [key]: value });
-    if (REVEALS_OTHER_ROWS.has(key)) {
+    if (RESTRUCTURING_KEYS.has(key)) {
+      this.update();
+    } else if (REVEALS_OTHER_ROWS.has(key)) {
       this.refreshDomState();
     } else if (SELF_DESCRIBING_KEYS.has(key)) {
       this.update();
@@ -1950,18 +1969,36 @@ class ShorthandSettingTab extends PluginSettingTab {
   }
 
   /**
-   * The sign-in row plus the model and effort rows for one agent backend, built as a single
-   * `render` item: `getSettingDefinitions()` runs on every render and once more when the tab is
-   * registered for search indexing, and the catalog fetch spawns a subprocess costing
-   * ~0.6-2.6s (see `CATALOG_TIMEOUT_MS`'s doc comment in core) — it must stay behind `render`,
-   * which Obsidian only invokes for a row it is actually displaying, never for search indexing
-   * and never for a backend hidden by `visible` below. Paying that cost for a backend the user
-   * has not selected would be wasted work on every tab open.
+   * The sign-in row plus the model and effort rows for one agent backend, wrapped in their own
+   * `type: "group"` so a `render` callback's own `group.addSetting` appends inside *this*
+   * group's `listEl` — right after the row that built it — rather than a top-level item's
+   * `render`, whose `group` argument is the tab's root group; appending there instead lands new
+   * rows at the end of the whole tab, after Advanced. No `heading`: this group exists to give
+   * `render` the right append target, not to add new UI.
+   *
+   * The sign-in row is a plain declarative item with no `render` of its own: its `visible` is
+   * the row's single owner, reading the catalog state the model row's `render` (below) writes
+   * once its fetch lands. It cannot own that fetch itself — `visible: false` keeps an item from
+   * being rendered at all (see `RESTRUCTURING_KEYS`'s doc comment), so a row whose own
+   * visibility depends on the catalog can never be the row that *produces* the catalog: it would
+   * start hidden and never get a `render` call to run the fetch that would reveal it. The model
+   * row has no such dependency — it always shows once this backend is selected, "Loading…" and
+   * disabled until the fetch lands — so it is the item in this group that both always renders
+   * and can safely own the fetch, the effort row (via `group.addSetting`), and refreshing the
+   * sign-in row's predicate.
+   *
+   * `getSettingDefinitions()` runs on every render and once more when the tab is registered for
+   * search indexing, and the catalog fetch spawns a subprocess costing ~0.6-2.6s (see
+   * `CATALOG_TIMEOUT_MS`'s doc comment in core) — it must stay behind `render`, which Obsidian
+   * only invokes for a row it is actually displaying, never for search indexing and never for a
+   * backend hidden by the group's `visible` below. Paying that cost for a backend the user has
+   * not selected would be wasted work on every tab open.
    *
    * `disposed` replaces the old `#displayGeneration` counter. Obsidian calls a `render`
    * callback's returned cleanup function before tearing the row down — backend switched away,
    * or the tab closed — which is the same "the fetch resolved into a row that is already gone"
-   * window the counter used to guard.
+   * window the counter used to guard. The cleanup also forgets this backend's cached catalog —
+   * see `#agentCatalogs`'s doc comment.
    */
   private agentCatalogItem(backend: "claude" | "codex"): SettingDefinitionItem<SettingsKey> {
     const backendLabel: AgentBackendLabel = backend === "claude" ? "Claude" : "Codex";
@@ -1970,87 +2007,103 @@ class ShorthandSettingTab extends PluginSettingTab {
     const effortKey = backend === "claude" ? "claudeEffort" : "codexEffort";
     const ownsBackend: EnhancementBackend = backend === "claude" ? "claude-agent-sdk" : "codex";
     return {
-      // Reserved here, in the same position the old unconditional "Codex sign-in" row held, and
-      // hidden until the fetch resolves and says nobody is signed in — a hard fetch failure gets
-      // its own message on the rows below instead, per catalog.ts's AgentCatalog.signedIn doc:
-      // neither backend fails merely because nobody is signed in, so this is not the row a
-      // failed fetch uses.
-      name: `${backendLabel} sign-in`,
-      desc: createFragment((desc) => {
-        desc.appendText("Sign in with ");
-        desc.createEl("code", { text: loginCommand });
-        desc.appendText(" in a terminal first. Shorthand uses that sign-in and cannot start it for you.");
-      }),
+      type: "group",
       // Each backend names itself rather than sharing an else — see basicDefinitions().
       visible: () => this.plugin.settings.backend === ownsBackend,
-      render: (signInSetting, group) => {
-        let disposed = false;
-        signInSetting.settingEl.hide();
+      items: [
+        {
+          // Reserved here, in the same position the old unconditional "Codex sign-in" row held,
+          // and hidden until the fetch resolves and says nobody is signed in — a hard fetch
+          // failure gets its own message on the rows below instead, per catalog.ts's
+          // AgentCatalog.signedIn doc: neither backend fails merely because nobody is signed in,
+          // so this is not the row a failed fetch uses.
+          name: `${backendLabel} sign-in`,
+          desc: createFragment((desc) => {
+            desc.appendText("Sign in with ");
+            desc.createEl("code", { text: loginCommand });
+            desc.appendText(" in a terminal first. Shorthand uses that sign-in and cannot start it for you.");
+          }),
+          visible: () => {
+            const catalog = this.#agentCatalogs.get(backend);
+            return catalog !== undefined && !catalog.signedIn;
+          },
+        },
+        {
+          name: `${backendLabel} model`,
+          desc: catalogLoadingDescription(),
+          render: (modelRow, group) => {
+            let disposed = false;
 
-        let catalog: AgentCatalog | undefined;
-        let modelDropdown!: DropdownComponent;
-        let modelRow!: Setting;
-        group.addSetting((row) => {
-          modelRow = row.setName(`${backendLabel} model`).setDesc(catalogLoadingDescription());
-          modelRow.addDropdown((dropdown) => {
-            modelDropdown = dropdown
-              .addOption("", "Provider default")
-              .setValue(this.plugin.settings[modelKey]);
-            dropdown.onChange(async (value) => {
-              // Preserve-and-flag, not clear-and-reset: whether `value`'s model still accepts
-              // the stored effort is exactly what `decideEffortRow` below already works out
-              // from `this.plugin.settings[effortKey]`, so the effort is left untouched here. A
-              // model switch that invalidates it does not lose it — the next render shows it
-              // selected, disabled, and described as unavailable, the same presentation
-              // `decideModelRow` uses for a stale model id, which is what forces a visible
-              // re-pick instead of a silent substitution.
-              await this.plugin.saveSettings({ ...this.plugin.settings, [modelKey]: value });
-              if (catalog !== undefined) renderEffortOptions(catalog);
+            let modelDropdown!: DropdownComponent;
+            modelRow.addDropdown((dropdown) => {
+              modelDropdown = dropdown
+                .addOption("", "Provider default")
+                .setValue(this.plugin.settings[modelKey]);
+              dropdown.onChange(async (value) => {
+                // Preserve-and-flag, not clear-and-reset: whether `value`'s model still accepts
+                // the stored effort is exactly what `decideEffortRow` below already works out
+                // from `this.plugin.settings[effortKey]`, so the effort is left untouched here. A
+                // model switch that invalidates it does not lose it — the next render shows it
+                // selected, disabled, and described as unavailable, the same presentation
+                // `decideModelRow` uses for a stale model id, which is what forces a visible
+                // re-pick instead of a silent substitution.
+                await this.plugin.saveSettings({ ...this.plugin.settings, [modelKey]: value });
+                const catalog = this.#agentCatalogs.get(backend);
+                if (catalog !== undefined) renderEffortOptions(catalog);
+              });
             });
-          });
-          modelRow.setDisabled(true);
-        });
+            modelRow.setDisabled(true);
 
-        let effortDropdown!: DropdownComponent;
-        let effortRow!: Setting;
-        group.addSetting((row) => {
-          effortRow = row.setName(`${backendLabel} effort`).setDesc(catalogLoadingDescription());
-          effortRow.addDropdown((dropdown) => {
-            effortDropdown = dropdown.addOption("", "Provider default");
-            dropdown.onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, [effortKey]: value }));
-          });
-          effortRow.setDisabled(true);
-        });
+            let effortDropdown!: DropdownComponent;
+            let effortRow!: Setting;
+            group.addSetting((row) => {
+              effortRow = row.setName(`${backendLabel} effort`).setDesc(catalogLoadingDescription());
+              effortRow.addDropdown((dropdown) => {
+                effortDropdown = dropdown.addOption("", "Provider default");
+                dropdown.onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, [effortKey]: value }));
+              });
+              effortRow.setDisabled(true);
+            });
 
-        const renderEffortOptions = (loadedCatalog: AgentCatalog): void => {
-          const decision = decideEffortRow(loadedCatalog, this.plugin.settings[modelKey], this.plugin.settings[effortKey]);
-          applyCatalogDecision(effortDropdown, effortRow, decision);
-        };
+            const renderEffortOptions = (loadedCatalog: AgentCatalog): void => {
+              const decision = decideEffortRow(loadedCatalog, this.plugin.settings[modelKey], this.plugin.settings[effortKey]);
+              applyCatalogDecision(effortDropdown, effortRow, decision);
+            };
 
-        const executableOverride = this.plugin.settings[backend === "claude" ? "claudeExecutable" : "codexExecutable"];
-        const fetchCatalog = backend === "claude"
-          ? listClaudeModels(executableOverride.length === 0 ? {} : { executableOverride })
-          : listCodexModels(executableOverride.length === 0 ? {} : { codexPathOverride: executableOverride });
+            const executableOverride = this.plugin.settings[backend === "claude" ? "claudeExecutable" : "codexExecutable"];
+            const fetchCatalog = backend === "claude"
+              ? listClaudeModels(executableOverride.length === 0 ? {} : { executableOverride })
+              : listCodexModels(executableOverride.length === 0 ? {} : { codexPathOverride: executableOverride });
 
-        void fetchCatalog.then((loadedCatalog) => {
-          if (disposed) return;
-          catalog = loadedCatalog;
-          signInSetting.settingEl.toggle(!loadedCatalog.signedIn);
+            void fetchCatalog.then((loadedCatalog) => {
+              if (disposed) return;
+              this.#agentCatalogs.set(backend, loadedCatalog);
+              // Cheap: only re-applies `visible`/`disabled` predicates to rows that already
+              // exist — here, that's the sign-in row above, now that its predicate has a
+              // catalog to read. Never `update()` here: that would re-run
+              // `getSettingDefinitions()`, which re-invokes this same `render`, which fires
+              // another fetch, whose own `.then()` would call `update()` again, forever.
+              this.refreshDomState();
 
-          applyCatalogDecision(modelDropdown, modelRow, decideModelRow(loadedCatalog, this.plugin.settings[modelKey]));
-          renderEffortOptions(loadedCatalog);
-        }).catch((error: unknown) => {
-          if (disposed) return;
-          const message = catalogFetchFailedDescription(
-            backendLabel,
-            error instanceof AgentCatalogError ? error.reason : "protocol",
-          );
-          modelRow.setDesc(message).setDisabled(true);
-          effortRow.setDesc(message).setDisabled(true);
-        });
+              applyCatalogDecision(modelDropdown, modelRow, decideModelRow(loadedCatalog, this.plugin.settings[modelKey]));
+              renderEffortOptions(loadedCatalog);
+            }).catch((error: unknown) => {
+              if (disposed) return;
+              const message = catalogFetchFailedDescription(
+                backendLabel,
+                error instanceof AgentCatalogError ? error.reason : "protocol",
+              );
+              modelRow.setDesc(message).setDisabled(true);
+              effortRow.setDesc(message).setDisabled(true);
+            });
 
-        return () => { disposed = true; };
-      },
+            return () => {
+              disposed = true;
+              this.#agentCatalogs.delete(backend);
+            };
+          },
+        },
+      ],
     };
   }
 
@@ -2393,11 +2446,23 @@ function applyCatalogDecision(dropdown: DropdownComponent, row: Setting, decisio
 }
 
 /**
- * Keys whose value gates another declarative row's `visible` predicate — revealing or hiding a
- * row is a DOM-state change `refreshDomState()` re-evaluates cheaply, without the full rebuild
- * `update()` does. See `ShorthandSettingTab.setControlValue`.
+ * Keys whose value changes which rows exist to render, rather than merely hiding or showing a
+ * row that already does — e.g. `backend` reveals the selected agent's sign-in/model/effort
+ * group or the LLM profile group, each built by a `render` callback that has never executed for
+ * a backend the user has not yet had selected. `refreshDomState()` only toggles CSS on rows
+ * that already exist in the DOM; it cannot build or tear one down, so a key in this set must go
+ * through `update()`'s full rebuild instead. See `ShorthandSettingTab.setControlValue`.
  */
-const REVEALS_OTHER_ROWS = new Set<string>(["backend", "writeTranscriptNote"]);
+const RESTRUCTURING_KEYS = new Set<string>(["backend"]);
+
+/**
+ * Keys whose value gates another declarative row's `visible` predicate where that row is a
+ * plain `control` with no `render` callback of its own (the transcript folder row) — the row is
+ * already built, so revealing or hiding it is a DOM-state change `refreshDomState()`
+ * re-evaluates cheaply, without the full rebuild `update()` does. See
+ * `ShorthandSettingTab.setControlValue`.
+ */
+const REVEALS_OTHER_ROWS = new Set<string>(["writeTranscriptNote"]);
 
 /**
  * Keys whose declarative `desc` is computed from their own current value
