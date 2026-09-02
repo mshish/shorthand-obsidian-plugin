@@ -1,8 +1,14 @@
-# Obsidian Shorthand
+# Shorthand for Obsidian
 
-Obsidian Shorthand keeps a meeting note up to date while you talk. The [Shorthand desktop app](https://github.com/mshish/shorthand) transcribes your microphone and meeting audio; this plugin turns that transcript and your own notes into a structured summary in Obsidian.
+**Focus on the conversation, not taking notes.**
 
-Your notes stay in your vault. You choose which AI backend generates the summary.
+Shorthand takes meeting notes live, in the note you already have open. The [Shorthand desktop app](https://shorthand.ing) transcribes your mic and computer audio on your computer; this plugin turns that transcript into a note that takes shape while people talk.
+
+- **Listen** — Zoom, Meet, Teams, or any other call, transcribed locally with speakers kept separate.
+- **Think** — Use the Claude or ChatGPT plan you already pay for, through Claude Code or Codex. An API key or a local model works too.
+- **Write** — The plugin edits only its own section of the note. Everything you write stays exactly where you put it.
+
+Keep the notes, lose the recording: by default the recording, transcript, and AI session are deleted when the meeting ends. Free and open source — more at [shorthand.ing](https://shorthand.ing).
 
 ## What you need
 
