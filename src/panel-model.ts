@@ -41,6 +41,13 @@ export type PanelInput = Readonly<{
   elapsedMs: number | undefined;
   noteName: string | undefined;
   notePath: string | undefined;
+  /**
+   * The focused Markdown note, whether or not a capture is running. Idle shows it on the
+   * note link so a user can see where a start would write before pressing anything; every
+   * other state shows the capture's own note instead, since focus can move mid-capture.
+   */
+  activeNoteName: string | undefined;
+  activeNotePath: string | undefined;
   captureMode: CaptureMode | undefined;
   /** Whether a Markdown note is open, mirroring both start commands' `checkCallback`. */
   hasActiveNote: boolean;
@@ -57,7 +64,9 @@ export type PanelInput = Readonly<{
 
 /** What the side panel shows for a given state. */
 export function describePanel(input: PanelInput): PanelModel {
-  const { state, elapsedMs, noteName, notePath, captureMode, hasActiveNote, hasCapture } = input;
+  const {
+    state, elapsedMs, noteName, notePath, activeNoteName, activeNotePath, captureMode, hasActiveNote, hasCapture,
+  } = input;
   const elapsed = elapsedMs === undefined ? undefined : formatElapsed(elapsedMs);
   const canStart = hasActiveNote && canStartCapture(state);
   // Not `state.captureActive`: Assisted Notes defers `capture-started` into its bounded
@@ -134,8 +143,8 @@ export function describePanel(input: PanelInput): PanelModel {
         elapsed: undefined,
         detail,
         activityLabel: undefined,
-        noteName: undefined,
-        notePath: undefined,
+        noteName: hasActiveNote ? activeNoteName : undefined,
+        notePath: hasActiveNote ? activeNotePath : undefined,
         statusIcon: "circle-check",
         tone: "idle",
         buttons,

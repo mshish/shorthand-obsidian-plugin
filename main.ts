@@ -464,6 +464,10 @@ export default class ShorthandPlugin extends Plugin {
     this.addSettingTab(new ShorthandSettingTab(this.app, this));
 
     this.registerView(SHORTHAND_PANEL_VIEW, (leaf) => new ShorthandPanelView(leaf, this));
+    // The idle panel names the focused note as the place a start would write. Nothing in the
+    // capture lifecycle fires when focus merely moves between notes, so without this the link
+    // would lag a click by up to the clock interval above.
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => { this.#renderPanel(); }));
     this.addRibbonIcon("mic", "Open Shorthand panel", () => { void this.revealPanel(); });
 
     // Names come from src/commands.ts so they are covered by bun test; main.ts cannot
@@ -1707,8 +1711,13 @@ export default class ShorthandPlugin extends Plugin {
    * only cost review time.
    */
   private hasActiveNote(): boolean {
+    return this.activeNote() !== undefined;
+  }
+
+  /** The note `hasActiveNote` is answering about, for callers that need the file itself. */
+  private activeNote(): TFile | undefined {
     const file = this.app.workspace.getActiveFile();
-    return file !== null && file.extension === "md";
+    return file !== null && file.extension === "md" ? file : undefined;
   }
 
   private vaultRoot(): string | undefined {
@@ -1747,6 +1756,8 @@ export default class ShorthandPlugin extends Plugin {
       elapsedMs: this.#capture === undefined ? undefined : Date.now() - this.#capture.startedAt,
       noteName: this.#capture?.noteFile.basename,
       notePath: this.#capture?.noteFile.path,
+      activeNoteName: this.activeNote()?.basename,
+      activeNotePath: this.activeNote()?.path,
       captureMode: this.#capture?.mode ?? this.#requestedCaptureMode,
       hasActiveNote: this.hasActiveNote(),
       hasCapture: this.#capture !== undefined,
@@ -1761,9 +1772,12 @@ export default class ShorthandPlugin extends Plugin {
     void this.startCaptureOnActiveNote(id === "start-assisted-notes" ? "assisted-notes" : "meeting");
   }
 
-  /** Open the note owned by the current capture without confusing the sidebar for its target. */
-  async openCaptureNote(newTab: boolean): Promise<void> {
-    const file = this.#capture?.noteFile;
+  /**
+   * Open the note the panel's link names — the capture's own while one runs, otherwise the
+   * focused note an idle start would write to — without confusing the sidebar for its target.
+   */
+  async openPanelNote(newTab: boolean): Promise<void> {
+    const file = this.#capture?.noteFile ?? this.activeNote();
     if (file === undefined) return;
     if (!newTab) {
       const existing = this.app.workspace.getLeavesOfType("markdown").find((leaf) =>
@@ -2622,7 +2636,7 @@ class ShorthandPanelView extends ItemView {
     });
     this.#noteEl.onclick = (event) => {
       event.preventDefault();
-      void this.plugin.openCaptureNote(event.metaKey || event.ctrlKey);
+      void this.plugin.openPanelNote(event.metaKey || event.ctrlKey);
     };
     const noteIcon = this.#noteEl.createSpan({ cls: "shorthand-panel-note-icon", attr: { "aria-hidden": "true" } });
     setIcon(noteIcon, "file-text");

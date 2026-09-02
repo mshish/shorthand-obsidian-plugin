@@ -12,6 +12,8 @@ const base = {
   elapsedMs: undefined,
   noteName: undefined,
   notePath: undefined,
+  activeNoteName: undefined,
+  activeNotePath: undefined,
   captureMode: undefined,
   hasActiveNote: true,
   // Defaults to "nothing to stop"; tests for a live runtime override this explicitly so the
@@ -149,6 +151,37 @@ describe("describePanel", () => {
     expect(model.headline).toBe("AI updates paused");
     expect(model.statusLabel).toBe("Update paused");
     expect(enabled(model)).toEqual(["start-meeting", "start-assisted-notes"]);
+  });
+
+  test("points the idle note link at the focused note, where a start would write", () => {
+    const model = describePanel({
+      ...base,
+      state: INITIAL_PLUGIN_STATE,
+      activeNoteName: "Weekly sync",
+      activeNotePath: "Meetings/Weekly sync.md",
+    });
+    expect(model.noteName).toBe("Weekly sync");
+    expect(model.notePath).toBe("Meetings/Weekly sync.md");
+  });
+
+  test("hides the idle note link when no Markdown note is focused", () => {
+    const model = describePanel({ ...base, state: INITIAL_PLUGIN_STATE, hasActiveNote: false });
+    expect(model.noteName).toBeUndefined();
+    expect(model.notePath).toBeUndefined();
+  });
+
+  test("keeps a live capture's own note on the link, whatever is focused", () => {
+    const model = describePanel({
+      ...base,
+      state: capturing,
+      hasCapture: true,
+      noteName: "Weekly sync",
+      notePath: "Meetings/Weekly sync.md",
+      activeNoteName: "Scratch",
+      activeNotePath: "Scratch.md",
+    });
+    expect(model.noteName).toBe("Weekly sync");
+    expect(model.notePath).toBe("Meetings/Weekly sync.md");
   });
 
   test("names the view type Obsidian registers", () => {
