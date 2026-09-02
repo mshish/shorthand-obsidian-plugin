@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { enhanceCommandName, resolveEnhanceMode } from "../src/enhance-mode.js";
+import { enhanceCommandName, inferTranscriptNoteTakingMode, resolveEnhanceMode } from "../src/enhance-mode.js";
 
 describe("enhancement mode selection", () => {
   test("a live capture on this note outranks the sidecar that capture is writing", () => {
@@ -145,5 +145,17 @@ describe("enhanceCommandName", () => {
   test("names the command palette entry that produced the route being reported on", () => {
     expect(enhanceCommandName("enhance-now")).toBe("Enhance now");
     expect(enhanceCommandName("clean-up-this-note")).toBe("Clean up this note");
+  });
+});
+
+describe("completed transcript mode inference", () => {
+  test("recognizes the other audio side in a Shorthand transcript sidecar", () => {
+    expect(inferTranscriptNoteTakingMode("**[COMMIT +00:03.000] me:** Hello\n**[COMMIT +00:04.000] them:** Hi"))
+      .toBe("meeting");
+  });
+
+  test("treats a me-only transcript as Assisted Notes", () => {
+    expect(inferTranscriptNoteTakingMode("**[COMMIT +00:03.000] me:** I am comparing three options"))
+      .toBe("assisted-notes");
   });
 });

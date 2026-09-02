@@ -8,6 +8,7 @@
  */
 
 import { COMMAND_NAMES } from "./commands.js";
+import type { CaptureMode } from "./follow-policy.js";
 
 export type EnhanceCommandId = "enhance-now" | "clean-up-this-note";
 
@@ -88,4 +89,16 @@ export function resolveEnhanceMode(request: EnhanceRequest): EnhanceMode {
       ? "This note has no shorthand-transcript wikilink. Start taking notes once to create and link a sidecar, or run \"Clean up this note\" to enhance the note as written."
       : "This note has no shorthand-transcript wikilink, and \"Transcript notes\" is off. Turn it on in Shorthand settings and start taking notes once, or run \"Clean up this note\" to enhance the note as written.",
   };
+}
+
+/**
+ * Old transcript sidecars predate durable mode metadata. Their speaker lanes still give us a
+ * reliable positive meeting signal: Assisted Notes records only `me`, while meeting capture
+ * can record `them`. A one-sided meeting is inherently ambiguous and falls back to Assisted
+ * Notes, whose "organize my thinking" guidance is safer than inventing absent participants.
+ */
+export function inferTranscriptNoteTakingMode(transcript: string): CaptureMode {
+  return /(?:^|\n)(?:them:\s|\*\*\[[^\n]*\]\s+them:\*\*)/i.test(transcript)
+    ? "meeting"
+    : "assisted-notes";
 }

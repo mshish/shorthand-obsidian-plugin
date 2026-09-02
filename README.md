@@ -102,7 +102,7 @@ This needs a Shorthand build that reports which mode a recording is. **No shippe
 
 The plugin changes only the note section marked for Shorthand. It checks that section again before each update and keeps the existing text if the markers or generated result are invalid.
 
-Under **Note writing**, you can change the instructions used to write notes and the headings added to a new note. Leave these settings on **Default** to receive future improvements automatically.
+Under **Note writing**, you can optionally provide your name, customize separate prompts for Meeting and Assisted Notes, and change the headings added to a new note. Leave either prompt on **Default** to receive future improvements automatically.
 
 ## What the plugin accesses
 

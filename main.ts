@@ -27,7 +27,9 @@ import {
   ClaudeAgentClient,
   CodexAgentClient,
   DEFAULT_CONFIG,
-  DEFAULT_EDITORIAL_GUIDANCE,
+  DEFAULT_ASSISTED_NOTES_EDITORIAL_GUIDANCE,
+  DEFAULT_MEETING_EDITORIAL_GUIDANCE,
+  MAX_USER_NAME_CHARACTERS,
   detectClaudeExecutable,
   detectCodexExecutable,
   detectShorthandExecutable,
@@ -58,6 +60,7 @@ import {
 } from "shorthand-core/markdown";
 import {
   enhanceCommandName,
+  inferTranscriptNoteTakingMode,
   resolveEnhanceMode,
   type EnhanceCommandId,
 } from "./src/enhance-mode.js";
@@ -653,6 +656,7 @@ export default class ShorthandPlugin extends Plugin {
           enhancer = await this.createEnhancer(
             noteSink,
             DEFAULT_CONFIG.enhancement.timeoutMs,
+            mode,
           );
           unownedEnhancer = enhancer;
         } catch (error) {
@@ -1248,12 +1252,14 @@ export default class ShorthandPlugin extends Plugin {
             this.fail("The note's shorthand-transcript link does not resolve to a separate vault note.");
             return;
           }
+          const transcript = await this.app.vault.read(sidecar);
           const enhancer = await this.createEnhancer(
             noteSink,
             DEFAULT_CONFIG.enhancement.standaloneTimeoutMs,
+            inferTranscriptNoteTakingMode(transcript),
           );
           try {
-            enhancer.appendTranscript(await this.app.vault.read(sidecar));
+            enhancer.appendTranscript(transcript);
             this.reportOutcome(await enhancer.enhanceNow("link"), command);
           } finally {
             await enhancer.dispose();
@@ -1264,6 +1270,7 @@ export default class ShorthandPlugin extends Plugin {
           const enhancer = await this.createEnhancer(
             noteSink,
             DEFAULT_CONFIG.enhancement.standaloneTimeoutMs,
+            "assisted-notes",
           );
           try {
             // No appendTranscript, and core's empty-transcript gate would decline forever
@@ -1333,10 +1340,13 @@ export default class ShorthandPlugin extends Plugin {
   private async createEnhancer(
     sink: ObsidianNoteSink,
     timeoutMs: number,
+    mode: CaptureMode,
   ): Promise<EnhanceRunner> {
     const backend = this.settings.backend;
     const configuredClaude = this.settings.claudeExecutable;
-    const guidance = this.settings.noteTakingGuidance;
+    const guidance = mode === "assisted-notes"
+      ? this.settings.assistedNotesNoteTakingGuidance
+      : this.settings.meetingNoteTakingGuidance;
     let claudeExecutable: string | undefined;
     let agent: ClaudeAgentClient | CodexAgentClient | LlmAgentClient;
     if (backend === "claude-agent-sdk") {
@@ -1393,6 +1403,8 @@ export default class ShorthandPlugin extends Plugin {
     return new EnhanceRunner({
       sink,
       agent,
+      mode,
+      ...(this.settings.userName.length === 0 ? {} : { userName: this.settings.userName }),
       minNewChars: this.settings.minNewChars,
       minIntervalMs: this.settings.minIntervalMs,
       // Conditional spread, like pathToClaudeCodeExecutable below: `exactOptionalPropertyTypes`
@@ -1942,7 +1954,8 @@ class ShorthandSettingTab extends PluginSettingTab {
     // opening the window. Read fresh on every call, which is why the modal's onSaved callback
     // calls update() — otherwise this row would keep reporting the state from before the edit.
     const overridden = [
-      this.plugin.settings.noteTakingGuidance.length > 0 ? "prompt" : undefined,
+      this.plugin.settings.meetingNoteTakingGuidance.length > 0 ? "meeting prompt" : undefined,
+      this.plugin.settings.assistedNotesNoteTakingGuidance.length > 0 ? "Assisted Notes prompt" : undefined,
       this.plugin.settings.templateSectionText.length > 0 ? "starting sections" : undefined,
     ].filter((label): label is string => label !== undefined);
     return {
@@ -1951,7 +1964,7 @@ class ShorthandSettingTab extends PluginSettingTab {
       items: [
         { name: "", desc: "Shorthand's defaults change with each release. Anything you customize stays as you wrote it." },
         {
-          name: "Note-taking prompt and starting sections",
+          name: "Name, prompts, and starting sections",
           desc: overridden.length === 0
             ? "Both follow Shorthand's defaults."
             : `Custom ${overridden.join(" and ")} in use.`,
@@ -2661,11 +2674,21 @@ class NotePromptModal extends Modal {
 
   onOpen(): void {
     this.titleEl.setText("Note writing");
-    const guidance = this.field(
-      "Note-taking prompt",
+    let userNameInput!: TextComponent;
+    new Setting(this.contentEl)
+      .setName("Your name")
+      .setDesc("Shorthand uses this optional name when attributing your words in either note-taking mode.")
+      .addText((text) => {
+        userNameInput = text
+          .setPlaceholder("Optional")
+          .setValue(this.plugin.settings.userName);
+        text.inputEl.maxLength = MAX_USER_NAME_CHARACTERS;
+      });
+    const meetingGuidance = this.field(
+      "Meeting prompt",
       createFragment((desc) => {
         desc.appendText(
-          "Your instructions replace Shorthand's own for the voice and shape of the sections it writes. "
+          "Your instructions replace Shorthand's meeting-specific voice and note structure. "
           + "Its safety rules always apply as well — see ",
         );
         desc.createEl("a", {
@@ -2674,8 +2697,14 @@ class NotePromptModal extends Modal {
         });
         desc.appendText(".");
       }),
-      DEFAULT_EDITORIAL_GUIDANCE,
-      this.plugin.settings.noteTakingGuidance,
+      DEFAULT_MEETING_EDITORIAL_GUIDANCE,
+      this.plugin.settings.meetingNoteTakingGuidance,
+    );
+    const assistedNotesGuidance = this.field(
+      "Assisted Notes prompt",
+      "Your instructions for organizing and visualizing your spoken thinking.",
+      DEFAULT_ASSISTED_NOTES_EDITORIAL_GUIDANCE,
+      this.plugin.settings.assistedNotesNoteTakingGuidance,
     );
     const sections = this.field(
       "Starting section headings",
@@ -2689,7 +2718,9 @@ class NotePromptModal extends Modal {
     const buttons = this.contentEl.createDiv();
     const save = buttons.createEl("button", { text: "Save" });
     save.addClass("mod-cta");
-    save.onclick = () => { void this.save(guidance, sections, error); };
+    save.onclick = () => {
+      void this.save(userNameInput, meetingGuidance, assistedNotesGuidance, sections, error);
+    };
     const cancel = buttons.createEl("button", { text: "Cancel" });
     cancel.onclick = () => this.close();
   }
@@ -2764,7 +2795,9 @@ class NotePromptModal extends Modal {
   }
 
   private async save(
-    guidance: PromptFieldHandle,
+    userName: TextComponent,
+    meetingGuidance: PromptFieldHandle,
+    assistedNotesGuidance: PromptFieldHandle,
     sections: PromptFieldHandle,
     error: HTMLElement,
   ): Promise<void> {
@@ -2772,14 +2805,24 @@ class NotePromptModal extends Modal {
     // same job #settled does in ScaffoldModal.
     if (this.#settled) return;
     const validated = validatePromptSettings({
-      noteTakingGuidance: guidance.value(),
+      userName: userName.getValue(),
+      meetingNoteTakingGuidance: meetingGuidance.value(),
+      assistedNotesNoteTakingGuidance: assistedNotesGuidance.value(),
       templateSectionText: sections.value(),
     });
     if (!validated.ok) {
       // Invalid input is never saved and the window stays open, focused on the field that
       // failed, so the text being complained about is still on screen next to the complaint.
       error.setText(validated.error);
-      (validated.field === "noteTakingGuidance" ? guidance : sections).focus();
+      if (validated.field === "userName") {
+        userName.inputEl.focus();
+      } else if (validated.field === "meetingNoteTakingGuidance") {
+        meetingGuidance.focus();
+      } else if (validated.field === "assistedNotesNoteTakingGuidance") {
+        assistedNotesGuidance.focus();
+      } else {
+        sections.focus();
+      }
       return;
     }
     this.#settled = true;

@@ -3,6 +3,7 @@ import {
   CODEX_REASONING_EFFORTS,
   DEFAULT_CONFIG,
   MAX_GUIDANCE_CHARACTERS,
+  MAX_USER_NAME_CHARACTERS,
   parseTemplateSections,
   type ClaudeAgentClientOptions,
   type ClaudeEffort,
@@ -69,14 +70,18 @@ export type ShorthandPluginSettings = Readonly<{
    * because a broken ownership boundary is a different question from an absent one.
    */
   autoScaffold: boolean;
+  /** Optional name supplied to either note-taking mode as untrusted session context. */
+  userName: string;
   /**
-   * Replaces core's `DEFAULT_EDITORIAL_GUIDANCE`. Empty means "use core's default" and is
+   * Replaces core's meeting guidance. Empty means "use core's default" and is
    * stored as empty rather than as a copy of that default: a user who never touches this
    * keeps inheriting improvements to it, instead of being frozen at whatever the text
    * happened to be the day they installed the plugin. The safety preamble is prepended by
    * core regardless and is not reachable from here.
    */
-  noteTakingGuidance: string;
+  meetingNoteTakingGuidance: string;
+  /** Same override behavior as meeting guidance, scoped to Assisted Notes. */
+  assistedNotesNoteTakingGuidance: string;
   /**
    * Logs every enhancement status, plus core's per-transition machine trace, plus every
    * capture lifecycle event (`src/capture-log.ts`), to the console. Off by default because
@@ -121,13 +126,19 @@ export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
   autoScaffold: true,
   debugLogging: false,
   retainAgentSessionHistory: false,
-  noteTakingGuidance: "",
+  userName: "",
+  meetingNoteTakingGuidance: "",
+  assistedNotesNoteTakingGuidance: "",
   templateSectionText: "",
   followAppRecording: false,
 });
 
 export function normalizePluginSettings(input: unknown): ShorthandPluginSettings {
   const value = isRecord(input) ? input : {};
+  // Before prompts were mode-specific, one `noteTakingGuidance` value governed every capture.
+  // Applying that legacy value to both new fields preserves the user's explicit choice instead
+  // of silently sending one mode back to Shorthand's default after an upgrade.
+  const legacyGuidance = guidanceText(value.noteTakingGuidance, "");
   return {
     backend: backendValue(value.backend, DEFAULT_PLUGIN_SETTINGS.backend),
     shorthandExecutable: migrateLegacyShorthandExecutable(
@@ -163,7 +174,9 @@ export function normalizePluginSettings(input: unknown): ShorthandPluginSettings
     retainAgentSessionHistory: typeof value.retainAgentSessionHistory === "boolean"
       ? value.retainAgentSessionHistory
       : DEFAULT_PLUGIN_SETTINGS.retainAgentSessionHistory,
-    noteTakingGuidance: guidanceText(value.noteTakingGuidance, DEFAULT_PLUGIN_SETTINGS.noteTakingGuidance),
+    userName: userNameText(value.userName, DEFAULT_PLUGIN_SETTINGS.userName),
+    meetingNoteTakingGuidance: guidanceText(value.meetingNoteTakingGuidance, legacyGuidance),
+    assistedNotesNoteTakingGuidance: guidanceText(value.assistedNotesNoteTakingGuidance, legacyGuidance),
     templateSectionText: headingListText(value.templateSectionText, DEFAULT_PLUGIN_SETTINGS.templateSectionText),
     followAppRecording: typeof value.followAppRecording === "boolean"
       ? value.followAppRecording
@@ -194,8 +207,20 @@ export function codexAgentOptions(
 }
 
 export type PromptSettingsValidation =
-  | Readonly<{ ok: true; settings: Readonly<{ noteTakingGuidance: string; templateSectionText: string }> }>
-  | Readonly<{ ok: false; field: "noteTakingGuidance" | "templateSectionText"; error: string }>;
+  | Readonly<{
+    ok: true;
+    settings: Readonly<{
+      userName: string;
+      meetingNoteTakingGuidance: string;
+      assistedNotesNoteTakingGuidance: string;
+      templateSectionText: string;
+    }>;
+  }>
+  | Readonly<{
+    ok: false;
+    field: "userName" | "meetingNoteTakingGuidance" | "assistedNotesNoteTakingGuidance" | "templateSectionText";
+    error: string;
+  }>;
 
 /**
  * Everything the prompt modal does that is not DOM wiring. It lives here, not in `main.ts`,
@@ -205,14 +230,32 @@ export type PromptSettingsValidation =
  * Empty is always valid on both fields and always means "use the default".
  */
 export function validatePromptSettings(
-  input: Readonly<{ noteTakingGuidance: string; templateSectionText: string }>,
+  input: Readonly<{
+    userName: string;
+    meetingNoteTakingGuidance: string;
+    assistedNotesNoteTakingGuidance: string;
+    templateSectionText: string;
+  }>,
 ): PromptSettingsValidation {
-  const noteTakingGuidance = input.noteTakingGuidance.trim();
-  if (noteTakingGuidance.length > MAX_GUIDANCE_CHARACTERS) {
+  const userName = input.userName.trim();
+  if (userName.length > MAX_USER_NAME_CHARACTERS) {
     return {
       ok: false,
-      field: "noteTakingGuidance",
-      error: `The note-taking prompt is ${noteTakingGuidance.length} characters; the limit is ${MAX_GUIDANCE_CHARACTERS}.`,
+      field: "userName",
+      error: `Your name is ${userName.length} characters; the limit is ${MAX_USER_NAME_CHARACTERS}.`,
+    };
+  }
+  const meetingNoteTakingGuidance = input.meetingNoteTakingGuidance.trim();
+  const assistedNotesNoteTakingGuidance = input.assistedNotesNoteTakingGuidance.trim();
+  for (const [field, label, guidance] of [
+    ["meetingNoteTakingGuidance", "meeting prompt", meetingNoteTakingGuidance],
+    ["assistedNotesNoteTakingGuidance", "Assisted Notes prompt", assistedNotesNoteTakingGuidance],
+  ] as const) {
+    if (guidance.length <= MAX_GUIDANCE_CHARACTERS) continue;
+    return {
+      ok: false,
+      field,
+      error: `The ${label} is ${guidance.length} characters; the limit is ${MAX_GUIDANCE_CHARACTERS}.`,
     };
   }
   const templateSectionText = input.templateSectionText.trim();
@@ -222,7 +265,10 @@ export function validatePromptSettings(
     // rule that actually rejected it.
     if (!parsed.ok) return { ok: false, field: "templateSectionText", error: parsed.error };
   }
-  return { ok: true, settings: { noteTakingGuidance, templateSectionText } };
+  return {
+    ok: true,
+    settings: { userName, meetingNoteTakingGuidance, assistedNotesNoteTakingGuidance, templateSectionText },
+  };
 }
 
 /**
@@ -363,6 +409,12 @@ function guidanceText(value: unknown, fallback: string): string {
   if (typeof value !== "string") return fallback;
   const trimmed = value.trim();
   return trimmed.length > MAX_GUIDANCE_CHARACTERS ? fallback : trimmed;
+}
+
+function userNameText(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  return trimmed.length <= MAX_USER_NAME_CHARACTERS ? trimmed : fallback;
 }
 
 /**

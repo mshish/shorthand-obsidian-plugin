@@ -13,7 +13,14 @@ import {
   validatePromptSettings,
   type PromptFieldState,
 } from "../src/settings.js";
-import { DEFAULT_CONFIG, MAX_GUIDANCE_CHARACTERS } from "shorthand-core";
+import { DEFAULT_CONFIG, MAX_GUIDANCE_CHARACTERS, MAX_USER_NAME_CHARACTERS } from "shorthand-core";
+
+const EMPTY_PROMPT_SETTINGS = {
+  userName: "",
+  meetingNoteTakingGuidance: "",
+  assistedNotesNoteTakingGuidance: "",
+  templateSectionText: "",
+} as const;
 
 describe("plugin settings normalization", () => {
   test("debugLogging defaults to false when absent or malformed, independently of the other toggles", () => {
@@ -85,7 +92,9 @@ describe("plugin settings normalization", () => {
       autoScaffold: false,
       debugLogging: true,
       retainAgentSessionHistory: true,
-      noteTakingGuidance: "  Write terse bullets.  ",
+      userName: "  Mike  ",
+      meetingNoteTakingGuidance: "  Write terse bullets.  ",
+      assistedNotesNoteTakingGuidance: "  Build clear outlines.  ",
       templateSectionText: " Agenda \n\n Decisions ",
       followAppRecording: true,
     })).toEqual({
@@ -106,7 +115,9 @@ describe("plugin settings normalization", () => {
       autoScaffold: false,
       debugLogging: true,
       retainAgentSessionHistory: true,
-      noteTakingGuidance: "Write terse bullets.",
+      userName: "Mike",
+      meetingNoteTakingGuidance: "Write terse bullets.",
+      assistedNotesNoteTakingGuidance: "Build clear outlines.",
       templateSectionText: "Agenda \n\n Decisions",
       followAppRecording: true,
     });
@@ -246,42 +257,70 @@ describe("plugin settings normalization", () => {
       .toBe(DEFAULT_PLUGIN_SETTINGS.minIntervalMs);
   });
 
-  test("both new keys default to empty, which is what keeps a user inheriting core's defaults", () => {
-    expect(DEFAULT_PLUGIN_SETTINGS.noteTakingGuidance).toBe("");
+  test("note-writing settings default to empty, which keeps users inheriting core's defaults", () => {
+    expect(DEFAULT_PLUGIN_SETTINGS.meetingNoteTakingGuidance).toBe("");
+    expect(DEFAULT_PLUGIN_SETTINGS.assistedNotesNoteTakingGuidance).toBe("");
+    expect(DEFAULT_PLUGIN_SETTINGS.userName).toBe("");
     expect(DEFAULT_PLUGIN_SETTINGS.templateSectionText).toBe("");
-    expect(normalizePluginSettings({})).toMatchObject({ noteTakingGuidance: "", templateSectionText: "" });
+    expect(normalizePluginSettings({})).toMatchObject(EMPTY_PROMPT_SETTINGS);
   });
 
-  test("a stored prompt and heading list survive a round trip", () => {
-    const stored = { noteTakingGuidance: "Write in the present tense.", templateSectionText: "Agenda\nRisks" };
+  test("stored names, mode prompts, and heading lists survive a round trip", () => {
+    const stored = {
+      userName: "Mike",
+      meetingNoteTakingGuidance: "Name decisions.",
+      assistedNotesNoteTakingGuidance: "Visualize comparisons.",
+      templateSectionText: "Agenda\nRisks",
+    };
     expect(normalizePluginSettings(stored)).toMatchObject(stored);
     expect(normalizePluginSettings(normalizePluginSettings(stored))).toMatchObject(stored);
+  });
+
+  test("migrates the old shared prompt into both mode-specific fields", () => {
+    expect(normalizePluginSettings({ noteTakingGuidance: "Write in the present tense." })).toMatchObject({
+      meetingNoteTakingGuidance: "Write in the present tense.",
+      assistedNotesNoteTakingGuidance: "Write in the present tense.",
+    });
   });
 
   test("malformed stored values fall back to empty rather than throwing", () => {
     // data.json is untrusted: hand-edited, synced from another machine, or written by an
     // older build. Every one of these must degrade to the default, not take the plugin down.
     for (const garbage of [42, null, {}, [], true]) {
-      expect(normalizePluginSettings({ noteTakingGuidance: garbage, templateSectionText: garbage }))
-        .toMatchObject({ noteTakingGuidance: "", templateSectionText: "" });
+      expect(normalizePluginSettings({
+        userName: garbage,
+        meetingNoteTakingGuidance: garbage,
+        assistedNotesNoteTakingGuidance: garbage,
+        templateSectionText: garbage,
+      })).toMatchObject(EMPTY_PROMPT_SETTINGS);
     }
-    expect(normalizePluginSettings({ noteTakingGuidance: "x".repeat(MAX_GUIDANCE_CHARACTERS + 1) }).noteTakingGuidance)
+    expect(normalizePluginSettings({ meetingNoteTakingGuidance: "x".repeat(MAX_GUIDANCE_CHARACTERS + 1) }).meetingNoteTakingGuidance)
       .toBe("");
-    expect(normalizePluginSettings({ noteTakingGuidance: "x".repeat(MAX_GUIDANCE_CHARACTERS) }).noteTakingGuidance)
+    expect(normalizePluginSettings({ assistedNotesNoteTakingGuidance: "x".repeat(MAX_GUIDANCE_CHARACTERS) }).assistedNotesNoteTakingGuidance)
       .toBe("x".repeat(MAX_GUIDANCE_CHARACTERS));
+    expect(normalizePluginSettings({ userName: "x".repeat(MAX_USER_NAME_CHARACTERS + 1) }).userName).toBe("");
     for (const invalid of ["Agenda\nAgenda", "   ", `Notes <!-- shorthand:ai:end -->`]) {
       expect(normalizePluginSettings({ templateSectionText: invalid }).templateSectionText).toBe("");
     }
   });
 
-  test("each new key stays on its own key", () => {
+  test("each note-writing key stays on its own key", () => {
     // The same cross-wiring guard the Shorthand control toggles carry above, for the same
     // reason: reading the wrong key and falling through to the default look identical when
     // the default is what you assert.
-    expect(normalizePluginSettings({ noteTakingGuidance: "voice", templateSectionText: "Agenda" }))
-      .toMatchObject({ noteTakingGuidance: "voice", templateSectionText: "Agenda" });
-    expect(normalizePluginSettings({ noteTakingGuidance: "voice", templateSectionText: "Agenda\nAgenda" }))
-      .toMatchObject({ noteTakingGuidance: "voice", templateSectionText: "" });
+    expect(normalizePluginSettings({
+      userName: "Mike",
+      meetingNoteTakingGuidance: "meeting voice",
+      assistedNotesNoteTakingGuidance: "thinking voice",
+      templateSectionText: "Agenda",
+    })).toMatchObject({
+      userName: "Mike",
+      meetingNoteTakingGuidance: "meeting voice",
+      assistedNotesNoteTakingGuidance: "thinking voice",
+      templateSectionText: "Agenda",
+    });
+    expect(normalizePluginSettings({ meetingNoteTakingGuidance: "voice", templateSectionText: "Agenda\nAgenda" }))
+      .toMatchObject({ meetingNoteTakingGuidance: "voice", templateSectionText: "" });
   });
 });
 
@@ -406,31 +445,56 @@ describe("prompt setting resolution", () => {
 
 describe("prompt modal validation", () => {
   test("accepts empty fields, because empty means follow the default", () => {
-    expect(validatePromptSettings({ noteTakingGuidance: "", templateSectionText: "" }))
-      .toEqual({ ok: true, settings: { noteTakingGuidance: "", templateSectionText: "" } });
-    expect(validatePromptSettings({ noteTakingGuidance: "  \n ", templateSectionText: " \n\n " }))
-      .toEqual({ ok: true, settings: { noteTakingGuidance: "", templateSectionText: "" } });
+    expect(validatePromptSettings(EMPTY_PROMPT_SETTINGS))
+      .toEqual({ ok: true, settings: EMPTY_PROMPT_SETTINGS });
+    expect(validatePromptSettings({
+      ...EMPTY_PROMPT_SETTINGS,
+      userName: "  ",
+      meetingNoteTakingGuidance: "  \n ",
+      assistedNotesNoteTakingGuidance: "\n",
+      templateSectionText: " \n\n ",
+    })).toEqual({ ok: true, settings: EMPTY_PROMPT_SETTINGS });
   });
 
   test("accepts and trims filled fields", () => {
-    expect(validatePromptSettings({ noteTakingGuidance: "  Be terse.\n", templateSectionText: "\nAgenda\nRisks\n" }))
-      .toEqual({ ok: true, settings: { noteTakingGuidance: "Be terse.", templateSectionText: "Agenda\nRisks" } });
+    expect(validatePromptSettings({
+      userName: "  Mike  ",
+      meetingNoteTakingGuidance: "  Be terse.\n",
+      assistedNotesNoteTakingGuidance: "  Use outlines.  ",
+      templateSectionText: "\nAgenda\nRisks\n",
+    })).toEqual({
+      ok: true,
+      settings: {
+        userName: "Mike",
+        meetingNoteTakingGuidance: "Be terse.",
+        assistedNotesNoteTakingGuidance: "Use outlines.",
+        templateSectionText: "Agenda\nRisks",
+      },
+    });
   });
 
   test("rejects an over-long prompt and names the field, so the modal can focus it", () => {
     const result = validatePromptSettings({
-      noteTakingGuidance: "x".repeat(MAX_GUIDANCE_CHARACTERS + 1),
-      templateSectionText: "",
+      ...EMPTY_PROMPT_SETTINGS,
+      assistedNotesNoteTakingGuidance: "x".repeat(MAX_GUIDANCE_CHARACTERS + 1),
     });
-    expect(result).toMatchObject({ ok: false, field: "noteTakingGuidance" });
+    expect(result).toMatchObject({ ok: false, field: "assistedNotesNoteTakingGuidance" });
     if (!result.ok) {
       expect(result.error).toContain(String(MAX_GUIDANCE_CHARACTERS + 1));
       expect(result.error).toContain(String(MAX_GUIDANCE_CHARACTERS));
     }
   });
 
+  test("rejects an over-long name and names the field", () => {
+    const result = validatePromptSettings({
+      ...EMPTY_PROMPT_SETTINGS,
+      userName: "x".repeat(MAX_USER_NAME_CHARACTERS + 1),
+    });
+    expect(result).toMatchObject({ ok: false, field: "userName" });
+  });
+
   test("surfaces the core parser's own message for a bad heading list", () => {
-    const result = validatePromptSettings({ noteTakingGuidance: "", templateSectionText: "Agenda\nAgenda" });
+    const result = validatePromptSettings({ ...EMPTY_PROMPT_SETTINGS, templateSectionText: "Agenda\nAgenda" });
     expect(result).toMatchObject({ ok: false, field: "templateSectionText" });
     if (!result.ok) {
       expect(result.error).toContain("Agenda");
