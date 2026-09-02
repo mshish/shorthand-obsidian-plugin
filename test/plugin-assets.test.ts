@@ -19,6 +19,15 @@ describe("the plugin stylesheet", () => {
     expect(css).toContain(".shorthand-panel-buttons");
   });
 
+  test("keeps the panel's semantic accents stable across Obsidian themes", () => {
+    const css = readFileSync(resolve(process.cwd(), "styles.css"), "utf8");
+    expect(css).toContain("--shorthand-panel-green: #4d8b74");
+    expect(css).toContain("--shorthand-panel-orange: #bc7049");
+    expect(css).toContain("--shorthand-panel-purple: #8169ae");
+    expect(css).toContain("--shorthand-panel-blue: #5f82bd");
+    expect(css).toContain("--shorthand-panel-red: #b55757");
+  });
+
   test("is delivered to the vault alongside main.js and manifest.json", () => {
     const config = readFileSync(resolve(process.cwd(), "esbuild.config.mjs"), "utf8");
     expect(config).toContain(`["main.js", "manifest.json", "styles.css"]`);

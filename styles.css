@@ -1,5 +1,7 @@
-/* Obsidian's plugin guidelines forbid hardcoded styling. Measurements and colors here come
-   from Obsidian's own variables so the panel follows the active theme and font settings. */
+/* Measurements, surfaces, text, and typography come from Obsidian's variables so the panel
+   follows the active theme and font settings. The five semantic accents are intentionally
+   plugin-owned: they are the panel's mode language and must match the documented preview
+   across themes. Keeping this palette local avoids changing Obsidian's global variables. */
 
 /* Both states of a prompt field: the editable textarea and the read-only view of the
    effective default. They share the class so the field does not change width when the user
@@ -13,13 +15,19 @@
 /* Right-sidebar panel ------------------------------------------------------ */
 
 .shorthand-panel {
+  --shorthand-panel-green: #4d8b74;
+  --shorthand-panel-orange: #bc7049;
+  --shorthand-panel-purple: #8169ae;
+  --shorthand-panel-blue: #5f82bd;
+  --shorthand-panel-red: #b55757;
+
   display: flex;
   flex-direction: column;
   gap: var(--size-4-4);
 }
 
 .shorthand-panel-status {
-  --shorthand-panel-accent: var(--color-green);
+  --shorthand-panel-accent: var(--shorthand-panel-green);
   --shorthand-panel-soft: color-mix(in srgb, var(--shorthand-panel-accent) 10%, var(--background-primary));
 
   background-color: var(--shorthand-panel-soft);
@@ -37,23 +45,23 @@
 }
 
 .shorthand-panel-status.is-meeting {
-  --shorthand-panel-accent: var(--color-orange);
+  --shorthand-panel-accent: var(--shorthand-panel-orange);
 }
 
 .shorthand-panel-status.is-assisted-notes {
-  --shorthand-panel-accent: var(--color-purple);
+  --shorthand-panel-accent: var(--shorthand-panel-purple);
 }
 
 .shorthand-panel-status.is-working {
-  --shorthand-panel-accent: var(--interactive-accent);
+  --shorthand-panel-accent: var(--shorthand-panel-blue);
 }
 
 .shorthand-panel-status.is-warning {
-  --shorthand-panel-accent: var(--color-orange);
+  --shorthand-panel-accent: var(--shorthand-panel-orange);
 }
 
 .shorthand-panel-status.is-error {
-  --shorthand-panel-accent: var(--color-red);
+  --shorthand-panel-accent: var(--shorthand-panel-red);
 }
 
 .shorthand-panel-status-top {
@@ -200,7 +208,7 @@
 }
 
 button.shorthand-panel-button {
-  --shorthand-button-accent: var(--interactive-accent);
+  --shorthand-button-accent: var(--shorthand-panel-blue);
 
   align-items: flex-start;
   background-color: color-mix(in srgb, var(--shorthand-button-accent) 9%, var(--background-primary));
@@ -238,11 +246,11 @@ button.shorthand-panel-button:disabled {
 }
 
 button.shorthand-panel-button.is-start-meeting {
-  --shorthand-button-accent: var(--color-orange);
+  --shorthand-button-accent: var(--shorthand-panel-orange);
 }
 
 button.shorthand-panel-button.is-start-assisted-notes {
-  --shorthand-button-accent: var(--color-purple);
+  --shorthand-button-accent: var(--shorthand-panel-purple);
 }
 
 .shorthand-panel-button-icon {
@@ -270,7 +278,7 @@ button.shorthand-panel-button.is-start-assisted-notes {
 }
 
 button.shorthand-panel-button.is-stop {
-  --shorthand-button-accent: var(--color-red);
+  --shorthand-button-accent: var(--shorthand-panel-red);
 
   align-items: center;
   align-self: flex-start;
