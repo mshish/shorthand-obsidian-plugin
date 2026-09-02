@@ -573,7 +573,10 @@ export default class ShorthandPlugin extends Plugin {
     // Synchronous, before any await. The guard this replaces tested `#capture`, which is
     // assigned further down — so two starts fired inside the setup window both passed it,
     // and the second orphaned the first's follower, control and enhancer.
-    if (!canStartCapture(this.#state)) {
+    // Keep the runtime ownership guard as a second line of defence. The reducer is the normal
+    // source of truth (and closes the async setup race), but a stale panel/runtime mismatch must
+    // never let a new start overwrite an existing follower, recorder, or enhancer.
+    if (this.#capture !== undefined || !canStartCapture(this.#state)) {
       new Notice("Shorthand is already taking notes. Stop it before starting another note.");
       return;
     }
