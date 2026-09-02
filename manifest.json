@@ -1,7 +1,7 @@
 {
   "id": "shorthand",
   "name": "Shorthand",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "minAppVersion": "1.13.7",
   "description": "Turn Shorthand transcripts into an AI-owned meeting-note summary.",
   "author": "Shorthand contributors",

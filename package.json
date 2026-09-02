@@ -1,6 +1,6 @@
 {
   "name": "obsidian-shorthand",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "Turn Shorthand transcripts into an AI-owned meeting-note summary.",
   "main": "main.js",
   "type": "module",
