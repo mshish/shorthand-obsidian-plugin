@@ -7,6 +7,7 @@ import {
   Plugin,
   PluginSettingTab,
   Setting,
+  setIcon,
   requestUrl,
   type App,
   type ButtonComponent,
@@ -225,6 +226,8 @@ const IDLE_FOLLOWER_RETRY_MS = 30_000;
 type CaptureRuntime = {
   /** The live Obsidian identity, retained across normal rename and move operations. */
   noteFile: TFile;
+  /** The user-facing mode remains attached to the runtime for the full capture lifecycle. */
+  mode: CaptureMode;
   client: StreamClient;
   control: ShorthandControl;
   /**
@@ -403,6 +406,8 @@ export default class ShorthandPlugin extends Plugin {
   // assigning `undefined` to an optional property, and both are cleared on teardown.
   #statusBar: HTMLElement | undefined = undefined;
   #capture: CaptureRuntime | undefined = undefined;
+  /** Makes the selected mode visible during setup, before a runtime exists to own it. */
+  #requestedCaptureMode: CaptureMode | undefined = undefined;
   /**
    * A follower held open while no capture owns one, so a recording started with
    * Shorthand's hotkey is seen at all. Adopted by an attached capture rather than
@@ -572,6 +577,7 @@ export default class ShorthandPlugin extends Plugin {
       new Notice("Shorthand is already taking notes. Stop it before starting another note.");
       return;
     }
+    this.#requestedCaptureMode = mode;
     this.dispatch({ type: "capture-starting" });
     let unownedEnhancer: EnhanceRunner | undefined;
     // "Handed off" means something else now owns this runtime's lifecycle — not that a
@@ -598,17 +604,14 @@ export default class ShorthandPlugin extends Plugin {
         const vaultRoot = this.vaultRoot();
         if (vaultRoot === undefined) return;
         const noteSink = this.noteSink(file, vaultRoot);
-        const markerPreflight = await preflightMarkers(noteSink);
-        if (markerPreflight.status === "error") {
-          this.fail(markerPreflight.message);
-          return;
-        }
-        // Do this before either frontmatter or marker writes. Starting capture is
-        // the only point at which we may ask the user to let Shorthand claim an
-        // unmarked note, and declining must leave every byte untouched.
-        if (markerPreflight.status === "needs-scaffold"
-          && !this.settings.autoScaffold
-          && !await confirmScaffold(this.app)) return;
+        // Preparation is one completed step, before sidecar frontmatter or any recorder
+        // runtime. Frontmatter and an open editor are two Obsidian write surfaces for the
+        // same note; interleaving processFrontMatter between the marker check and the editor
+        // scaffold left their refresh/save ordering to timing. Writing the scaffold first
+        // gives the later frontmatter transform the already-prepared file as its input. Both
+        // capture modes cross this same gate, and declining still leaves every byte untouched
+        // because this is the first mutation in the start path.
+        if (!await this.prepareScaffold(noteSink)) return;
         let sidecar: SidecarWriter | undefined;
         if (this.settings.writeTranscriptNote) {
           const noteContent = await noteSink.readContent();
@@ -647,8 +650,6 @@ export default class ShorthandPlugin extends Plugin {
             store,
           });
         }
-        if (!await this.ensureScaffold(noteSink)) return;
-
         const transcript = new TranscriptStore();
         let enhancer: EnhanceRunner | undefined;
         let enhancementUnavailable: string | undefined;
@@ -715,6 +716,7 @@ export default class ShorthandPlugin extends Plugin {
           : undefined;
         const runtime: CaptureRuntime = {
           noteFile: file,
+          mode,
           client,
           control,
           recorder,
@@ -932,11 +934,15 @@ export default class ShorthandPlugin extends Plugin {
         }
       }
     } finally {
+      this.#requestedCaptureMode = undefined;
       // Any path that left without handing ownership to a live runtime has to release
       // `starting`, or the plugin refuses every later start with "already taking notes".
       // `capture-start-failed` returns to idle only from `starting`, so a setup error
       // that already dispatched a sticky `error` keeps its message.
       if (!handedOff) this.dispatch({ type: "capture-start-failed" });
+      // A post-handoff failure can clear the runtime before this finally block runs. Repaint
+      // after dropping the setup-only mode so the idle card cannot retain the old mode color.
+      else this.#render();
     }
   }
 
@@ -1737,6 +1743,8 @@ export default class ShorthandPlugin extends Plugin {
       state: this.#state,
       elapsedMs: this.#capture === undefined ? undefined : Date.now() - this.#capture.startedAt,
       noteName: this.#capture?.noteFile.basename,
+      notePath: this.#capture?.noteFile.path,
+      captureMode: this.#capture?.mode ?? this.#requestedCaptureMode,
       hasActiveNote: this.hasActiveNote(),
       hasCapture: this.#capture !== undefined,
     });
@@ -1748,6 +1756,22 @@ export default class ShorthandPlugin extends Plugin {
       return;
     }
     void this.startCaptureOnActiveNote(id === "start-assisted-notes" ? "assisted-notes" : "meeting");
+  }
+
+  /** Open the note owned by the current capture without confusing the sidebar for its target. */
+  async openCaptureNote(newTab: boolean): Promise<void> {
+    const file = this.#capture?.noteFile;
+    if (file === undefined) return;
+    if (!newTab) {
+      const existing = this.app.workspace.getLeavesOfType("markdown").find((leaf) =>
+        leaf.view instanceof MarkdownView && leaf.view.file === file
+      );
+      if (existing !== undefined) {
+        await this.app.workspace.revealLeaf(existing);
+        return;
+      }
+    }
+    await this.app.workspace.getLeaf(newTab ? "tab" : false).openFile(file);
   }
 
   #renderPanel(): void {
@@ -2515,17 +2539,27 @@ function numberControlItem(
  * under `bun test`.
  */
 class ShorthandPanelView extends ItemView {
-  // `#build` assigns all four together, exactly once, before `#patch` ever reads them — see
+  // `#build` assigns these together, exactly once, before `#patch` ever reads them — see
   // `render()`'s guard. Definite-assignment fields rather than `| undefined` because every
   // read after that point is meant to be unconditional; the guard belongs in one place
   // (`render()`), not repeated as a null check in every line of `#patch`.
   #built = false;
+  #statusEl!: HTMLElement;
+  #statusIconEl!: HTMLElement;
+  #statusLabelEl!: HTMLElement;
   #headlineEl!: HTMLElement;
-  #noteEl!: HTMLElement;
+  #elapsedEl!: HTMLElement;
+  #noteEl!: HTMLAnchorElement;
+  #noteNameEl!: HTMLElement;
   #activityEl!: HTMLElement;
   #activityLabelEl!: HTMLElement;
   #detailEl!: HTMLElement;
-  #buttonEls: ReadonlyMap<PanelButtonId, HTMLButtonElement> = new Map();
+  #actionsEl!: HTMLElement;
+  #buttonEls: ReadonlyMap<PanelButtonId, Readonly<{
+    button: HTMLButtonElement;
+    label: HTMLElement;
+    hint: HTMLElement;
+  }>> = new Map();
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: ShorthandPlugin) {
     super(leaf);
@@ -2561,29 +2595,65 @@ class ShorthandPanelView extends ItemView {
     this.#patch(model);
   }
 
-  /** Runs once. `describePanel` always returns the same three button ids in the same order
-   * (a documented invariant), so there is no case where the set of controls needs to change
-   * after this — only their text and `disabled` state do, which `#patch` handles. */
+  /** Runs once. The same three button nodes remain mounted so recurring clock repaints never
+   * disturb focus; `#patch` changes which actions are relevant with the `hidden` attribute. */
   #build(model: PanelModel): void {
     const container = this.contentEl;
     container.empty();
     container.addClass("shorthand-panel");
-    this.#headlineEl = container.createEl("p", { cls: "shorthand-panel-headline" });
-    this.#noteEl = container.createEl("p", { cls: "shorthand-panel-note" });
-    this.#activityEl = container.createDiv({ cls: "shorthand-panel-activity" });
+
+    this.#statusEl = container.createDiv({ cls: "shorthand-panel-status" });
+    const statusTop = this.#statusEl.createDiv({ cls: "shorthand-panel-status-top" });
+    const mode = statusTop.createDiv({ cls: "shorthand-panel-mode" });
+    this.#statusIconEl = mode.createSpan({ cls: "shorthand-panel-mode-icon", attr: { "aria-hidden": "true" } });
+    this.#statusLabelEl = mode.createSpan({ cls: "shorthand-panel-mode-label" });
+    this.#elapsedEl = statusTop.createEl("time", { cls: "shorthand-panel-elapsed" });
+    this.#headlineEl = this.#statusEl.createEl("h3", {
+      cls: "shorthand-panel-headline",
+      attr: { "aria-live": "polite" },
+    });
+
+    this.#noteEl = this.#statusEl.createEl("a", {
+      cls: "shorthand-panel-note internal-link",
+      attr: { href: "#" },
+    });
+    this.#noteEl.onclick = (event) => {
+      event.preventDefault();
+      void this.plugin.openCaptureNote(event.metaKey || event.ctrlKey);
+    };
+    const noteIcon = this.#noteEl.createSpan({ cls: "shorthand-panel-note-icon", attr: { "aria-hidden": "true" } });
+    setIcon(noteIcon, "file-text");
+    this.#noteNameEl = this.#noteEl.createSpan({ cls: "shorthand-panel-note-name" });
+
+    this.#activityEl = this.#statusEl.createDiv({ cls: "shorthand-panel-activity" });
     const pulse = this.#activityEl.createSpan({ cls: "shorthand-panel-pulse", attr: { "aria-hidden": "true" } });
     pulse.createSpan();
     pulse.createSpan();
     pulse.createSpan();
     this.#activityLabelEl = this.#activityEl.createSpan();
-    this.#detailEl = container.createEl("p", { cls: "shorthand-panel-detail" });
-    const buttons = container.createDiv({ cls: "shorthand-panel-buttons" });
-    const buttonEls = new Map<PanelButtonId, HTMLButtonElement>();
+    this.#detailEl = this.#statusEl.createEl("p", { cls: "shorthand-panel-detail" });
+
+    this.#actionsEl = container.createDiv({ cls: "shorthand-panel-actions" });
+    this.#actionsEl.createEl("p", { cls: "shorthand-panel-actions-label", text: "Choose a mode" });
+    const buttons = this.#actionsEl.createDiv({ cls: "shorthand-panel-buttons" });
+    const buttonEls = new Map<PanelButtonId, Readonly<{
+      button: HTMLButtonElement;
+      label: HTMLElement;
+      hint: HTMLElement;
+    }>>();
     for (const button of model.buttons) {
-      const el = buttons.createEl("button");
-      if (button.id === "start-meeting") el.addClass("mod-cta");
-      el.onclick = () => { this.plugin.runPanelAction(button.id); };
-      buttonEls.set(button.id, el);
+      const parent = button.id === "stop" ? this.#statusEl : buttons;
+      const element = parent.createEl("button", {
+        cls: `shorthand-panel-button is-${button.id}`,
+        attr: { type: "button" },
+      });
+      const icon = element.createSpan({ cls: "shorthand-panel-button-icon", attr: { "aria-hidden": "true" } });
+      setIcon(icon, button.icon);
+      const copy = element.createSpan({ cls: "shorthand-panel-button-copy" });
+      const label = copy.createSpan({ cls: "shorthand-panel-button-label" });
+      const hint = copy.createSpan({ cls: "shorthand-panel-button-hint" });
+      element.onclick = () => { this.plugin.runPanelAction(button.id); };
+      buttonEls.set(button.id, { button: element, label, hint });
     }
     this.#buttonEls = buttonEls;
   }
@@ -2596,19 +2666,34 @@ class ShorthandPanelView extends ItemView {
    * inline styling, and the browser's own UA stylesheet does the hiding.
    */
   #patch(model: PanelModel): void {
+    for (const tone of ["idle", "meeting", "assisted-notes", "working", "warning", "error"] as const) {
+      this.#statusEl.classList.toggle(`is-${tone}`, model.tone === tone);
+    }
+    setIcon(this.#statusIconEl, model.statusIcon);
+    this.#statusLabelEl.textContent = model.statusLabel;
     this.#headlineEl.textContent = model.headline;
-    this.#noteEl.textContent = model.noteName ?? "";
+    this.#elapsedEl.textContent = model.elapsed ?? "";
+    this.#elapsedEl.hidden = model.elapsed === undefined;
+    this.#noteNameEl.textContent = model.noteName ?? "";
+    this.#noteEl.setAttribute("href", model.notePath ?? "#");
+    this.#noteEl.dataset.href = model.notePath ?? "";
+    this.#noteEl.ariaLabel = model.noteName === undefined ? "" : `Open ${model.noteName}`;
+    this.#noteEl.title = model.noteName === undefined ? "" : `Open ${model.noteName}`;
     this.#noteEl.hidden = model.noteName === undefined;
     this.#activityLabelEl.textContent = model.activityLabel ?? "";
     this.#activityEl.hidden = model.activityLabel === undefined;
     this.#detailEl.textContent = model.detail ?? "";
     this.#detailEl.hidden = model.detail === undefined;
+    this.#actionsEl.hidden = !model.buttons.some(({ id, visible }) => id !== "stop" && visible);
 
     for (const button of model.buttons) {
-      const el = this.#buttonEls.get(button.id);
-      if (el === undefined) continue; // Unreachable while the button-set invariant above holds.
-      el.textContent = button.label;
-      el.disabled = !button.enabled;
+      const elements = this.#buttonEls.get(button.id);
+      if (elements === undefined) continue; // Unreachable while the button-set invariant above holds.
+      elements.label.textContent = button.label;
+      elements.hint.textContent = button.hint ?? "";
+      elements.hint.hidden = button.hint === undefined;
+      elements.button.disabled = !button.enabled;
+      elements.button.hidden = !button.visible;
     }
   }
 }

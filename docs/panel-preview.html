@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shorthand panel preview</title>
+  <link rel="stylesheet" href="../styles.css">
+  <style>
+    /* A small Obsidian-variable stand-in lets this file render outside the app while the
+       component itself continues to use the real theme variables from styles.css. */
+    :root {
+      --background-primary: #fbfaf8;
+      --background-modifier-border: #dedbd5;
+      --text-normal: #272624;
+      --text-muted: #75716b;
+      --text-accent: #536f9e;
+      --interactive-accent: #5f82bd;
+      --color-green: #4d8b74;
+      --color-orange: #bc7049;
+      --color-purple: #8169ae;
+      --color-red: #b55757;
+      --border-width: 1px;
+      --radius-s: 5px;
+      --radius-m: 9px;
+      --radius-l: 13px;
+      --size-2-1: 2px;
+      --size-2-2: 4px;
+      --size-4-1: 4px;
+      --size-4-2: 8px;
+      --size-4-3: 12px;
+      --size-4-4: 16px;
+      --font-ui-smaller: 12px;
+      --font-ui-small: 14px;
+      --font-ui-large: 18px;
+      --font-semibold: 600;
+      --font-normal: 400;
+      --letter-spacing: .02em;
+      --line-height-tight: 1.2;
+      --line-height-normal: 1.5;
+      --icon-size: 16px;
+      --input-height: 36px;
+      --disabled-opacity: .45;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      background: #eeece8;
+      color: var(--text-normal);
+      font-family: Inter, system-ui, sans-serif;
+      margin: 0;
+      padding: 32px;
+    }
+
+    .preview-grid {
+      display: grid;
+      gap: 32px;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 320px));
+    }
+
+    .preview {
+      background: var(--background-primary);
+      border-radius: 16px;
+      box-shadow: 0 8px 30px #4a453d18;
+      min-height: 270px;
+      padding: 20px;
+    }
+
+    .caption {
+      color: var(--text-muted);
+      font-size: 12px;
+      margin: 0 0 12px;
+      text-transform: uppercase;
+    }
+
+    .fake-icon {
+      font-size: 16px;
+      line-height: 16px;
+    }
+  </style>
+</head>
+<body>
+  <main class="preview-grid">
+    <section class="preview">
+      <p class="caption">Idle</p>
+      <div class="shorthand-panel">
+        <div class="shorthand-panel-status is-idle">
+          <div class="shorthand-panel-status-top">
+            <div class="shorthand-panel-mode">
+              <span class="shorthand-panel-mode-icon fake-icon">✓</span>
+              <span>Ready</span>
+            </div>
+          </div>
+          <h3 class="shorthand-panel-headline">Start taking notes</h3>
+        </div>
+        <div class="shorthand-panel-actions">
+          <p class="shorthand-panel-actions-label">Choose a mode</p>
+          <div class="shorthand-panel-buttons">
+            <button class="shorthand-panel-button is-start-meeting">
+              <span class="shorthand-panel-button-icon fake-icon">♟</span>
+              <span class="shorthand-panel-button-copy">
+                <span class="shorthand-panel-button-label">Meeting</span>
+                <span class="shorthand-panel-button-hint">Conversation</span>
+              </span>
+            </button>
+            <button class="shorthand-panel-button is-start-assisted-notes">
+              <span class="shorthand-panel-button-icon fake-icon">✦</span>
+              <span class="shorthand-panel-button-copy">
+                <span class="shorthand-panel-button-label">Assisted notes</span>
+                <span class="shorthand-panel-button-hint">Solo thinking</span>
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="preview">
+      <p class="caption">Live meeting</p>
+      <div class="shorthand-panel">
+        <div class="shorthand-panel-status is-meeting">
+          <div class="shorthand-panel-status-top">
+            <div class="shorthand-panel-mode">
+              <span class="shorthand-panel-mode-icon fake-icon">♟</span>
+              <span>Meeting</span>
+            </div>
+            <time class="shorthand-panel-elapsed">12:34</time>
+          </div>
+          <h3 class="shorthand-panel-headline">Taking notes</h3>
+          <a class="shorthand-panel-note internal-link" href="#">
+            <span class="shorthand-panel-note-icon fake-icon">▤</span>
+            <span class="shorthand-panel-note-name">Weekly sync</span>
+          </a>
+          <div class="shorthand-panel-activity">
+            <span class="shorthand-panel-pulse"><span></span><span></span><span></span></span>
+            <span>Listening and writing</span>
+          </div>
+          <button class="shorthand-panel-button is-stop">
+            <span class="shorthand-panel-button-icon fake-icon">■</span>
+            <span class="shorthand-panel-button-copy">
+              <span class="shorthand-panel-button-label">Stop meeting</span>
+            </span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <section class="preview">
+      <p class="caption">Live assisted notes</p>
+      <div class="shorthand-panel">
+        <div class="shorthand-panel-status is-assisted-notes">
+          <div class="shorthand-panel-status-top">
+            <div class="shorthand-panel-mode">
+              <span class="shorthand-panel-mode-icon fake-icon">✦</span>
+              <span>Assisted notes</span>
+            </div>
+            <time class="shorthand-panel-elapsed">7:08</time>
+          </div>
+          <h3 class="shorthand-panel-headline">Taking notes</h3>
+          <a class="shorthand-panel-note internal-link" href="#">
+            <span class="shorthand-panel-note-icon fake-icon">▤</span>
+            <span class="shorthand-panel-note-name">Product sketch</span>
+          </a>
+          <div class="shorthand-panel-activity">
+            <span class="shorthand-panel-pulse"><span></span><span></span><span></span></span>
+            <span>Listening and writing</span>
+          </div>
+          <button class="shorthand-panel-button is-stop">
+            <span class="shorthand-panel-button-icon fake-icon">■</span>
+            <span class="shorthand-panel-button-copy">
+              <span class="shorthand-panel-button-label">Stop assisted notes</span>
+            </span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <section class="preview">
+      <p class="caption">Needs attention</p>
+      <div class="shorthand-panel">
+        <div class="shorthand-panel-status is-error">
+          <div class="shorthand-panel-status-top">
+            <div class="shorthand-panel-mode">
+              <span class="shorthand-panel-mode-icon fake-icon">!</span>
+              <span>Needs attention</span>
+            </div>
+          </div>
+          <h3 class="shorthand-panel-headline">Something went wrong</h3>
+          <p class="shorthand-panel-detail">Shorthand was not running.</p>
+        </div>
+        <div class="shorthand-panel-actions">
+          <p class="shorthand-panel-actions-label">Try again</p>
+          <div class="shorthand-panel-buttons">
+            <button class="shorthand-panel-button is-start-meeting">
+              <span class="shorthand-panel-button-icon fake-icon">♟</span>
+              <span class="shorthand-panel-button-copy">
+                <span class="shorthand-panel-button-label">Meeting</span>
+                <span class="shorthand-panel-button-hint">Conversation</span>
+              </span>
+            </button>
+            <button class="shorthand-panel-button is-start-assisted-notes">
+              <span class="shorthand-panel-button-icon fake-icon">✦</span>
+              <span class="shorthand-panel-button-copy">
+                <span class="shorthand-panel-button-label">Assisted notes</span>
+                <span class="shorthand-panel-button-hint">Solo thinking</span>
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
