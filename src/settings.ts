@@ -20,13 +20,15 @@ import {
  * have dropped a newly added option on the floor — the dropdown moves, nothing saves, and no
  * error is raised anywhere.
  */
-const ENHANCEMENT_BACKENDS = ["claude-agent-sdk", "llm", "codex"] as const;
+const ENHANCEMENT_BACKENDS = ["claude-agent-sdk", "llm", "codex", "acp"] as const;
 
 export type EnhancementBackend = (typeof ENHANCEMENT_BACKENDS)[number];
 
 export function isEnhancementBackend(value: unknown): value is EnhancementBackend {
   return (ENHANCEMENT_BACKENDS as readonly unknown[]).includes(value);
 }
+
+export type AcpTransport = "stdio" | "network";
 
 export type ShorthandPluginSettings = Readonly<{
   backend: EnhancementBackend;
@@ -48,6 +50,12 @@ export type ShorthandPluginSettings = Readonly<{
   /** Blank values inherit the installed Codex CLI defaults. */
   codexModel: string;
   codexEffort: CodexReasoningEffort | "";
+  acpTransport: AcpTransport;
+  acpExecutable: string;
+  acpArgs: string;
+  acpNetworkUrl: string;
+  acpAuthToken: string;
+  acpModel: string;
   sidecarDirectory: string;
   minNewChars: number;
   minIntervalMs: number;
@@ -117,6 +125,12 @@ export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
   codexExecutable: "",
   codexModel: "",
   codexEffort: "",
+  acpTransport: "stdio",
+  acpExecutable: "",
+  acpArgs: "acp",
+  acpNetworkUrl: "",
+  acpAuthToken: "",
+  acpModel: "",
   sidecarDirectory: DEFAULT_CONFIG.sidecarDirectory.replaceAll("\\", "/"),
   minNewChars: DEFAULT_CONFIG.thresholds.enhancementNewCharacters,
   minIntervalMs: DEFAULT_CONFIG.thresholds.enhancementIntervalMs,
@@ -150,6 +164,12 @@ export function normalizePluginSettings(input: unknown): ShorthandPluginSettings
     codexExecutable: stringValue(value.codexExecutable, DEFAULT_PLUGIN_SETTINGS.codexExecutable),
     codexModel: stringValue(value.codexModel, DEFAULT_PLUGIN_SETTINGS.codexModel),
     codexEffort: enumValue(value.codexEffort, CODEX_REASONING_EFFORTS, DEFAULT_PLUGIN_SETTINGS.codexEffort),
+    acpTransport: acpTransportValue(value.acpTransport, DEFAULT_PLUGIN_SETTINGS.acpTransport),
+    acpExecutable: stringValue(value.acpExecutable, DEFAULT_PLUGIN_SETTINGS.acpExecutable),
+    acpArgs: stringValue(value.acpArgs, DEFAULT_PLUGIN_SETTINGS.acpArgs),
+    acpNetworkUrl: stringValue(value.acpNetworkUrl, DEFAULT_PLUGIN_SETTINGS.acpNetworkUrl),
+    acpAuthToken: stringValue(value.acpAuthToken, DEFAULT_PLUGIN_SETTINGS.acpAuthToken),
+    acpModel: stringValue(value.acpModel, DEFAULT_PLUGIN_SETTINGS.acpModel),
     sidecarDirectory: vaultRelativeDirectory(value.sidecarDirectory, DEFAULT_PLUGIN_SETTINGS.sidecarDirectory),
     minNewChars: finiteInteger(value.minNewChars, DEFAULT_PLUGIN_SETTINGS.minNewChars, 1),
     // The plugin UI deliberately has a ten-second floor: starting an agent pass more often
@@ -397,6 +417,10 @@ function migrateLegacyShorthandExecutable(value: string): string {
 
 function backendValue(value: unknown, fallback: EnhancementBackend): EnhancementBackend {
   return isEnhancementBackend(value) ? value : fallback;
+}
+
+function acpTransportValue(value: unknown, fallback: AcpTransport): AcpTransport {
+  return value === "stdio" || value === "network" ? value : fallback;
 }
 
 /**
