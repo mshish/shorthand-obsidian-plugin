@@ -1860,6 +1860,27 @@ class ShorthandSettingTab extends PluginSettingTab {
    */
   #agentCatalogs: Map<"claude" | "codex", AgentCatalog> = new Map();
 
+  /**
+   * Each agent backend's effort row, registered by that row's own `render` and read by the
+   * model row's `render`, which owns the catalog fetch and applies its result to both rows (see
+   * `agentCatalogItem`). Two sibling definitions with separate `render` closures cannot share
+   * a local — the same reason `#agentCatalogs` lives here — and the effort row cannot be built
+   * *inside* the model row's `render` through `group.addSetting`: Obsidian renders a group's
+   * declared items and then resets the group's `listEl` to exactly those rows'
+   * elements, which removes any row appended from a callback. test/settings-tab-source.test.ts
+   * keeps that from coming back. Cleared by the effort row's cleanup so a fetch that lands after
+   * the row is torn down finds nothing to write into.
+   */
+  #effortRows: Map<"claude" | "codex", { row: Setting; dropdown: DropdownComponent }> = new Map();
+
+  /**
+   * The editor behind the five "LLM provider profile" rows, created by the status row's
+   * `render` and attached to by the four field rows' renders (see `llmProfileGroup`). Same
+   * constraint as `#effortRows`: the fields have to be declared items, so their shared state
+   * lives here rather than in one row's closure.
+   */
+  #llmProfile: LlmProfileEditor | undefined;
+
   constructor(app: App, private readonly plugin: ShorthandPlugin) {
     super(app, plugin);
   }
@@ -1868,9 +1889,11 @@ class ShorthandSettingTab extends PluginSettingTab {
    * Called on every re-render and once more when the tab is registered, purely to index its
    * rows for Obsidian's settings search — so this must stay a plain, side-effect-free read of
    * current settings. The agent catalog fetch and the LLM credential read are the two things
-   * here that are neither: both are gated behind their own `render` callback (see
-   * `agentCatalogItem` and `llmProfileGroup`), which Obsidian only invokes for a row that is
-   * actually being displayed, never for a search-indexing pass.
+   * here that are neither: both sit inside a `render` callback (see `agentCatalogItem` and
+   * `llmProfileGroup`), which Obsidian never invokes for the search-indexing pass. `render`
+   * *does* run for every declared row on a display pass, including rows in a group whose
+   * `visible` is false — visibility is applied afterwards, as CSS — so each of those callbacks
+   * also checks the selected backend itself before spawning or reading anything.
    */
   getSettingDefinitions(): SettingDefinitionItem<SettingsKey>[] {
     return [
@@ -1900,11 +1923,11 @@ class ShorthandSettingTab extends PluginSettingTab {
    * gates a plain `control` row's `visible` predicate (the transcript folder row) and nothing
    * else about it — that row is already built, so re-evaluating the predicate is
    * `refreshDomState()`'s job and does not need a full rebuild. `backend`, though, gates rows
-   * built by a `render` callback (the agent sign-in/model/effort groups, the LLM profile group)
-   * that has never executed for a backend the user has not yet had selected; `refreshDomState()`
-   * only toggles CSS on rows that already exist; it cannot conjure a row whose `render` has
-   * never run. `backend` therefore goes through the full `update()` rebuild instead, via
-   * `RESTRUCTURING_KEYS`.
+   * whose `render` callbacks (the agent model/effort rows, the LLM profile rows) skipped their
+   * catalog fetch or credential read because the backend was not selected at the time — see
+   * `getSettingDefinitions()`'s doc comment. `refreshDomState()` only toggles CSS on rows that
+   * already exist; it cannot re-run a `render`. `backend` therefore goes through the full
+   * `update()` rebuild instead, via `RESTRUCTURING_KEYS`.
    */
   async setControlValue(key: string, value: unknown): Promise<void> {
     if (key === "minIntervalSeconds") {
@@ -2023,30 +2046,29 @@ class ShorthandSettingTab extends PluginSettingTab {
   }
 
   /**
-   * The sign-in row plus the model and effort rows for one agent backend, wrapped in their own
-   * `type: "group"` so a `render` callback's own `group.addSetting` appends inside *this*
-   * group's `listEl` — right after the row that built it — rather than a top-level item's
-   * `render`, whose `group` argument is the tab's root group; appending there instead lands new
-   * rows at the end of the whole tab, after Advanced. No `heading`: this group exists to give
-   * `render` the right append target, not to add new UI.
+   * The sign-in, model and effort rows for one agent backend — three declared items in one
+   * unheaded `type: "group"`, so the backend's `visible` predicate governs all three at once.
+   *
+   * The effort row is declared, not appended from the model row's `render` via
+   * `group.addSetting`, which is what 0.6.0–0.6.9 did and why it never appeared: Obsidian
+   * renders a group's declared items and then resets the group's `listEl` to exactly those rows'
+   * elements, so a row added from inside a callback is removed the moment `render` returns,
+   * silently. The two rows share the fetched catalog through `#agentCatalogs` and the effort
+   * row's controls through `#effortRows` instead.
    *
    * The sign-in row is a plain declarative item with no `render` of its own: its `visible` is
-   * the row's single owner, reading the catalog state the model row's `render` (below) writes
-   * once its fetch lands. It cannot own that fetch itself — `visible: false` keeps an item from
-   * being rendered at all (see `RESTRUCTURING_KEYS`'s doc comment), so a row whose own
-   * visibility depends on the catalog can never be the row that *produces* the catalog: it would
-   * start hidden and never get a `render` call to run the fetch that would reveal it. The model
-   * row has no such dependency — it always shows once this backend is selected, "Loading…" and
-   * disabled until the fetch lands — so it is the item in this group that both always renders
-   * and can safely own the fetch, the effort row (via `group.addSetting`), and refreshing the
-   * sign-in row's predicate.
+   * the row's single owner, reading the catalog state the model row's `render` writes once its
+   * fetch lands. The model row owns the fetch because it is the row whose presentation the
+   * fetch changes first — "Loading…" and disabled until the catalog arrives — and it applies the
+   * result to the effort row through `#effortRows`, then refreshes the sign-in row's predicate.
    *
    * `getSettingDefinitions()` runs on every render and once more when the tab is registered for
    * search indexing, and the catalog fetch spawns a subprocess costing ~0.6-2.6s (see
    * `CATALOG_TIMEOUT_MS`'s doc comment in core) — it must stay behind `render`, which Obsidian
-   * only invokes for a row it is actually displaying, never for search indexing and never for a
-   * backend hidden by the group's `visible` below. Paying that cost for a backend the user has
-   * not selected would be wasted work on every tab open.
+   * never invokes for search indexing. `render` does run for a backend the group's `visible`
+   * hides, though (see `getSettingDefinitions()`'s doc comment), so the fetch is additionally
+   * skipped unless this backend is the selected one. A backend switch reaches this `render`
+   * again through `update()` (`RESTRUCTURING_KEYS`), which is what makes that check safe.
    *
    * `disposed` replaces the old `#displayGeneration` counter. Obsidian calls a `render`
    * callback's returned cleanup function before tearing the row down — backend switched away,
@@ -2085,7 +2107,7 @@ class ShorthandSettingTab extends PluginSettingTab {
         {
           name: `${backendLabel} model`,
           desc: catalogLoadingDescription(),
-          render: (modelRow, group) => {
+          render: (modelRow) => {
             let disposed = false;
 
             let modelDropdown!: DropdownComponent;
@@ -2095,34 +2117,20 @@ class ShorthandSettingTab extends PluginSettingTab {
                 .setValue(this.plugin.settings[modelKey]);
               dropdown.onChange(async (value) => {
                 // Preserve-and-flag, not clear-and-reset: whether `value`'s model still accepts
-                // the stored effort is exactly what `decideEffortRow` below already works out
-                // from `this.plugin.settings[effortKey]`, so the effort is left untouched here. A
-                // model switch that invalidates it does not lose it — the next render shows it
-                // selected, disabled, and described as unavailable, the same presentation
-                // `decideModelRow` uses for a stale model id, which is what forces a visible
-                // re-pick instead of a silent substitution.
+                // the stored effort is exactly what `decideEffortRow` (see `applyEffortRow`)
+                // already works out from `this.plugin.settings[effortKey]`, so the effort is
+                // left untouched here. A model switch that invalidates it does not lose it — the
+                // next render shows it selected, disabled, and described as unavailable, the
+                // same presentation `decideModelRow` uses for a stale model id, which is what
+                // forces a visible re-pick instead of a silent substitution.
                 await this.plugin.saveSettings({ ...this.plugin.settings, [modelKey]: value });
                 const catalog = this.#agentCatalogs.get(backend);
-                if (catalog !== undefined) renderEffortOptions(catalog);
+                if (catalog !== undefined) this.applyEffortRow(backend, catalog);
               });
             });
             modelRow.setDisabled(true);
 
-            let effortDropdown!: DropdownComponent;
-            let effortRow!: Setting;
-            group.addSetting((row) => {
-              effortRow = row.setName(`${backendLabel} effort`).setDesc(catalogLoadingDescription());
-              effortRow.addDropdown((dropdown) => {
-                effortDropdown = dropdown.addOption("", "Provider default");
-                dropdown.onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, [effortKey]: value }));
-              });
-              effortRow.setDisabled(true);
-            });
-
-            const renderEffortOptions = (loadedCatalog: AgentCatalog): void => {
-              const decision = decideEffortRow(loadedCatalog, this.plugin.settings[modelKey], this.plugin.settings[effortKey]);
-              applyCatalogDecision(effortDropdown, effortRow, decision);
-            };
+            if (this.plugin.settings.backend !== ownsBackend) return;
 
             const executableOverride = this.plugin.settings[backend === "claude" ? "claudeExecutable" : "codexExecutable"];
             const fetchCatalog = backend === "claude"
@@ -2140,7 +2148,7 @@ class ShorthandSettingTab extends PluginSettingTab {
               this.refreshDomState();
 
               applyCatalogDecision(modelDropdown, modelRow, decideModelRow(loadedCatalog, this.plugin.settings[modelKey]));
-              renderEffortOptions(loadedCatalog);
+              this.applyEffortRow(backend, loadedCatalog);
             }).catch((error: unknown) => {
               if (disposed) return;
               const message = catalogFetchFailedDescription(
@@ -2148,7 +2156,7 @@ class ShorthandSettingTab extends PluginSettingTab {
                 error instanceof AgentCatalogError ? error.reason : "protocol",
               );
               modelRow.setDesc(message).setDisabled(true);
-              effortRow.setDesc(message).setDisabled(true);
+              this.#effortRows.get(backend)?.row.setDesc(message).setDisabled(true);
             });
 
             return () => {
@@ -2157,8 +2165,45 @@ class ShorthandSettingTab extends PluginSettingTab {
             };
           },
         },
+        {
+          name: `${backendLabel} effort`,
+          desc: catalogLoadingDescription(),
+          render: (effortRow) => {
+            let effortDropdown!: DropdownComponent;
+            effortRow.addDropdown((dropdown) => {
+              effortDropdown = dropdown.addOption("", "Provider default");
+              dropdown.onChange(async (value) => this.plugin.saveSettings({ ...this.plugin.settings, [effortKey]: value }));
+            });
+            effortRow.setDisabled(true);
+            this.#effortRows.set(backend, { row: effortRow, dropdown: effortDropdown });
+            // Obsidian renders sibling items in declaration order and the model row's fetch is
+            // asynchronous, so on any pass through here the catalog is still in flight and this
+            // finds nothing. It is here for the one ordering it cannot see: a future item
+            // reordering that puts this row first would otherwise leave it "Loading…" forever.
+            const catalog = this.#agentCatalogs.get(backend);
+            if (catalog !== undefined) this.applyEffortRow(backend, catalog);
+            return () => {
+              this.#effortRows.delete(backend);
+            };
+          },
+        },
       ],
     };
+  }
+
+  /**
+   * Applies the fetched catalog to a backend's effort row, whichever row is asking — the model
+   * row when its fetch lands or its selection changes, the effort row itself if it ever renders
+   * after the catalog is already cached. A missing entry means the effort row has been torn
+   * down (or has not rendered yet), and there is nothing to draw on.
+   */
+  private applyEffortRow(backend: "claude" | "codex", catalog: AgentCatalog): void {
+    const effort = this.#effortRows.get(backend);
+    if (effort === undefined) return;
+    const modelKey = backend === "claude" ? "claudeModel" : "codexModel";
+    const effortKey = backend === "claude" ? "claudeEffort" : "codexEffort";
+    const decision = decideEffortRow(catalog, this.plugin.settings[modelKey], this.plugin.settings[effortKey]);
+    applyCatalogDecision(effort.dropdown, effort.row, decision);
   }
 
   /**
@@ -2234,11 +2279,20 @@ class ShorthandSettingTab extends PluginSettingTab {
    * "LLM provider profile"'s heading and its introductory sentence are two separate items for
    * the same reason `noteWritingGroup()` splits them — `SettingDefinitionGroup` has no `desc`.
    *
-   * Everything else here stays one `render` item, imperative throughout, for the reasons
-   * `agentCatalogItem` gives: a credential-file read gated behind `render` so it never runs
-   * during search indexing or for a backend the user has not chosen, and `disposed` (set by the
-   * returned cleanup function) standing in for the old `#displayGeneration` guard so a read or
-   * write that resolves after this row is torn down cannot write into it.
+   * The status row and the four fields are five declared items sharing one `LlmProfileEditor`
+   * through `#llmProfile` — not one `render` that appends the fields via `group.addSetting`,
+   * which 0.6.0–0.6.9 did and which left the group with only its status row: Obsidian resets a
+   * group's `listEl` to its declared rows once they are rendered (see `#effortRows`). The
+   * status row's `render` creates the editor and starts the credential-file read; each field's
+   * `render` attaches its controls. Obsidian renders sibling items in declaration order,
+   * synchronously, so every field is attached before that read can resolve — which is the
+   * ordering `LlmProfileEditor`'s definite-assignment fields rely on.
+   *
+   * The read stays behind `render` for the reasons `agentCatalogItem` gives, and with the same
+   * caveat: `render` runs for this group even while the `llm` backend is not selected, so the
+   * read is skipped unless it is. `dispose()` (called from the status row's cleanup) stands in
+   * for the old `#displayGeneration` guard so a read or write that resolves after these rows
+   * are torn down cannot write into them.
    */
   private llmProfileGroup(): SettingDefinitionItem<SettingsKey> {
     return {
@@ -2250,226 +2304,33 @@ class ShorthandSettingTab extends PluginSettingTab {
         {
           name: "Profile status",
           desc: "Loading the provider profile…",
-          render: (statusSetting, group) => {
-            let disposed = false;
-            const credentialsPath = llmCredentialsPath();
-            const credentialsFileExisted = existsSync(credentialsPath);
-            let draft: LlmProfileDraft = EMPTY_LLM_PROFILE_DRAFT;
-            let storedKey = "";
-            let ready = false;
-            let commitQueue: LlmProfileCommitQueue | undefined;
-            let clearKeyPointerDown = false;
-
-            let startOverButton: ButtonComponent;
-            statusSetting.addButton((button) => {
-              startOverButton = button
-                .setButtonText("Discard file")
-                .setDestructive()
-                .onClick(() => { void startOver(); });
-              button.buttonEl.hide();
-            });
-
-            let providerInput: DropdownComponent;
-            let providerSetting!: Setting;
-            group.addSetting((row) => {
-              providerSetting = row.setName("Provider");
-              providerSetting.addDropdown((dropdown) => {
-                providerInput = dropdown
-                  .addOption("", "No provider chosen")
-                  .addOption("openai", "OpenAI")
-                  .addOption("anthropic", "Anthropic")
-                  .addOption("openai-compatible", "OpenAI-compatible")
-                  .setDisabled(true)
-                  .onChange((value) => {
-                    if (value !== "" && value !== "openai" && value !== "anthropic" && value !== "openai-compatible") return;
-                    draft = { ...draft, provider: value };
-                    commitQueue?.acceptEdit(draft);
-                    showDraftStatus();
-                  });
-                dropdown.selectEl.addEventListener("blur", () => { void commitDraft(); });
-              });
-            });
-
-            let modelInput: TextComponent;
-            let modelSetting!: Setting;
-            group.addSetting((row) => {
-              modelSetting = row.setName("Model").setDesc("Model IDs are exact strings, not display names.");
-              modelSetting.addText((text) => {
-                modelInput = text.setDisabled(true).onChange((value) => {
-                  draft = { ...draft, model: value };
-                  commitQueue?.acceptEdit(draft);
-                  showDraftStatus();
-                });
-                text.inputEl.addEventListener("blur", () => { void commitDraft(); });
-              });
-            });
-
-            let baseUrlInput: TextComponent;
-            let baseUrlSetting!: Setting;
-            group.addSetting((row) => {
-              baseUrlSetting = row.setName("Base URL").setDesc(baseUrlDescription(draft.provider));
-              baseUrlSetting.addText((text) => {
-                baseUrlInput = text.setDisabled(true).onChange((value) => {
-                  draft = { ...draft, base_url: value };
-                  commitQueue?.acceptEdit(draft);
-                  showDraftStatus();
-                });
-                text.inputEl.addEventListener("blur", () => { void commitDraft(); });
-              });
-            });
-
-            let apiKeyInput: TextComponent;
-            let clearKeyButton: ButtonComponent;
-            let apiKeySetting!: Setting;
-            group.addSetting((row) => {
-              apiKeySetting = row.setName("API key");
-              apiKeySetting
-                .addText((text) => {
-                  apiKeyInput = text.setDisabled(true).onChange((value) => {
-                    // The rendered field stays blank for a loaded secret. An empty edit
-                    // therefore restores the carried key; otherwise deleting masked text would
-                    // clear it by accident.
-                    draft = { ...draft, api_key: value.length === 0 ? storedKey : value };
-                    commitQueue?.acceptEdit(draft);
-                    showDraftStatus();
-                  });
-                  text.inputEl.type = "password";
-                  text.inputEl.addEventListener("blur", () => {
-                    if (!clearKeyPointerDown) void commitDraft();
-                  });
-                })
-                .addButton((button) => {
-                  clearKeyButton = button
-                    .setButtonText("Clear key")
-                    .setDisabled(true)
-                    .onClick(() => {
-                      draft = { ...draft, api_key: "" };
-                      apiKeyInput.setValue("");
-                      commitQueue?.acceptEdit(draft);
-                      clearKeyPointerDown = false;
-                      showDraftStatus();
-                      void commitDraft();
-                    });
-                  button.buttonEl.addEventListener("pointerdown", () => {
-                    // Pointer-down precedes the password field's blur. Suppressing that blur
-                    // prevents Clear key from first writing a partially typed rotation and then
-                    // writing a clear.
-                    clearKeyPointerDown = true;
-                    window.setTimeout(() => { clearKeyPointerDown = false; }, 0);
-                  });
-                });
-            });
-
-            const setFieldsDisabled = (disabled: boolean): void => {
-              providerSetting.setDisabled(disabled);
-              modelSetting.setDisabled(disabled);
-              baseUrlSetting.setDisabled(disabled);
-              apiKeySetting.setDisabled(disabled);
-              clearKeyButton.setDisabled(disabled);
+          render: (statusSetting) => {
+            const editor = new LlmProfileEditor(() => this.update());
+            this.#llmProfile = editor;
+            editor.attachStatus(statusSetting);
+            if (this.plugin.settings.backend === "llm") editor.load();
+            return () => {
+              editor.dispose();
+              if (this.#llmProfile === editor) this.#llmProfile = undefined;
             };
-
-            const setKeyDescription = (keyStatus: "known" | "unknown" = "known"): void => {
-              const state: StoredKeyState = keyStatus === "unknown"
-                ? "unknown"
-                : storedKey.length > 0 ? "stored" : "absent";
-              apiKeySetting.setDesc(apiKeyDescription(state));
-            };
-
-            const showDraftStatus = (): void => {
-              if (!ready) return;
-              baseUrlSetting.setDesc(baseUrlDescription(draft.provider));
-              const missing = missingLlmProfileFields(draft);
-              statusSetting.setDesc(missing.length > 0
-                ? `Not saved yet. Still needed: ${missing.join(", ")}.`
-                : "Saved when you leave the field you are editing.");
-            };
-
-            // This deliberately introduces commit-on-blur. The credentials file is an external,
-            // whole-profile document validated as a unit: keystroke writes would emit profiles
-            // core rejects wholesale and would put an API key on disk once for every character
-            // typed.
-            const commitDraft = async (): Promise<void> => {
-              if (!ready) return;
-              await commitQueue?.commit();
-            };
-
-            const startOver = async (): Promise<void> => {
-              startOverButton.setDisabled(true);
-              statusSetting.setDesc(`Discarding the malformed profile at ${credentialsPath}…`);
-              try {
-                await deleteLlmCredentials();
-                if (!disposed) this.update();
-              } catch (error) {
-                if (disposed) return;
-                statusSetting.setDesc(`The profile could not be discarded: ${errorMessage(error)}`);
-                startOverButton.setDisabled(false);
-              }
-            };
-
-            const renderMalformed = (message: string): void => {
-              ready = false;
-              setFieldsDisabled(true);
-              statusSetting.setDesc(`${message} Discard file deletes the existing profile, including any key that could still be recovered from it by hand.`);
-              startOverButton.buttonEl.show();
-              startOverButton.setDisabled(false);
-              setKeyDescription("unknown");
-            };
-
-            void readLlmCredentials(credentialsPath).then((result) => {
-              if (disposed) return;
-              const state = resolveLlmProfileReadState(result, credentialsFileExisted);
-              if (state.status === "malformed") {
-                renderMalformed(state.message);
-                return;
-              }
-
-              draft = state.draft;
-              storedKey = state.hasStoredKey ? draft.api_key : "";
-              commitQueue = new LlmProfileCommitQueue(draft, {
-                write: writeLlmCredentials,
-                onInvalid: (missing) => {
-                  // Same wording as showDraftStatus: one condition must not have two sentences.
-                  statusSetting.setDesc(`Not saved yet. Still needed: ${missing.join(", ")}.`);
-                },
-                onSaving: () => {
-                  statusSetting.setDesc(`Saving to ${credentialsPath}…`);
-                },
-                onSaved: (credentials, isLatestRevision) => {
-                  if (disposed) return;
-                  storedKey = credentials.api_key ?? "";
-                  if (isLatestRevision) apiKeyInput.setValue("");
-                  setKeyDescription();
-                  if (isLatestRevision) {
-                    statusSetting.setDesc(`Profile saved to ${credentialsPath}.`);
-                  } else {
-                    showDraftStatus();
-                  }
-                },
-                onSaveFailed: (error) => {
-                  if (disposed) return;
-                  statusSetting.setDesc(`The profile could not be saved: ${errorMessage(error)}`);
-                },
-              });
-              providerInput.setValue(draft.provider);
-              modelInput.setValue(draft.model);
-              baseUrlInput.setValue(draft.base_url);
-              apiKeyInput.setValue("");
-              ready = true;
-              // setValue() does not fire onChange, so nothing above recomputed the
-              // provider-dependent copy. Without this, a loaded openai-compatible profile shows
-              // Base URL as optional.
-              showDraftStatus();
-              setFieldsDisabled(false);
-              setKeyDescription();
-              statusSetting.setDesc(state.status === "missing"
-                ? "The profile is written once every required field has a value."
-                : `Profile loaded from ${credentialsPath}.`);
-            }).catch((error: unknown) => {
-              if (!disposed) renderMalformed(`The provider profile could not be loaded: ${errorMessage(error)}`);
-            });
-
-            return () => { disposed = true; };
           },
+        },
+        {
+          name: "Provider",
+          render: (row) => { this.#llmProfile?.attachProvider(row); },
+        },
+        {
+          name: "Model",
+          desc: "Model IDs are exact strings, not display names.",
+          render: (row) => { this.#llmProfile?.attachModel(row); },
+        },
+        {
+          name: "Base URL",
+          render: (row) => { this.#llmProfile?.attachBaseUrl(row); },
+        },
+        {
+          name: "API key",
+          render: (row) => { this.#llmProfile?.attachApiKey(row); },
         },
       ],
     };
@@ -2500,12 +2361,254 @@ function applyCatalogDecision(dropdown: DropdownComponent, row: Setting, decisio
 }
 
 /**
- * Keys whose value changes which rows exist to render, rather than merely hiding or showing a
- * row that already does — e.g. `backend` reveals the selected agent's sign-in/model/effort
- * group or the LLM profile group, each built by a `render` callback that has never executed for
- * a backend the user has not yet had selected. `refreshDomState()` only toggles CSS on rows
- * that already exist in the DOM; it cannot build or tear one down, so a key in this set must go
- * through `update()`'s full rebuild instead. See `ShorthandSettingTab.setControlValue`.
+ * The imperative state behind the "LLM provider profile" rows: the draft, the stored key, the
+ * commit queue, and the controls each of the five declared rows hands over through its
+ * `attach*` call (see `ShorthandSettingTab.llmProfileGroup`). One instance per render of the
+ * status row; `dispose()` fences off every callback that could land after the rows are gone.
+ *
+ * The control fields are definite-assignment rather than optional because every `attach*` call
+ * happens synchronously, in declaration order, before `load()`'s read can resolve — Obsidian
+ * renders a group's items in one pass — and reading one before then is a programming error
+ * this class would rather surface than paper over with an `undefined` check per line.
+ */
+class LlmProfileEditor {
+  #disposed = false;
+  #draft: LlmProfileDraft = EMPTY_LLM_PROFILE_DRAFT;
+  #storedKey = "";
+  #ready = false;
+  #commitQueue: LlmProfileCommitQueue | undefined;
+  #clearKeyPointerDown = false;
+  readonly #credentialsPath = llmCredentialsPath();
+  readonly #credentialsFileExisted = existsSync(this.#credentialsPath);
+
+  #statusSetting!: Setting;
+  #startOverButton!: ButtonComponent;
+  #providerSetting!: Setting;
+  #providerInput!: DropdownComponent;
+  #modelSetting!: Setting;
+  #modelInput!: TextComponent;
+  #baseUrlSetting!: Setting;
+  #baseUrlInput!: TextComponent;
+  #apiKeySetting!: Setting;
+  #apiKeyInput!: TextComponent;
+  #clearKeyButton!: ButtonComponent;
+
+  /** `rebuildTab` is the tab's `update()`: Discard file rebuilds every row from a clean read. */
+  constructor(private readonly rebuildTab: () => void) {}
+
+  attachStatus(setting: Setting): void {
+    this.#statusSetting = setting;
+    setting.addButton((button) => {
+      this.#startOverButton = button
+        .setButtonText("Discard file")
+        .setDestructive()
+        .onClick(() => { void this.#startOver(); });
+      button.buttonEl.hide();
+    });
+  }
+
+  attachProvider(row: Setting): void {
+    this.#providerSetting = row;
+    row.addDropdown((dropdown) => {
+      this.#providerInput = dropdown
+        .addOption("", "No provider chosen")
+        .addOption("openai", "OpenAI")
+        .addOption("anthropic", "Anthropic")
+        .addOption("openai-compatible", "OpenAI-compatible")
+        .setDisabled(true)
+        .onChange((value) => {
+          if (value !== "" && value !== "openai" && value !== "anthropic" && value !== "openai-compatible") return;
+          this.#draft = { ...this.#draft, provider: value };
+          this.#commitQueue?.acceptEdit(this.#draft);
+          this.#showDraftStatus();
+        });
+      dropdown.selectEl.addEventListener("blur", () => { void this.#commitDraft(); });
+    });
+  }
+
+  attachModel(row: Setting): void {
+    this.#modelSetting = row;
+    row.addText((text) => {
+      this.#modelInput = text.setDisabled(true).onChange((value) => {
+        this.#draft = { ...this.#draft, model: value };
+        this.#commitQueue?.acceptEdit(this.#draft);
+        this.#showDraftStatus();
+      });
+      text.inputEl.addEventListener("blur", () => { void this.#commitDraft(); });
+    });
+  }
+
+  attachBaseUrl(row: Setting): void {
+    this.#baseUrlSetting = row.setDesc(baseUrlDescription(this.#draft.provider));
+    row.addText((text) => {
+      this.#baseUrlInput = text.setDisabled(true).onChange((value) => {
+        this.#draft = { ...this.#draft, base_url: value };
+        this.#commitQueue?.acceptEdit(this.#draft);
+        this.#showDraftStatus();
+      });
+      text.inputEl.addEventListener("blur", () => { void this.#commitDraft(); });
+    });
+  }
+
+  attachApiKey(row: Setting): void {
+    this.#apiKeySetting = row;
+    row
+      .addText((text) => {
+        this.#apiKeyInput = text.setDisabled(true).onChange((value) => {
+          // The rendered field stays blank for a loaded secret. An empty edit therefore
+          // restores the carried key; otherwise deleting masked text would clear it by
+          // accident.
+          this.#draft = { ...this.#draft, api_key: value.length === 0 ? this.#storedKey : value };
+          this.#commitQueue?.acceptEdit(this.#draft);
+          this.#showDraftStatus();
+        });
+        text.inputEl.type = "password";
+        text.inputEl.addEventListener("blur", () => {
+          if (!this.#clearKeyPointerDown) void this.#commitDraft();
+        });
+      })
+      .addButton((button) => {
+        this.#clearKeyButton = button
+          .setButtonText("Clear key")
+          .setDisabled(true)
+          .onClick(() => {
+            this.#draft = { ...this.#draft, api_key: "" };
+            this.#apiKeyInput.setValue("");
+            this.#commitQueue?.acceptEdit(this.#draft);
+            this.#clearKeyPointerDown = false;
+            this.#showDraftStatus();
+            void this.#commitDraft();
+          });
+        button.buttonEl.addEventListener("pointerdown", () => {
+          // Pointer-down precedes the password field's blur. Suppressing that blur prevents
+          // Clear key from first writing a partially typed rotation and then writing a clear.
+          this.#clearKeyPointerDown = true;
+          window.setTimeout(() => { this.#clearKeyPointerDown = false; }, 0);
+        });
+      });
+  }
+
+  /** Reads the credentials file and, once it resolves, enables the fields it populated. */
+  load(): void {
+    void readLlmCredentials(this.#credentialsPath).then((result) => {
+      if (this.#disposed) return;
+      const state = resolveLlmProfileReadState(result, this.#credentialsFileExisted);
+      if (state.status === "malformed") {
+        this.#renderMalformed(state.message);
+        return;
+      }
+
+      this.#draft = state.draft;
+      this.#storedKey = state.hasStoredKey ? this.#draft.api_key : "";
+      this.#commitQueue = new LlmProfileCommitQueue(this.#draft, {
+        write: writeLlmCredentials,
+        onInvalid: (missing) => {
+          // Same wording as #showDraftStatus: one condition must not have two sentences.
+          this.#statusSetting.setDesc(`Not saved yet. Still needed: ${missing.join(", ")}.`);
+        },
+        onSaving: () => {
+          this.#statusSetting.setDesc(`Saving to ${this.#credentialsPath}…`);
+        },
+        onSaved: (credentials, isLatestRevision) => {
+          if (this.#disposed) return;
+          this.#storedKey = credentials.api_key ?? "";
+          if (isLatestRevision) this.#apiKeyInput.setValue("");
+          this.#setKeyDescription();
+          if (isLatestRevision) {
+            this.#statusSetting.setDesc(`Profile saved to ${this.#credentialsPath}.`);
+          } else {
+            this.#showDraftStatus();
+          }
+        },
+        onSaveFailed: (error) => {
+          if (this.#disposed) return;
+          this.#statusSetting.setDesc(`The profile could not be saved: ${errorMessage(error)}`);
+        },
+      });
+      this.#providerInput.setValue(this.#draft.provider);
+      this.#modelInput.setValue(this.#draft.model);
+      this.#baseUrlInput.setValue(this.#draft.base_url);
+      this.#apiKeyInput.setValue("");
+      this.#ready = true;
+      // setValue() does not fire onChange, so nothing above recomputed the provider-dependent
+      // copy. Without this, a loaded openai-compatible profile shows Base URL as optional.
+      this.#showDraftStatus();
+      this.#setFieldsDisabled(false);
+      this.#setKeyDescription();
+      this.#statusSetting.setDesc(state.status === "missing"
+        ? "The profile is written once every required field has a value."
+        : `Profile loaded from ${this.#credentialsPath}.`);
+    }).catch((error: unknown) => {
+      if (!this.#disposed) this.#renderMalformed(`The provider profile could not be loaded: ${errorMessage(error)}`);
+    });
+  }
+
+  dispose(): void {
+    this.#disposed = true;
+  }
+
+  #setFieldsDisabled(disabled: boolean): void {
+    this.#providerSetting.setDisabled(disabled);
+    this.#modelSetting.setDisabled(disabled);
+    this.#baseUrlSetting.setDisabled(disabled);
+    this.#apiKeySetting.setDisabled(disabled);
+    this.#clearKeyButton.setDisabled(disabled);
+  }
+
+  #setKeyDescription(keyStatus: "known" | "unknown" = "known"): void {
+    const state: StoredKeyState = keyStatus === "unknown"
+      ? "unknown"
+      : this.#storedKey.length > 0 ? "stored" : "absent";
+    this.#apiKeySetting.setDesc(apiKeyDescription(state));
+  }
+
+  #showDraftStatus(): void {
+    if (!this.#ready) return;
+    this.#baseUrlSetting.setDesc(baseUrlDescription(this.#draft.provider));
+    const missing = missingLlmProfileFields(this.#draft);
+    this.#statusSetting.setDesc(missing.length > 0
+      ? `Not saved yet. Still needed: ${missing.join(", ")}.`
+      : "Saved when you leave the field you are editing.");
+  }
+
+  // This deliberately introduces commit-on-blur. The credentials file is an external,
+  // whole-profile document validated as a unit: keystroke writes would emit profiles core
+  // rejects wholesale and would put an API key on disk once for every character typed.
+  async #commitDraft(): Promise<void> {
+    if (!this.#ready) return;
+    await this.#commitQueue?.commit();
+  }
+
+  async #startOver(): Promise<void> {
+    this.#startOverButton.setDisabled(true);
+    this.#statusSetting.setDesc(`Discarding the malformed profile at ${this.#credentialsPath}…`);
+    try {
+      await deleteLlmCredentials();
+      if (!this.#disposed) this.rebuildTab();
+    } catch (error) {
+      if (this.#disposed) return;
+      this.#statusSetting.setDesc(`The profile could not be discarded: ${errorMessage(error)}`);
+      this.#startOverButton.setDisabled(false);
+    }
+  }
+
+  #renderMalformed(message: string): void {
+    this.#ready = false;
+    this.#setFieldsDisabled(true);
+    this.#statusSetting.setDesc(`${message} Discard file deletes the existing profile, including any key that could still be recovered from it by hand.`);
+    this.#startOverButton.buttonEl.show();
+    this.#startOverButton.setDisabled(false);
+    this.#setKeyDescription("unknown");
+  }
+}
+
+/**
+ * Keys whose value changes what a row's `render` has to do, rather than merely hiding or
+ * showing a row that already does — e.g. `backend` selects which agent model/effort group or
+ * LLM profile group is live, and each of those `render` callbacks skips its fetch or read
+ * while its backend is not the selected one. `refreshDomState()` only toggles CSS on rows that
+ * already exist in the DOM; it cannot re-run a `render`, so a key in this set must go through
+ * `update()`'s full rebuild instead. See `ShorthandSettingTab.setControlValue`.
  */
 const RESTRUCTURING_KEYS = new Set<string>(["backend"]);
 
