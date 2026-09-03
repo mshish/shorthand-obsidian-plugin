@@ -38,6 +38,13 @@ describe("the plugin stylesheet", () => {
     expect(css).toContain("--shorthand-panel-red: #b55757");
   });
 
+  test("keeps the idle header visually distinct from live-status cards", () => {
+    const css = readFileSync(resolve(process.cwd(), "styles.css"), "utf8");
+    expect(css).toContain(".shorthand-panel-status.is-idle");
+    expect(css).toMatch(/\.shorthand-panel-status\.is-idle\s*\{[\s\S]*?box-shadow: none;/);
+    expect(css).toMatch(/\.shorthand-panel-status\.is-idle \.shorthand-panel-headline\s*\{\s*display: none;/);
+  });
+
   test("is delivered to the vault alongside main.js and manifest.json", () => {
     const config = readFileSync(resolve(process.cwd(), "esbuild.config.mjs"), "utf8");
     expect(config).toContain(`["main.js", "manifest.json", "styles.css"]`);
