@@ -74,8 +74,8 @@
 
 /* Only live and problem states need a container: they carry the active clock, a warning, or
    the next Stop action. Idle is context for the two mode choices below, not a third action.
-   Removing the tinted card and reducing the title's emphasis makes that distinction visible
-   before a person reads the labels. */
+   Removing the tinted card and redundant title makes that distinction visible before a person
+   reads the labels. */
 .shorthand-panel-status.is-idle {
   background-color: transparent;
   border-color: transparent;
@@ -84,10 +84,7 @@
 }
 
 .shorthand-panel-status.is-idle .shorthand-panel-headline {
-  color: var(--text-muted);
-  font-size: var(--font-ui-small);
-  font-weight: var(--font-normal);
-  margin: 0;
+  display: none;
 }
 
 .shorthand-panel-status-top {

@@ -42,6 +42,7 @@ describe("the plugin stylesheet", () => {
     const css = readFileSync(resolve(process.cwd(), "styles.css"), "utf8");
     expect(css).toContain(".shorthand-panel-status.is-idle");
     expect(css).toMatch(/\.shorthand-panel-status\.is-idle\s*\{[\s\S]*?box-shadow: none;/);
+    expect(css).toMatch(/\.shorthand-panel-status\.is-idle \.shorthand-panel-headline\s*\{\s*display: none;/);
   });
 
   test("is delivered to the vault alongside main.js and manifest.json", () => {
