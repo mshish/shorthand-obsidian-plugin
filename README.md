@@ -7,7 +7,7 @@
 
 **Focus on the conversation, not taking notes.**
 
-Shorthand turns a live meeting transcript into a note in the Obsidian file you already have open. The [Shorthand desktop app](https://shorthand.ing) captures your microphone and computer audio locally; this plugin keeps the note useful as the conversation unfolds.
+Shorthand turns a live meeting transcript into a note in the Obsidian file you already have open. The [Shorthand desktop app](https://shorthand.ing) captures your microphone and computer audio locally; this plugin keeps the note organized as the conversation unfolds.
 
 - **Listen** — works with Zoom, Meet, Teams, or any other call while keeping speakers separate.
 - **Think** — uses the Claude or ChatGPT plan you already pay for, an API provider, or a local model.
@@ -31,16 +31,6 @@ The first start adds Shorthand's note section automatically. Turn off **Automati
 - Live meeting notes that improve as new transcript arrives.
 - A linked transcript note when you turn on **Transcript notes**.
 - **Enhance now** for a saved transcript, or **Clean up this note** for writing with no transcript.
-
-## Driving Shorthand's recorder
-
-**Control Shorthand recording** is on by default, so choosing a mode in Obsidian starts that same mode in Shorthand and stopping never starts a recording by mistake. Turn it off if you prefer Shorthand's own controls.
-
-The recorder commands remain available as manual controls; they do not start or stop note-taking in Obsidian. See [recorder control and commands](docs/advanced-usage.md#recorder-control) for the full behavior.
-
-## Following Shorthand's recordings
-
-Turn on **Follow Shorthand's recordings** if a recording begun with Shorthand's own hotkey should start note-taking on the note you have open. Dictation is never followed. See [following recordings](docs/advanced-usage.md#following-shorthands-recordings) for the ownership and compatibility details.
 
 ## Note writing
 
