@@ -1,169 +1,70 @@
-# Shorthand for Obsidian
+# Shorthand
+
+[![Obsidian Community Plugin](https://img.shields.io/badge/Obsidian-Community%20Plugin-7C3AED?logo=obsidian&logoColor=white)](https://community.obsidian.md/plugins/shorthand)
+[![Downloads](https://img.shields.io/github/downloads/mshish/shorthand-obsidian-plugin/total?label=downloads&color=4d8b74)](https://github.com/mshish/shorthand-obsidian-plugin/releases)
+[![MIT License](https://img.shields.io/badge/license-MIT-536f9e)](LICENSE)
+[![Donate](https://img.shields.io/badge/Donate-Stripe-635BFF?logo=stripe&logoColor=white)](https://donate.stripe.com/fZufZh6T31Jwdig89afEk00)
 
 **Focus on the conversation, not taking notes.**
 
-Shorthand takes meeting notes live, in the note you already have open. The [Shorthand desktop app](https://shorthand.ing) transcribes your mic and computer audio on your computer; this plugin turns that transcript into a note that takes shape while people talk.
+Shorthand turns a live meeting transcript into a note in the Obsidian file you already have open. The [Shorthand desktop app](https://shorthand.ing) captures your microphone and computer audio locally; this plugin keeps the note useful as the conversation unfolds.
 
-- **Listen** — Zoom, Meet, Teams, or any other call, transcribed locally with speakers kept separate.
-- **Think** — Use the Claude or ChatGPT plan you already pay for, through Claude Code or Codex. An API key or a local model works too.
-- **Write** — The plugin edits only its own section of the note. Everything you write stays exactly where you put it.
+- **Listen** — works with Zoom, Meet, Teams, or any other call while keeping speakers separate.
+- **Think** — uses the Claude or ChatGPT plan you already pay for, an API provider, or a local model.
+- **Write** — updates only the section of the note owned by Shorthand. Your own writing stays put.
 
-Keep the notes, lose the recording: by default the recording, transcript, and AI session are deleted when the meeting ends. Free and open source — more at [shorthand.ing](https://shorthand.ing).
+By default, Shorthand deletes the recording, transcript, and AI session when the meeting ends. It is free and open source.
 
-## What you need
+## Start here
 
-- The Shorthand desktop app, running with **Follow live transcript output** enabled under **Advanced**
-- A desktop Obsidian vault
-- One enhancement backend:
-  - Claude Code, with the `claude` CLI installed and signed in
-  - Codex, with the `codex` CLI installed and `codex login` completed
-  - An OpenAI, Anthropic, Ollama, or OpenAI-compatible provider
+1. Install **Shorthand** from **Settings → Community plugins** in desktop Obsidian.
+2. Install and run the [Shorthand desktop app](https://shorthand.ing), then enable **Follow live transcript output** under **Advanced**.
+3. In Shorthand's plugin settings, choose an AI backend: Claude Code, Codex, or an LLM provider.
+4. Open the note you want to update, then open **Shorthand panel** from the command palette or microphone ribbon icon.
+5. Choose **Meeting** for a conversation or **Assisted notes** for solo thinking. Stop from the panel or status bar when you are done.
 
-Shorthand and this plugin are separate installs. The plugin cannot record or transcribe a meeting by itself.
+The first start adds Shorthand's note section automatically. Turn off **Automatic note scaffolding** in settings if you prefer to approve it first.
 
-## Install
+## What you get
 
-### From a release
-
-Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](../../releases/latest). Put them in:
-
-```text
-<vault>/.obsidian/plugins/shorthand/
-```
-
-In Obsidian, open **Settings → Community plugins**, reload the installed plugins, and enable **Shorthand**.
-
-### With BRAT
-
-Add `mshish/shorthand-obsidian-plugin` as a beta plugin in BRAT. BRAT installs the latest release.
-
-## Start a meeting
-
-1. Open the meeting note in Obsidian.
-2. Make sure the Shorthand desktop app is running.
-3. Run **Shorthand: Start meeting notes on this note** from the command palette.
-4. Run **Shorthand: Stop taking notes** when the meeting ends.
-
-If the note has not been prepared for Shorthand, the plugin adds the required sections. Turn off **Automatic note scaffolding** in settings if you would rather be asked first. Your own writing stays outside the section maintained by AI.
-
-Turn on **Transcript notes** if you also want a linked note containing the raw transcript. This is optional. **Enhance now** can use that saved transcript after note-taking has ended.
-
-## The Shorthand panel
-
-**Open Shorthand panel**, or the microphone icon in the ribbon, opens a panel in the right sidebar with Start and Stop buttons, the current state, the elapsed time, and which note is being updated. It is not opened automatically.
-
-While the plugin is taking notes, the status bar shows the elapsed time and clicking it stops taking notes. It is hidden while idle.
-
-## Commands
-
-Obsidian adds the “Shorthand:” prefix in the command palette.
-
-- **Start meeting notes on this note**
-- **Start assisted notes on this note**
-- **Stop taking notes**
-- **Enhance now**
-- **Clean up this note**
-- **Toggle Shorthand meeting recording**
-- **Toggle Shorthand assisted notes recording**
-- **Cancel Shorthand recording**
-- **Open Shorthand panel**
-
-**Clean up this note** improves a note you wrote or dictated without using a transcript. It does not run on a note that already has a linked transcript.
-
-## Enhancement backends
-
-Claude Code is the default. It can look up related notes elsewhere in your vault when improving the meeting note.
-
-Codex uses your local Codex login. An LLM provider uses the provider, model, endpoint, and optional API key you enter in the plugin settings. Codex and LLM provider backends receive the current note and transcript, but they do not search the rest of your vault.
-
-Claude and Codex may send that material to the services associated with the account you signed in to. OpenAI and Anthropic provider profiles send it to those providers; an OpenAI-compatible profile sends it to the endpoint you configure. Ollama and other local compatible endpoints can keep that traffic on your machine. Shorthand itself does not collect telemetry.
-
-Provider credentials are stored outside the vault, so they are not copied by vault sync:
-
-- Windows: `%APPDATA%\Shorthand\llm-credentials.json`
-- macOS: `~/Library/Application Support/Shorthand/llm-credentials.json`
-- Linux: `${XDG_CONFIG_HOME:-~/.config}/shorthand/llm-credentials.json`
-
-Leave the API key field blank to keep the saved key. Use **Clear key** to remove it.
+- A right-sidebar panel that always shows the current state, elapsed time, and the note being updated.
+- Live meeting notes that improve as new transcript arrives.
+- A linked transcript note when you turn on **Transcript notes**.
+- **Enhance now** for a saved transcript, or **Clean up this note** for writing with no transcript.
 
 ## Driving Shorthand's recorder
 
-**Control Shorthand recording** is on by default. Starting and stopping note-taking also starts and stops the Shorthand recorder, so you do not need to use its global shortcut.
+**Control Shorthand recording** is on by default, so choosing a mode in Obsidian starts that same mode in Shorthand and stopping never starts a recording by mistake. Turn it off if you prefer Shorthand's own controls.
 
-Starting note-taking asks Shorthand to start that mode specifically — Meetings or Assisted notes — rather than toggling whatever it happens to be doing. It does not disturb a different recording that is already running, it is safe to retry, and Shorthand reports why if it declines. Stopping works the same way, so a stop can never start a recording by mistake. If Shorthand quits while you're taking notes, the plugin may reopen Shorthand to send the final stop command. Turn off **Control Shorthand recording** if you prefer to manage the recorder yourself.
-
-The three recorder commands remain available as manual controls. They control Shorthand but do not start or stop note-taking in Obsidian.
+The recorder commands remain available as manual controls; they do not start or stop note-taking in Obsidian. See [recorder control and commands](docs/advanced-usage.md#recorder-control) for the full behavior.
 
 ## Following Shorthand's recordings
 
-**Follow Shorthand's recordings** is off by default. Turn it on and starting a Meetings or Assisted notes recording with Shorthand's own hotkey also starts taking notes on the note you have open in Obsidian.
-
-While it is on, the plugin keeps a connection to Shorthand open so it can see those recordings — reopening it roughly every 30 seconds, indefinitely, whenever Shorthand is not running. Dictation is never followed.
-
-Note-taking started this way does not stop Shorthand's recording when you stop it, because it did not start the recording. Stop the recording the way you started it.
-
-This needs a Shorthand build that reports which mode a recording is. **No shipped build does this yet** — the `shorthand-app` half that reports it is on an unmerged pull request — so today the plugin always sees a recording started but not what kind, and does nothing rather than guess. Turning the setting on has no effect until that build ships.
+Turn on **Follow Shorthand's recordings** if a recording begun with Shorthand's own hotkey should start note-taking on the note you have open. Dictation is never followed. See [following recordings](docs/advanced-usage.md#following-shorthands-recordings) for the ownership and compatibility details.
 
 ## Note writing
 
-The plugin changes only the note section marked for Shorthand. It checks that section again before each update and keeps the existing text if the markers or generated result are invalid.
+Shorthand checks its ownership markers before every update and preserves the existing text if the note is no longer safe to change. Under **Note writing**, you can set your name, adjust mode-specific prompts, and choose the headings in a new note. See [note-writing options](docs/advanced-usage.md#note-writing).
 
-Under **Note writing**, you can optionally provide your name, customize separate prompts for Meeting and Assisted Notes, and change the headings added to a new note. Leave either prompt on **Default** to receive future improvements automatically.
+## Privacy and access
 
-## What the plugin accesses
+- Shorthand transcribes locally and does not collect telemetry.
+- The plugin reads and updates your active note and an optional linked transcript. Claude Code may also search other notes in your vault when you choose that backend.
+- The selected AI backend receives the current note and transcript. Claude, Codex, OpenAI, Anthropic, and compatible providers use the account or endpoint you configure; Ollama and other local endpoints can keep that traffic on your machine.
+- The plugin launches the local Shorthand and selected AI executables, and stores provider credentials outside the vault so vault sync does not copy secrets.
 
-- Your active note and any linked transcript note
-- Other notes in your vault only when the Claude backend performs a lookup
-- The local Shorthand transcript stream
-- The local AI command or provider you selected
+## Learn more
 
-Outside the vault, the plugin launches the configured Shorthand, Claude, or Codex executable so it can receive transcripts or run the backend you selected. It directly manages the provider-credential file at the platform-specific path above and may create temporary or retained session files for the agent backends; the launched tools use their own account and configuration files. Those accesses are required to connect the recorder and enhancement backend. The plugin does not install or update those programs.
+- [Advanced usage: commands, AI backends, and settings](docs/advanced-usage.md)
+- [Contributing and building from source](CONTRIBUTING.md)
+- [Architecture](docs/architecture.md)
+- [Support Shorthand on Stripe](https://donate.stripe.com/fZufZh6T31Jwdig89afEk00) or [GitHub Sponsors](https://github.com/sponsors/mshish)
 
 ## Third-party code
 
-The plugin's own source is MIT-licensed. The compiled `main.js` also bundles third-party libraries. In particular, the Anthropic Claude Agent SDK is non-open-source software, copyright Anthropic PBC, and its use is subject to [Anthropic's legal agreements](https://code.claude.com/docs/en/legal-and-compliance). The build appends an inventory and the applicable license text for every bundled dependency to `main.js`, so the file installed by Obsidian carries those notices.
+The plugin's source is MIT-licensed. Its compiled `main.js` also bundles third-party libraries, including the non-open-source Anthropic Claude Agent SDK, copyright Anthropic PBC, used subject to [Anthropic's legal agreements](https://code.claude.com/docs/en/legal-and-compliance). The build appends an inventory and the applicable license text for every bundled dependency to `main.js`.
 
 The plugin runs on desktop only. It does not include Shorthand, an AI model, or a cloud service.
-
-## Build from source
-
-Use Node.js 20 or later and npm. npm is the documented package manager because this repository commits `package-lock.json`.
-
-For the standard Obsidian development loop, clone the repository into your vault's plugin folder:
-
-```sh
-git clone https://github.com/mshish/shorthand-obsidian-plugin.git "<vault>/.obsidian/plugins/shorthand"
-cd "<vault>/.obsidian/plugins/shorthand"
-npm install
-npm run build
-npm run dev
-```
-
-`npm run dev` watches the source and rebuilds `main.js`. Toggle the plugin off and on after a rebuild unless you use Obsidian's Hot Reload plugin.
-
-To keep the repository outside your vault, set `OBSIDIAN_PLUGIN_DIR` only for the build or watch command:
-
-```sh
-OBSIDIAN_PLUGIN_DIR="<vault>/.obsidian/plugins/shorthand" npm run dev
-```
-
-```powershell
-$env:OBSIDIAN_PLUGIN_DIR = "<vault>\.obsidian\plugins\shorthand"
-npm run dev
-```
-
-The build copies `main.js`, `manifest.json`, and `styles.css` into that folder. Do not set `OBSIDIAN_PLUGIN_DIR` in your shell profile because builds from any checkout would then overwrite the plugin in your live vault.
-
-Before opening a pull request:
-
-```sh
-npm run build
-npm test
-```
-
-## Architecture
-
-Recorder control, transcript handling, note updates, and enhancement live in [`shorthand-core`](https://github.com/mshish/shorthand-core). Its [design](https://github.com/mshish/shorthand-core/blob/main/docs/DESIGN.md) and [consumer contract](https://github.com/mshish/shorthand-core/blob/main/docs/CONTRACT.md) describe the implementation boundaries.
 
 ## License
 
