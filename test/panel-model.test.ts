@@ -28,7 +28,7 @@ describe("describePanel", () => {
   test("offers both starts and no stop when idle", () => {
     const model = describePanel({ ...base, state: INITIAL_PLUGIN_STATE });
     expect(model.statusLabel).toBe("Ready");
-    expect(model.headline).toBe("Start taking notes");
+    expect(model.headline).toBe("Ready to take notes");
     expect(enabled(model)).toEqual(["start-meeting", "start-assisted-notes"]);
   });
 

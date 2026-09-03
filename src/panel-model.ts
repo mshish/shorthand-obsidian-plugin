@@ -139,7 +139,10 @@ export function describePanel(input: PanelInput): PanelModel {
     case "idle":
       return {
         statusLabel: "Ready",
-        headline: "Start taking notes",
+        // This is a status, not an action. The two mode tiles below are the only controls
+        // that start a capture, so imperative copy here made the non-interactive header look
+        // like a third button.
+        headline: "Ready to take notes",
         elapsed: undefined,
         detail,
         activityLabel: undefined,
