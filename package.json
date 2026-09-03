@@ -1,7 +1,7 @@
 {
   "name": "obsidian-shorthand",
   "version": "0.6.6",
-  "description": "Turn Shorthand transcripts into an AI-owned meeting-note summary.",
+  "description": "Take AI meeting notes in Obsidian from Shorthand's locally transcribed audio, using your existing ChatGPT or Claude subscription at no extra cost.",
   "main": "main.js",
   "type": "module",
   "private": true,
