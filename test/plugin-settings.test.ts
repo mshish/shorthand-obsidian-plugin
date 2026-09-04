@@ -83,6 +83,12 @@ describe("plugin settings normalization", () => {
       codexExecutable: "  C:\\Apps\\codex.exe\t",
       codexModel: " gpt-5.4 ",
       codexEffort: "xhigh",
+      acpTransport: "network",
+      acpExecutable: "  C:\\Apps\\agent.cmd  ",
+      acpArgs: "  acp --stdio  ",
+      acpNetworkUrl: "  ws://localhost:3000  ",
+      acpAuthToken: "  secret-token  ",
+      acpModel: "  cursor-small  ",
       sidecarDirectory: "./Calls\\Transcripts/",
       minNewChars: 42.9,
       minIntervalMs: 10_900.9,
@@ -106,6 +112,12 @@ describe("plugin settings normalization", () => {
       codexExecutable: "C:\\Apps\\codex.exe",
       codexModel: "gpt-5.4",
       codexEffort: "xhigh",
+      acpTransport: "network",
+      acpExecutable: "C:\\Apps\\agent.cmd",
+      acpArgs: "acp --stdio",
+      acpNetworkUrl: "ws://localhost:3000",
+      acpAuthToken: "secret-token",
+      acpModel: "cursor-small",
       sidecarDirectory: "Calls/Transcripts",
       minNewChars: 42,
       minIntervalMs: 10_900,
@@ -127,6 +139,7 @@ describe("plugin settings normalization", () => {
     expect(normalizePluginSettings({ backend: "llm" }).backend).toBe("llm");
     expect(normalizePluginSettings({ backend: "claude-agent-sdk" }).backend).toBe("claude-agent-sdk");
     expect(normalizePluginSettings({ backend: "codex" }).backend).toBe("codex");
+    expect(normalizePluginSettings({ backend: "acp" }).backend).toBe("acp");
   });
 
   test("agent model, effort, and history settings default without pinning provider choices", () => {
@@ -188,7 +201,7 @@ describe("plugin settings normalization", () => {
     // The settings tab's dropdown handler narrows through this rather than through
     // normalizePluginSettings, so it needs its own coverage: a member missing here is a
     // dropdown option that moves and never saves.
-    for (const backend of ["claude-agent-sdk", "llm", "codex"]) {
+    for (const backend of ["claude-agent-sdk", "llm", "codex", "acp"]) {
       expect(isEnhancementBackend(backend)).toBe(true);
     }
     for (const garbage of ["", "claude", "openai-codex", 42, null, undefined, {}, ["codex"]]) {
@@ -557,5 +570,89 @@ describe("prompt field mode derivation", () => {
     const backedOut = choosePromptFieldMode(seeded, "default", "Write plainly.");
     expect(storedPromptFieldValue(backedOut)).toBe("");
     expect(storedPromptFieldValue(backedOut)).not.toBe("Write plainly.");
+  });
+});
+
+describe("ACP settings normalization", () => {
+  test("ACP settings default without pinning provider choices", () => {
+    expect(DEFAULT_PLUGIN_SETTINGS).toMatchObject({
+      acpTransport: "stdio",
+      acpExecutable: "",
+      acpArgs: "acp",
+      acpNetworkUrl: "",
+      acpAuthToken: "",
+      acpModel: "",
+    });
+    expect(normalizePluginSettings({})).toMatchObject({
+      acpTransport: "stdio",
+      acpExecutable: "",
+      acpArgs: "acp",
+      acpNetworkUrl: "",
+      acpAuthToken: "",
+      acpModel: "",
+    });
+  });
+
+  test("normalizes valid acpTransport options", () => {
+    expect(normalizePluginSettings({ acpTransport: "stdio" }).acpTransport).toBe("stdio");
+    expect(normalizePluginSettings({ acpTransport: "network" }).acpTransport).toBe("network");
+  });
+
+  test("falls back to stdio for invalid or missing acpTransport", () => {
+    for (const invalid of ["http", "ws", "websocket", "", null, undefined, 42, {}, []]) {
+      expect(normalizePluginSettings({ acpTransport: invalid }).acpTransport).toBe("stdio");
+    }
+  });
+
+  test("trims string settings for acpExecutable, acpArgs, acpNetworkUrl, acpAuthToken, acpModel", () => {
+    const normalized = normalizePluginSettings({
+      acpExecutable: "  C:\\bin\\agent.cmd  ",
+      acpArgs: "  acp --custom  ",
+      acpNetworkUrl: "  http://127.0.0.1:8080/acp  ",
+      acpAuthToken: "  my-secret-token  ",
+      acpModel: "  gpt-4o  ",
+    });
+    expect(normalized).toMatchObject({
+      acpExecutable: "C:\\bin\\agent.cmd",
+      acpArgs: "acp --custom",
+      acpNetworkUrl: "http://127.0.0.1:8080/acp",
+      acpAuthToken: "my-secret-token",
+      acpModel: "gpt-4o",
+    });
+  });
+
+  test("preserves empty acpArgs when explicitly provided as empty string", () => {
+    expect(normalizePluginSettings({ acpArgs: "" }).acpArgs).toBe("");
+    expect(normalizePluginSettings({ acpArgs: "   " }).acpArgs).toBe("");
+  });
+
+  test("falls back to defaults for non-string ACP values", () => {
+    for (const garbage of [42, null, {}, [], true]) {
+      expect(normalizePluginSettings({
+        acpExecutable: garbage,
+        acpArgs: garbage,
+        acpNetworkUrl: garbage,
+        acpAuthToken: garbage,
+        acpModel: garbage,
+      })).toMatchObject({
+        acpExecutable: "",
+        acpArgs: "acp",
+        acpNetworkUrl: "",
+        acpAuthToken: "",
+        acpModel: "",
+      });
+    }
+  });
+
+  test("keeps each ACP setting on its own key", () => {
+    const normalized = normalizePluginSettings({
+      acpExecutable: "C:\\agent.exe",
+      acpArgs: "custom-args",
+    });
+    expect(normalized.acpExecutable).toBe("C:\\agent.exe");
+    expect(normalized.acpArgs).toBe("custom-args");
+    expect(normalized.acpNetworkUrl).toBe("");
+    expect(normalized.acpAuthToken).toBe("");
+    expect(normalized.acpModel).toBe("");
   });
 });

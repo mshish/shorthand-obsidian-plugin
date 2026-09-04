@@ -24,6 +24,7 @@ import { existsSync } from "node:fs";
 // Core is consumed by package name through its `exports` map — never a deep path.
 // It is a separate repository (mshish/shorthand-core), pinned by tag in package.json.
 import {
+  AcpAgentClient,
   AgentCatalogError,
   ClaudeAgentClient,
   CodexAgentClient,
@@ -33,10 +34,12 @@ import {
   MAX_USER_NAME_CHARACTERS,
   detectClaudeExecutable,
   detectCodexExecutable,
+  detectCursorExecutable,
   detectShorthandExecutable,
   EnhanceRunner,
   KNOWN_REFUSAL_REASONS,
   KNOWN_START_FAILURE_CODES,
+  listAcpModels,
   listClaudeModels,
   listCodexModels,
   LlmAgentClient,
@@ -81,6 +84,7 @@ import {
   type ShorthandPluginSettings,
 } from "./src/settings.js";
 import {
+  acpExecutableDescription,
   apiKeyDescription,
   baseUrlDescription,
   catalogFetchFailedDescription,
@@ -1361,7 +1365,7 @@ export default class ShorthandPlugin extends Plugin {
       ? this.settings.assistedNotesNoteTakingGuidance
       : this.settings.meetingNoteTakingGuidance;
     let claudeExecutable: string | undefined;
-    let agent: ClaudeAgentClient | CodexAgentClient | LlmAgentClient;
+    let agent: ClaudeAgentClient | CodexAgentClient | LlmAgentClient | AcpAgentClient;
     if (backend === "claude-agent-sdk") {
       if (configuredClaude.length > 0 && !existsSync(configuredClaude)) {
         throw new Error(`claude.exe was not found at "${configuredClaude}". Update the path in Shorthand settings.`);
@@ -1400,6 +1404,41 @@ export default class ShorthandPlugin extends Plugin {
         codexPathOverride: codexExecutable,
         ...codexAgentOptions(this.settings),
       });
+    } else if (backend === "acp") {
+      if (this.settings.acpTransport === "network") {
+        const url = this.settings.acpNetworkUrl.trim();
+        if (url.length === 0) {
+          throw new Error("ACP network URL is required when using network transport. Configure the URL in Shorthand settings.");
+        }
+        agent = new AcpAgentClient({
+          transport: {
+            type: "network",
+            url,
+            ...(this.settings.acpAuthToken.length === 0 ? {} : { authToken: this.settings.acpAuthToken }),
+          },
+          ...(this.settings.acpModel.length === 0 ? {} : { model: this.settings.acpModel }),
+        });
+      } else {
+        const configuredAcp = this.settings.acpExecutable;
+        const acpExecutable = detectCursorExecutable(configuredAcp.length === 0 ? undefined : configuredAcp);
+        if (acpExecutable === undefined) {
+          throw new Error("Cursor or ACP agent executable was not found on PATH. Install Cursor or an ACP agent CLI, or configure its full path in Shorthand settings.");
+        }
+        if (!existsSync(acpExecutable)) {
+          throw new Error(`ACP executable was not found at "${acpExecutable}". Update "ACP executable" in Shorthand settings, or clear it to find Cursor automatically.`);
+        }
+        const args = this.settings.acpArgs.trim().length > 0
+          ? this.settings.acpArgs.trim().split(/\s+/)
+          : [];
+        agent = new AcpAgentClient({
+          transport: {
+            type: "stdio",
+            command: acpExecutable,
+            args,
+          },
+          ...(this.settings.acpModel.length === 0 ? {} : { model: this.settings.acpModel }),
+        });
+      }
     } else {
       const credentialsPath = llmCredentialsPath();
       const credentials = await readLlmCredentials(credentialsPath);
@@ -1858,7 +1897,7 @@ class ShorthandSettingTab extends PluginSettingTab {
    * row is torn down, so a fresh render always starts the sign-in row from "unknown" (hidden)
    * rather than the previous selection's stale answer.
    */
-  #agentCatalogs: Map<"claude" | "codex", AgentCatalog> = new Map();
+  #agentCatalogs: Map<"claude" | "codex" | "acp", AgentCatalog> = new Map();
 
   /**
    * Each agent backend's effort row, registered by that row's own `render` and read by the
@@ -1957,6 +1996,7 @@ class ShorthandSettingTab extends PluginSettingTab {
           options: {
             "claude-agent-sdk": "Claude Code",
             codex: "Codex",
+            acp: "Cursor / ACP Agent",
             llm: "LLM provider",
           } satisfies Record<EnhancementBackend, string>,
         },
@@ -1967,6 +2007,7 @@ class ShorthandSettingTab extends PluginSettingTab {
       // third backend added later must not inherit a block written for a different one.
       this.agentCatalogItem("claude"),
       this.agentCatalogItem("codex"),
+      this.acpCatalogGroup(),
       // Each half of this pair names its own backend rather than being an if/else, and that is
       // what keeps a third backend from inheriting a block written for a different one: Codex
       // wants neither the LLM profile rows nor the Claude executable field in Advanced. Turning
@@ -1986,22 +2027,6 @@ class ShorthandSettingTab extends PluginSettingTab {
         name: "Automatic note scaffolding",
         desc: "Shorthand adds its section markers to a note that has none, instead of asking you first.",
         control: { type: "toggle", key: "autoScaffold" },
-      },
-      {
-        name: "Control Shorthand recording",
-        desc: createFragment((desc) => {
-          desc.appendText(
-            "Starting and stopping note-taking also starts and stops Shorthand's recording. "
-            + "If Shorthand quits while you're taking notes, this plugin may reopen Shorthand to send the final stop command. ",
-          );
-          desc.createEl("a", {
-            text: "Read how recorder control works",
-            href: "https://github.com/mshish/shorthand-obsidian-plugin#driving-shorthands-recorder",
-            cls: "shorthand-settings-link",
-          });
-          desc.appendText(".");
-        }),
-        control: { type: "toggle", key: "controlShorthandRecording" },
       },
       this.noteWritingGroup(),
     ];
@@ -2206,6 +2231,118 @@ class ShorthandSettingTab extends PluginSettingTab {
     applyCatalogDecision(effort.dropdown, effort.row, decision);
   }
 
+  private acpCatalogGroup(): SettingDefinitionItem<SettingsKey> {
+    return {
+      type: "group",
+      visible: () => this.plugin.settings.backend === "acp",
+      items: [
+        {
+          name: "ACP sign-in",
+          desc: createFragment((desc) => {
+            desc.appendText("Sign in with ");
+            desc.createEl("code", { text: "agent login" });
+            desc.appendText(" in a terminal first. Shorthand uses that sign-in and cannot start it for you.");
+          }),
+          visible: () => {
+            const catalog = this.#agentCatalogs.get("acp");
+            return catalog !== undefined && !catalog.signedIn;
+          },
+        },
+        {
+          name: "ACP model",
+          desc: catalogLoadingDescription(),
+          render: (modelRow) => {
+            let disposed = false;
+
+            let modelDropdown!: DropdownComponent;
+            modelRow.addDropdown((dropdown) => {
+              modelDropdown = dropdown
+                .addOption("", "Provider default")
+                .setValue(this.plugin.settings.acpModel);
+              dropdown.onChange(async (value) => {
+                await this.plugin.saveSettings({ ...this.plugin.settings, acpModel: value });
+              });
+            });
+            modelRow.setDisabled(true);
+
+            if (this.plugin.settings.backend !== "acp") return;
+
+            if (this.plugin.settings.acpTransport === "network") {
+              modelRow.setDesc("Network transport uses the remote agent's default model.").setDisabled(false);
+              return () => {
+                disposed = true;
+                this.#agentCatalogs.delete("acp");
+              };
+            }
+
+            const executableOverride = this.plugin.settings.acpExecutable;
+            const args = this.plugin.settings.acpArgs.trim().length > 0
+              ? this.plugin.settings.acpArgs.trim().split(/\s+/)
+              : undefined;
+            const fetchCatalog = listAcpModels({
+              ...(executableOverride.length === 0 ? {} : { executableOverride }),
+              ...(args === undefined ? {} : { args }),
+            });
+
+            void fetchCatalog.then((loadedCatalog) => {
+              if (disposed) return;
+              this.#agentCatalogs.set("acp", loadedCatalog);
+              this.refreshDomState();
+
+              applyCatalogDecision(modelDropdown, modelRow, decideModelRow(loadedCatalog, this.plugin.settings.acpModel));
+            }).catch((error: unknown) => {
+              if (disposed) return;
+              const message = catalogFetchFailedDescription(
+                "ACP",
+                error instanceof AgentCatalogError ? error.reason : "protocol",
+              );
+              modelRow.setDesc(message).setDisabled(true);
+            });
+
+            return () => {
+              disposed = true;
+              this.#agentCatalogs.delete("acp");
+            };
+          },
+        },
+        {
+          name: "ACP transport",
+          desc: "Connect to a local agent process (stdio) or a remote agent endpoint (network).",
+          control: {
+            type: "dropdown",
+            key: "acpTransport",
+            options: {
+              stdio: "stdio",
+              network: "network",
+            },
+          },
+        },
+        {
+          ...textControlItem("ACP executable", acpExecutableDescription, "acpExecutable", this.plugin.settings.acpExecutable),
+          visible: () => this.plugin.settings.acpTransport === "stdio",
+        },
+        {
+          name: "ACP arguments",
+          desc: "Arguments passed to the agent executable (default: acp).",
+          control: { type: "text", key: "acpArgs" },
+          visible: () => this.plugin.settings.acpTransport === "stdio",
+        },
+        {
+          name: "ACP network URL",
+          desc: "WebSocket (ws://, wss://) or HTTP (http://, https://) endpoint for the remote agent.",
+          control: { type: "text", key: "acpNetworkUrl" },
+          visible: () => this.plugin.settings.acpTransport === "network",
+        },
+        {
+          name: "ACP authentication token",
+          desc: "Optional authentication token for the remote agent.",
+          control: { type: "text", key: "acpAuthToken" },
+          visible: () => this.plugin.settings.acpTransport === "network",
+        },
+      ],
+    };
+  }
+
   /**
    * Always visible, at the bottom, no expander — same as before the migration, just declarative
    * now: a static `SettingDefinitionGroup` with its own conditional rows, rather than a section
@@ -2251,6 +2388,22 @@ class ShorthandSettingTab extends PluginSettingTab {
           name: "Live enhancement",
           desc: "The note is rewritten while the meeting runs, instead of only when you stop or run Enhance now.",
           control: { type: "toggle", key: "enableLiveEnhancement" },
+        },
+        {
+          name: "Control Shorthand transcription",
+          desc: createFragment((desc) => {
+            desc.appendText(
+              "Automatically start and stop transcription in the Shorthand app when note-taking begins and ends. "
+              + "When turned off, start and stop transcription manually in Shorthand. ",
+            );
+            desc.createEl("a", {
+              text: "Read how recorder control works",
+              href: "https://github.com/mshish/shorthand-obsidian-plugin#driving-shorthands-recorder",
+              cls: "shorthand-settings-link",
+            });
+            desc.appendText(".");
+          }),
+          control: { type: "toggle", key: "controlShorthandRecording" },
         },
         {
           name: "Follow Shorthand's recordings",
@@ -2610,7 +2763,7 @@ class LlmProfileEditor {
  * already exist in the DOM; it cannot re-run a `render`, so a key in this set must go through
  * `update()`'s full rebuild instead. See `ShorthandSettingTab.setControlValue`.
  */
-const RESTRUCTURING_KEYS = new Set<string>(["backend"]);
+const RESTRUCTURING_KEYS = new Set<string>(["backend", "acpTransport"]);
 
 /**
  * Keys whose value gates another declarative row's `visible` predicate where that row is a
@@ -2631,6 +2784,7 @@ const SELF_DESCRIBING_KEYS = new Set<string>([
   "shorthandExecutable",
   "claudeExecutable",
   "codexExecutable",
+  "acpExecutable",
   "sidecarDirectory",
   "minNewChars",
 ]);
@@ -2638,7 +2792,7 @@ const SELF_DESCRIBING_KEYS = new Set<string>([
 function textControlItem(
   name: string,
   describe: (value: string) => string,
-  key: "shorthandExecutable" | "claudeExecutable" | "codexExecutable" | "sidecarDirectory",
+  key: "shorthandExecutable" | "claudeExecutable" | "codexExecutable" | "acpExecutable" | "sidecarDirectory",
   value: string,
 ): SettingDefinitionControl<SettingsKey> {
   return { name, desc: describe(value), control: { type: "text", key } };

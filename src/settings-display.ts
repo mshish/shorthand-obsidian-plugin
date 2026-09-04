@@ -15,7 +15,7 @@ import type { AgentCatalog, CatalogFailureReason } from "shorthand-core";
  */
 
 /** The two backends the model/effort catalog rows exist for, exactly as a user reads them. */
-export type AgentBackendLabel = "Claude" | "Codex";
+export type AgentBackendLabel = "Claude" | "Codex" | "ACP";
 
 /**
  * Shown on the model and effort rows while `listClaudeModels`/`listCodexModels` is in flight.
@@ -235,6 +235,11 @@ export function claudeExecutableDescription(stored: string): string {
  */
 export function codexExecutableDescription(stored: string): string {
   return stored.trim().length === 0 ? "Codex is found automatically." : "";
+}
+
+/** Empty means core detects Cursor or an ACP agent CLI automatically. */
+export function acpExecutableDescription(stored: string): string {
+  return stored.trim().length === 0 ? "Cursor is found automatically." : "";
 }
 
 /**

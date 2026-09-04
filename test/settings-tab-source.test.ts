@@ -20,4 +20,18 @@ describe("the settings tab", () => {
     const source = readFileSync(resolve(process.cwd(), "main.ts"), "utf8");
     expect(source).not.toMatch(/\.addSetting\(/);
   });
+
+  test("declares ACP backend options and controls", () => {
+    const source = readFileSync(resolve(process.cwd(), "main.ts"), "utf8");
+    expect(source).toContain('acp: "Cursor / ACP Agent"');
+    expect(source).toContain('"ACP sign-in"');
+    expect(source).toContain('"ACP model"');
+    expect(source).toContain('"ACP transport"');
+    expect(source).toContain('"ACP executable"');
+    expect(source).toContain('"ACP arguments"');
+    expect(source).toContain('"ACP network URL"');
+    expect(source).toContain('"ACP authentication token"');
+    expect(source).toContain('"acpTransport"');
+    expect(source).toContain('"acpExecutable"');
+  });
 });

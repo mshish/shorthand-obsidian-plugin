@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  acpExecutableDescription,
   apiKeyDescription,
   baseUrlDescription,
   catalogFetchFailedDescription,
@@ -73,6 +74,19 @@ describe("codexExecutableDescription", () => {
 
   test("a configured path describes nothing", () => {
     expect(codexExecutableDescription("C:\\npm\\@openai\\codex\\vendor\\bin\\codex.exe")).toBe("");
+  });
+});
+
+describe("acpExecutableDescription", () => {
+  test("empty means core detects the CLI, and the shipped default is empty", () => {
+    const detected = "Cursor is found automatically.";
+    expect(acpExecutableDescription("")).toBe(detected);
+    expect(acpExecutableDescription("   ")).toBe(detected);
+    expect(acpExecutableDescription(DEFAULT_PLUGIN_SETTINGS.acpExecutable)).toBe(detected);
+  });
+
+  test("a configured path describes nothing", () => {
+    expect(acpExecutableDescription("C:\\tools\\agent.exe")).toBe("");
   });
 });
 
@@ -157,6 +171,7 @@ describe("catalogFetchFailedDescription", () => {
     for (const reason of reasons) {
       expect(catalogFetchFailedDescription("Claude", reason)).toContain("Claude");
       expect(catalogFetchFailedDescription("Codex", reason)).toContain("Codex");
+      expect(catalogFetchFailedDescription("ACP", reason)).toContain("ACP");
     }
   });
 

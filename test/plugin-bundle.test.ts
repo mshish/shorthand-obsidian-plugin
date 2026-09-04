@@ -91,6 +91,7 @@ describe("the built plugin bundle", () => {
     expect(bundle).toContain("@anthropic-ai/claude-agent-sdk@");
     expect(bundle).toContain("© Anthropic PBC. All rights reserved.");
     expect(bundle).toContain("@openai/codex-sdk@");
+    expect(bundle).toContain("@agentclientprotocol/sdk@");
     expect(bundle).toContain("Apache License");
     expect(bundle).toContain("shorthand-core@");
   });
