@@ -27,9 +27,9 @@ Obsidian adds the “Shorthand:” prefix in the command palette.
 
 ## Recorder control
 
-**Control Shorthand recording** is on by default. Starting note-taking asks Shorthand to start the selected mode directly, rather than toggling whatever it happens to be doing. It does not disturb a different recording, is safe to retry, and reports why a request was declined.
+**Control Shorthand transcription** is on by default. Starting note-taking asks Shorthand to start the selected mode directly, rather than toggling whatever it happens to be doing. It does not disturb a different recording, is safe to retry, and reports why a request was declined.
 
-Stopping follows the same explicit contract, so a stop cannot start a recording by mistake. If Shorthand quits while a capture is ending, the plugin may reopen it to send the final stop command. Turn the setting off to manage recording only through Shorthand.
+Stopping follows the same explicit contract, so a stop cannot start a recording by mistake. If Shorthand quits while a capture is ending, the plugin may reopen it to send the final stop command. Turn the setting off to manage transcription only through Shorthand.
 
 The three recorder commands are manual controls for Shorthand; they do not start or stop note-taking in Obsidian.
 

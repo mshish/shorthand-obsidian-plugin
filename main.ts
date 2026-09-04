@@ -2028,22 +2028,6 @@ class ShorthandSettingTab extends PluginSettingTab {
         desc: "Shorthand adds its section markers to a note that has none, instead of asking you first.",
         control: { type: "toggle", key: "autoScaffold" },
       },
-      {
-        name: "Control Shorthand recording",
-        desc: createFragment((desc) => {
-          desc.appendText(
-            "Starting and stopping note-taking also starts and stops Shorthand's recording. "
-            + "If Shorthand quits while you're taking notes, this plugin may reopen Shorthand to send the final stop command. ",
-          );
-          desc.createEl("a", {
-            text: "Read how recorder control works",
-            href: "https://github.com/mshish/shorthand-obsidian-plugin#driving-shorthands-recorder",
-            cls: "shorthand-settings-link",
-          });
-          desc.appendText(".");
-        }),
-        control: { type: "toggle", key: "controlShorthandRecording" },
-      },
       this.noteWritingGroup(),
     ];
   }
@@ -2404,6 +2388,22 @@ class ShorthandSettingTab extends PluginSettingTab {
           name: "Live enhancement",
           desc: "The note is rewritten while the meeting runs, instead of only when you stop or run Enhance now.",
           control: { type: "toggle", key: "enableLiveEnhancement" },
+        },
+        {
+          name: "Control Shorthand transcription",
+          desc: createFragment((desc) => {
+            desc.appendText(
+              "Automatically start and stop transcription in the Shorthand app when note-taking begins and ends. "
+              + "When turned off, start and stop transcription manually in Shorthand. ",
+            );
+            desc.createEl("a", {
+              text: "Read how recorder control works",
+              href: "https://github.com/mshish/shorthand-obsidian-plugin#driving-shorthands-recorder",
+              cls: "shorthand-settings-link",
+            });
+            desc.appendText(".");
+          }),
+          control: { type: "toggle", key: "controlShorthandRecording" },
         },
         {
           name: "Follow Shorthand's recordings",
