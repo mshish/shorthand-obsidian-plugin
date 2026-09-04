@@ -3,7 +3,7 @@
 [![Obsidian Community Plugin](https://img.shields.io/badge/Obsidian-Community%20Plugin-7C3AED?logo=obsidian&logoColor=white)](https://community.obsidian.md/plugins/shorthand)
 [![Downloads](https://img.shields.io/github/downloads/mshish/shorthand-obsidian-plugin/total?label=downloads&color=4d8b74)](https://github.com/mshish/shorthand-obsidian-plugin/releases)
 [![MIT License](https://img.shields.io/badge/license-MIT-536f9e)](LICENSE)
-[![Donate](https://img.shields.io/badge/Donate-Stripe-635BFF?logo=stripe&logoColor=white)](https://donate.stripe.com/fZufZh6T31Jwdig89afEk00)
+[![Support](https://img.shields.io/badge/Support-Stripe-635BFF?logo=stripe&logoColor=white)](https://buy.stripe.com/bJe28r91b87UemkahifEk02)
 
 **Focus on the conversation, not taking notes.**
 
@@ -48,7 +48,7 @@ Shorthand checks its ownership markers before every update and preserves the exi
 - [Advanced usage: commands, AI backends, and settings](docs/advanced-usage.md)
 - [Contributing and building from source](CONTRIBUTING.md)
 - [Architecture](docs/architecture.md)
-- [Support Shorthand on Stripe](https://donate.stripe.com/fZufZh6T31Jwdig89afEk00) or [GitHub Sponsors](https://github.com/sponsors/mshish)
+- [Support Shorthand on Stripe](https://buy.stripe.com/bJe28r91b87UemkahifEk02) or [GitHub Sponsors](https://github.com/sponsors/mshish)
 
 ## Third-party code
 
