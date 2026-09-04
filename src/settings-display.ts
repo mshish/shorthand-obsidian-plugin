@@ -45,7 +45,7 @@ export function catalogFetchFailedDescription(backend: AgentBackendLabel, reason
         return "Shorthand could not find Cursor CLI. Install the CLI from https://cursor.com/cli, or set its path below.";
       }
       if (backend === "ACP") {
-        return "Shorthand could not find the ACP executable. Install it, or set its path below.";
+        return "Shorthand could not find the ACP executable. Set its path below.";
       }
       return `Shorthand could not find ${backend}. Install it, or set its path under Advanced.`;
     case "spawn-failed":
@@ -248,9 +248,9 @@ export function cursorExecutableDescription(stored: string): string {
   return stored.trim().length === 0 ? "Cursor CLI is found automatically." : "";
 }
 
-/** Empty means core detects the ACP agent CLI automatically. */
+/** ACP requires an executable path when using stdio transport. */
 export function acpExecutableDescription(stored: string): string {
-  return stored.trim().length === 0 ? "ACP executable is found automatically." : "";
+  return stored.trim().length === 0 ? "Required for standard I/O transport." : "";
 }
 
 /**

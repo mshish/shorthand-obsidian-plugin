@@ -585,7 +585,7 @@ describe("ACP settings normalization", () => {
     expect(DEFAULT_PLUGIN_SETTINGS).toMatchObject({
       acpTransport: "stdio",
       acpExecutable: "",
-      acpArgs: "acp",
+      acpArgs: "",
       acpNetworkUrl: "",
       acpAuthToken: "",
       acpModel: "",
@@ -593,7 +593,7 @@ describe("ACP settings normalization", () => {
     expect(normalizePluginSettings({})).toMatchObject({
       acpTransport: "stdio",
       acpExecutable: "",
-      acpArgs: "acp",
+      acpArgs: "",
       acpNetworkUrl: "",
       acpAuthToken: "",
       acpModel: "",
@@ -643,7 +643,7 @@ describe("ACP settings normalization", () => {
         acpModel: garbage,
       })).toMatchObject({
         acpExecutable: "",
-        acpArgs: "acp",
+        acpArgs: "",
         acpNetworkUrl: "",
         acpAuthToken: "",
         acpModel: "",

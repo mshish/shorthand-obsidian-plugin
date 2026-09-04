@@ -1442,12 +1442,11 @@ export default class ShorthandPlugin extends Plugin {
         });
       } else {
         const configuredAcp = this.settings.acpExecutable.trim();
-        const acpExecutable = configuredAcp.length > 0 ? configuredAcp : detectCursorExecutable();
-        if (acpExecutable === undefined) {
-          throw new Error("ACP agent executable was not found. Configure its executable path in Shorthand settings.");
+        if (configuredAcp.length === 0) {
+          throw new Error('ACP executable is required when using standard I/O transport. Configure "ACP executable" in Shorthand settings.');
         }
-        if (!existsSync(acpExecutable)) {
-          throw new Error(`ACP executable was not found at "${acpExecutable}". Update "ACP executable" in Shorthand settings.`);
+        if (!existsSync(configuredAcp)) {
+          throw new Error(`ACP executable was not found at "${configuredAcp}". Update "ACP executable" in Shorthand settings.`);
         }
         const args = this.settings.acpArgs.trim().length > 0
           ? this.settings.acpArgs.trim().split(/\s+/)
@@ -1455,7 +1454,7 @@ export default class ShorthandPlugin extends Plugin {
         agent = new AcpAgentClient({
           transport: {
             type: "stdio",
-            command: acpExecutable,
+            command: configuredAcp,
             args,
           },
           ...(this.settings.acpModel.length === 0 ? {} : { model: this.settings.acpModel }),
@@ -2343,13 +2342,21 @@ class ShorthandSettingTab extends PluginSettingTab {
               };
             }
 
-            const executableOverride = this.plugin.settings.acpExecutable;
+            const configuredExecutable = this.plugin.settings.acpExecutable.trim();
+            if (configuredExecutable.length === 0) {
+              modelRow.setDesc("Enter the ACP executable path below to load available models.").setDisabled(true);
+              return () => {
+                disposed = true;
+                this.#agentCatalogs.delete("acp");
+              };
+            }
+
             const args = this.plugin.settings.acpArgs.trim().length > 0
               ? this.plugin.settings.acpArgs.trim().split(/\s+/)
-              : undefined;
+              : [];
             const fetchCatalog = listAcpModels({
-              ...(executableOverride.length === 0 ? {} : { executableOverride }),
-              ...(args === undefined ? {} : { args }),
+              command: configuredExecutable,
+              args,
             });
 
             void fetchCatalog.then((loadedCatalog) => {
@@ -2391,7 +2398,7 @@ class ShorthandSettingTab extends PluginSettingTab {
         },
         {
           name: "ACP arguments",
-          desc: "Arguments passed to the agent executable (default: acp).",
+          desc: "Optional arguments passed to the ACP executable.",
           control: { type: "text", key: "acpArgs" },
           visible: () => this.plugin.settings.acpTransport === "stdio",
         },

@@ -131,7 +131,7 @@ export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
   cursorModel: "",
   acpTransport: "stdio",
   acpExecutable: "",
-  acpArgs: "acp",
+  acpArgs: "",
   acpNetworkUrl: "",
   acpAuthToken: "",
   acpModel: "",

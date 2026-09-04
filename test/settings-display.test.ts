@@ -79,11 +79,11 @@ describe("codexExecutableDescription", () => {
 });
 
 describe("acpExecutableDescription", () => {
-  test("empty means core detects the CLI, and the shipped default is empty", () => {
-    const detected = "ACP executable is found automatically.";
-    expect(acpExecutableDescription("")).toBe(detected);
-    expect(acpExecutableDescription("   ")).toBe(detected);
-    expect(acpExecutableDescription(DEFAULT_PLUGIN_SETTINGS.acpExecutable)).toBe(detected);
+  test("empty explains that it is required for stdio transport", () => {
+    const required = "Required for standard I/O transport.";
+    expect(acpExecutableDescription("")).toBe(required);
+    expect(acpExecutableDescription("   ")).toBe(required);
+    expect(acpExecutableDescription(DEFAULT_PLUGIN_SETTINGS.acpExecutable)).toBe(required);
   });
 
   test("a configured path describes nothing", () => {
@@ -206,7 +206,7 @@ describe("catalogFetchFailedDescription", () => {
     expect(catalogFetchFailedDescription("Cursor CLI", "executable-not-found"))
       .toBe("Shorthand could not find Cursor CLI. Install the CLI from https://cursor.com/cli, or set its path below.");
     expect(catalogFetchFailedDescription("ACP", "executable-not-found"))
-      .toBe("Shorthand could not find the ACP executable. Install it, or set its path below.");
+      .toBe("Shorthand could not find the ACP executable. Set its path below.");
   });
 
   test("timeout and spawn-failed and protocol name the failure without inventing a fix", () => {
