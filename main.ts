@@ -91,6 +91,7 @@ import {
   catalogLoadingDescription,
   claudeExecutableDescription,
   codexExecutableDescription,
+  cursorExecutableDescription,
   decideEffortRow,
   decideModelRow,
   newCharacterThresholdDescription,
@@ -1404,6 +1405,27 @@ export default class ShorthandPlugin extends Plugin {
         codexPathOverride: codexExecutable,
         ...codexAgentOptions(this.settings),
       });
+    } else if (backend === "cursor") {
+      const configuredCursor = this.settings.cursorExecutable;
+      const cursorExecutable = detectCursorExecutable(configuredCursor.length === 0 ? undefined : configuredCursor);
+      if (cursorExecutable === undefined) {
+        throw new Error(
+          'Cursor CLI was not found. Install the Cursor CLI from https://cursor.com/cli, or enter its full path in "Cursor CLI executable" under Shorthand settings.',
+        );
+      }
+      if (!existsSync(cursorExecutable)) {
+        throw new Error(
+          `Cursor CLI was not found at "${cursorExecutable}". Update "Cursor CLI executable" in Shorthand settings, or clear it to find Cursor CLI automatically.`,
+        );
+      }
+      agent = new AcpAgentClient({
+        transport: {
+          type: "stdio",
+          command: cursorExecutable,
+          args: ["acp"],
+        },
+        ...(this.settings.cursorModel.length === 0 ? {} : { model: this.settings.cursorModel }),
+      });
     } else if (backend === "acp") {
       if (this.settings.acpTransport === "network") {
         const url = this.settings.acpNetworkUrl.trim();
@@ -1419,13 +1441,13 @@ export default class ShorthandPlugin extends Plugin {
           ...(this.settings.acpModel.length === 0 ? {} : { model: this.settings.acpModel }),
         });
       } else {
-        const configuredAcp = this.settings.acpExecutable;
-        const acpExecutable = detectCursorExecutable(configuredAcp.length === 0 ? undefined : configuredAcp);
+        const configuredAcp = this.settings.acpExecutable.trim();
+        const acpExecutable = configuredAcp.length > 0 ? configuredAcp : detectCursorExecutable();
         if (acpExecutable === undefined) {
-          throw new Error("Cursor or ACP agent executable was not found on PATH. Install Cursor or an ACP agent CLI, or configure its full path in Shorthand settings.");
+          throw new Error("ACP agent executable was not found. Configure its executable path in Shorthand settings.");
         }
         if (!existsSync(acpExecutable)) {
-          throw new Error(`ACP executable was not found at "${acpExecutable}". Update "ACP executable" in Shorthand settings, or clear it to find Cursor automatically.`);
+          throw new Error(`ACP executable was not found at "${acpExecutable}". Update "ACP executable" in Shorthand settings.`);
         }
         const args = this.settings.acpArgs.trim().length > 0
           ? this.settings.acpArgs.trim().split(/\s+/)
@@ -1897,7 +1919,7 @@ class ShorthandSettingTab extends PluginSettingTab {
    * row is torn down, so a fresh render always starts the sign-in row from "unknown" (hidden)
    * rather than the previous selection's stale answer.
    */
-  #agentCatalogs: Map<"claude" | "codex" | "acp", AgentCatalog> = new Map();
+  #agentCatalogs: Map<"claude" | "codex" | "cursor" | "acp", AgentCatalog> = new Map();
 
   /**
    * Each agent backend's effort row, registered by that row's own `render` and read by the
@@ -1996,7 +2018,8 @@ class ShorthandSettingTab extends PluginSettingTab {
           options: {
             "claude-agent-sdk": "Claude Code",
             codex: "Codex",
-            acp: "Cursor / ACP Agent",
+            cursor: "Cursor CLI",
+            acp: "Agent Client Protocol (ACP)",
             llm: "LLM provider",
           } satisfies Record<EnhancementBackend, string>,
         },
@@ -2007,6 +2030,7 @@ class ShorthandSettingTab extends PluginSettingTab {
       // third backend added later must not inherit a block written for a different one.
       this.agentCatalogItem("claude"),
       this.agentCatalogItem("codex"),
+      this.cursorCatalogGroup(),
       this.acpCatalogGroup(),
       // Each half of this pair names its own backend rather than being an if/else, and that is
       // what keeps a third backend from inheriting a block written for a different one: Codex
@@ -2231,23 +2255,67 @@ class ShorthandSettingTab extends PluginSettingTab {
     applyCatalogDecision(effort.dropdown, effort.row, decision);
   }
 
+  private cursorCatalogGroup(): SettingDefinitionItem<SettingsKey> {
+    return {
+      type: "group",
+      visible: () => this.plugin.settings.backend === "cursor",
+      items: [
+        {
+          name: "Cursor CLI model",
+          desc: catalogLoadingDescription(),
+          render: (modelRow) => {
+            let disposed = false;
+
+            let modelDropdown!: DropdownComponent;
+            modelRow.addDropdown((dropdown) => {
+              modelDropdown = dropdown
+                .addOption("", "Provider default")
+                .setValue(this.plugin.settings.cursorModel);
+              dropdown.onChange(async (value) => {
+                await this.plugin.saveSettings({ ...this.plugin.settings, cursorModel: value });
+              });
+            });
+            modelRow.setDisabled(true);
+
+            if (this.plugin.settings.backend !== "cursor") return;
+
+            const executableOverride = this.plugin.settings.cursorExecutable;
+            const fetchCatalog = listAcpModels({
+              ...(executableOverride.length === 0 ? {} : { executableOverride }),
+              args: ["acp"],
+            });
+
+            void fetchCatalog.then((loadedCatalog) => {
+              if (disposed) return;
+              this.#agentCatalogs.set("cursor", loadedCatalog);
+              this.refreshDomState();
+
+              applyCatalogDecision(modelDropdown, modelRow, decideModelRow(loadedCatalog, this.plugin.settings.cursorModel));
+            }).catch((error: unknown) => {
+              if (disposed) return;
+              const message = catalogFetchFailedDescription(
+                "Cursor CLI",
+                error instanceof AgentCatalogError ? error.reason : "protocol",
+              );
+              modelRow.setDesc(message).setDisabled(true);
+            });
+
+            return () => {
+              disposed = true;
+              this.#agentCatalogs.delete("cursor");
+            };
+          },
+        },
+        textControlItem("Cursor CLI executable", cursorExecutableDescription, "cursorExecutable", this.plugin.settings.cursorExecutable),
+      ],
+    };
+  }
+
   private acpCatalogGroup(): SettingDefinitionItem<SettingsKey> {
     return {
       type: "group",
       visible: () => this.plugin.settings.backend === "acp",
       items: [
-        {
-          name: "ACP sign-in",
-          desc: createFragment((desc) => {
-            desc.appendText("Sign in with ");
-            desc.createEl("code", { text: "agent login" });
-            desc.appendText(" in a terminal first. Shorthand uses that sign-in and cannot start it for you.");
-          }),
-          visible: () => {
-            const catalog = this.#agentCatalogs.get("acp");
-            return catalog !== undefined && !catalog.signedIn;
-          },
-        },
         {
           name: "ACP model",
           desc: catalogLoadingDescription(),
@@ -2406,14 +2474,14 @@ class ShorthandSettingTab extends PluginSettingTab {
           control: { type: "toggle", key: "controlShorthandRecording" },
         },
         {
-          name: "Follow Shorthand's recordings",
+          name: "Auto-start notes from Shorthand hotkey",
           desc: createFragment((desc) => {
             desc.appendText(
-              "Starting a recording with Shorthand's own hotkey also starts taking notes on the note you have open — see ",
+              "Automatically start taking notes on your active note whenever you begin a meeting or assisted notes recording with Shorthand's global hotkey. See ",
             );
             desc.createEl("a", {
-              text: "Following Shorthand's recordings",
-              href: "https://github.com/mshish/shorthand-obsidian-plugin#following-shorthands-recordings",
+              text: "Auto-start notes from Shorthand hotkey",
+              href: "https://github.com/mshish/shorthand-obsidian-plugin#auto-start-notes-from-shorthand-hotkey",
             });
             desc.appendText(".");
           }),
@@ -2567,10 +2635,11 @@ class LlmProfileEditor {
         .addOption("", "No provider chosen")
         .addOption("openai", "OpenAI")
         .addOption("anthropic", "Anthropic")
+        .addOption("ollama", "Ollama")
         .addOption("openai-compatible", "OpenAI-compatible")
         .setDisabled(true)
         .onChange((value) => {
-          if (value !== "" && value !== "openai" && value !== "anthropic" && value !== "openai-compatible") return;
+          if (value !== "" && value !== "openai" && value !== "anthropic" && value !== "ollama" && value !== "openai-compatible") return;
           this.#draft = { ...this.#draft, provider: value };
           this.#commitQueue?.acceptEdit(this.#draft);
           this.#showDraftStatus();
@@ -2712,12 +2781,13 @@ class LlmProfileEditor {
     const state: StoredKeyState = keyStatus === "unknown"
       ? "unknown"
       : this.#storedKey.length > 0 ? "stored" : "absent";
-    this.#apiKeySetting.setDesc(apiKeyDescription(state));
+    this.#apiKeySetting.setDesc(apiKeyDescription(state, this.#draft.provider));
   }
 
   #showDraftStatus(): void {
     if (!this.#ready) return;
     this.#baseUrlSetting.setDesc(baseUrlDescription(this.#draft.provider));
+    this.#setKeyDescription();
     const missing = missingLlmProfileFields(this.#draft);
     this.#statusSetting.setDesc(missing.length > 0
       ? `Not saved yet. Still needed: ${missing.join(", ")}.`
@@ -2792,7 +2862,7 @@ const SELF_DESCRIBING_KEYS = new Set<string>([
 function textControlItem(
   name: string,
   describe: (value: string) => string,
-  key: "shorthandExecutable" | "claudeExecutable" | "codexExecutable" | "acpExecutable" | "sidecarDirectory",
+  key: "shorthandExecutable" | "claudeExecutable" | "codexExecutable" | "cursorExecutable" | "acpExecutable" | "sidecarDirectory",
   value: string,
 ): SettingDefinitionControl<SettingsKey> {
   return { name, desc: describe(value), control: { type: "text", key } };

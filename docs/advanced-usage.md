@@ -33,9 +33,9 @@ Stopping follows the same explicit contract, so a stop cannot start a recording 
 
 The three recorder commands are manual controls for Shorthand; they do not start or stop note-taking in Obsidian.
 
-## Following Shorthand's recordings
+## Auto-start notes from Shorthand hotkey
 
-**Follow Shorthand's recordings** is off by default. When it is enabled, beginning a Meetings or Assisted notes recording with Shorthand's own hotkey starts note-taking on the Markdown note you have open in Obsidian.
+**Auto-start notes from Shorthand hotkey** is off by default. When it is enabled, beginning a Meetings or Assisted notes recording with Shorthand's own global hotkey automatically starts taking notes on your active note in Obsidian.
 
 The plugin never follows Dictation. A capture that starts this way does not stop Shorthand's recording when you stop it, because the plugin did not start that recording. Stop it with the same Shorthand control that began it.
 
@@ -47,9 +47,11 @@ Choose one enhancement backend in the plugin settings:
 
 - **Claude Code** is the default and can look up related notes elsewhere in your vault.
 - **Codex** uses your local Codex login.
+- **Cursor CLI** uses your local Cursor installation and subscription. Install the CLI from https://cursor.com/cli.
+- **Agent Client Protocol (ACP)** connects to any ACP-compatible agent over standard I/O or WebSocket.
 - **LLM provider** supports OpenAI, Anthropic, Ollama, and OpenAI-compatible endpoints.
 
-Claude Code and Codex receive the current note and transcript. The LLM provider sends them to the provider or endpoint you configure. Ollama and other local compatible endpoints can keep that traffic on your machine. Shorthand itself does not collect telemetry.
+Claude Code, Codex, Cursor CLI, and ACP receive the current note and transcript. The LLM provider sends them to the provider or endpoint you configure. Ollama and other local compatible endpoints can keep that traffic on your machine. Shorthand itself does not collect telemetry.
 
 Provider credentials are kept outside the vault so sync does not copy them:
 

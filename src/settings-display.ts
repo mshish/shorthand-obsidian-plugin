@@ -14,8 +14,8 @@ import type { AgentCatalog, CatalogFailureReason } from "shorthand-core";
  * describing itself, and § rule 2 for why several of these return `""`.
  */
 
-/** The two backends the model/effort catalog rows exist for, exactly as a user reads them. */
-export type AgentBackendLabel = "Claude" | "Codex" | "ACP";
+/** The backends the model/effort catalog rows exist for, exactly as a user reads them. */
+export type AgentBackendLabel = "Claude" | "Codex" | "Cursor CLI" | "ACP";
 
 /**
  * Shown on the model and effort rows while `listClaudeModels`/`listCodexModels` is in flight.
@@ -41,6 +41,12 @@ export function catalogLoadingDescription(): string {
 export function catalogFetchFailedDescription(backend: AgentBackendLabel, reason: CatalogFailureReason): string {
   switch (reason) {
     case "executable-not-found":
+      if (backend === "Cursor CLI") {
+        return "Shorthand could not find Cursor CLI. Install the CLI from https://cursor.com/cli, or set its path below.";
+      }
+      if (backend === "ACP") {
+        return "Shorthand could not find the ACP executable. Install it, or set its path below.";
+      }
       return `Shorthand could not find ${backend}. Install it, or set its path under Advanced.`;
     case "spawn-failed":
       return `Shorthand could not start ${backend}.`;
@@ -237,9 +243,14 @@ export function codexExecutableDescription(stored: string): string {
   return stored.trim().length === 0 ? "Codex is found automatically." : "";
 }
 
-/** Empty means core detects Cursor or an ACP agent CLI automatically. */
+/** Empty means core detects Cursor CLI automatically. */
+export function cursorExecutableDescription(stored: string): string {
+  return stored.trim().length === 0 ? "Cursor CLI is found automatically." : "";
+}
+
+/** Empty means core detects the ACP agent CLI automatically. */
 export function acpExecutableDescription(stored: string): string {
-  return stored.trim().length === 0 ? "Cursor is found automatically." : "";
+  return stored.trim().length === 0 ? "ACP executable is found automatically." : "";
 }
 
 /**
@@ -265,21 +276,19 @@ export function passIntervalDescription(seconds: number): string {
 }
 
 export function baseUrlDescription(provider: string): string {
-  return provider === "openai-compatible"
-    ? "Required. The provider name alone does not identify an endpoint."
-    : "Optional. Leave it blank unless you route through a gateway or proxy.";
+  if (provider === "openai-compatible") {
+    return "Required. The provider name alone does not identify an endpoint.";
+  }
+  if (provider === "ollama") {
+    return "Optional. Defaults to http://localhost:11434 if left blank.";
+  }
+  return "Optional. Leave it blank unless you route through a gateway or proxy.";
 }
 
 export type StoredKeyState = "stored" | "absent" | "unknown";
 
-export function apiKeyDescription(state: StoredKeyState): string {
-  // The blank/replace/clear tail belongs to exactly one state. It answers "what happens if I
-  // leave this blank", which is a real question only where a key exists that the password field
-  // cannot show and all three actions can be taken. With nothing stored, blank keeps nothing and
-  // Clear key removes nothing. When the profile cannot be read, the caller disables the field
-  // and the Clear key button before this renders, so none of the three is available while the
-  // sentence is on screen — and Discard file, the one action that state does offer, is described
-  // on the row that owns the button.
+export function apiKeyDescription(state: StoredKeyState, provider?: string): string {
+  if (provider === "ollama") return "No API key is needed for local Ollama.";
   if (state === "absent") return "No key is stored.";
   if (state === "unknown") return "The stored key cannot be read.";
   return "A key is stored. Blank keeps the stored key, a new value replaces it, and Clear key removes it.";

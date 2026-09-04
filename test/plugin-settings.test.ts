@@ -83,6 +83,8 @@ describe("plugin settings normalization", () => {
       codexExecutable: "  C:\\Apps\\codex.exe\t",
       codexModel: " gpt-5.4 ",
       codexEffort: "xhigh",
+      cursorExecutable: "  C:\\Apps\\cursor.cmd  ",
+      cursorModel: "  claude-3-7-sonnet  ",
       acpTransport: "network",
       acpExecutable: "  C:\\Apps\\agent.cmd  ",
       acpArgs: "  acp --stdio  ",
@@ -112,6 +114,8 @@ describe("plugin settings normalization", () => {
       codexExecutable: "C:\\Apps\\codex.exe",
       codexModel: "gpt-5.4",
       codexEffort: "xhigh",
+      cursorExecutable: "C:\\Apps\\cursor.cmd",
+      cursorModel: "claude-3-7-sonnet",
       acpTransport: "network",
       acpExecutable: "C:\\Apps\\agent.cmd",
       acpArgs: "acp --stdio",
@@ -139,6 +143,7 @@ describe("plugin settings normalization", () => {
     expect(normalizePluginSettings({ backend: "llm" }).backend).toBe("llm");
     expect(normalizePluginSettings({ backend: "claude-agent-sdk" }).backend).toBe("claude-agent-sdk");
     expect(normalizePluginSettings({ backend: "codex" }).backend).toBe("codex");
+    expect(normalizePluginSettings({ backend: "cursor" }).backend).toBe("cursor");
     expect(normalizePluginSettings({ backend: "acp" }).backend).toBe("acp");
   });
 
@@ -148,6 +153,8 @@ describe("plugin settings normalization", () => {
       claudeEffort: "",
       codexModel: "",
       codexEffort: "",
+      cursorExecutable: "",
+      cursorModel: "",
       retainAgentSessionHistory: false,
     });
   });
@@ -201,7 +208,7 @@ describe("plugin settings normalization", () => {
     // The settings tab's dropdown handler narrows through this rather than through
     // normalizePluginSettings, so it needs its own coverage: a member missing here is a
     // dropdown option that moves and never saves.
-    for (const backend of ["claude-agent-sdk", "llm", "codex", "acp"]) {
+    for (const backend of ["claude-agent-sdk", "llm", "codex", "cursor", "acp"]) {
       expect(isEnhancementBackend(backend)).toBe(true);
     }
     for (const garbage of ["", "claude", "openai-codex", 42, null, undefined, {}, ["codex"]]) {
@@ -654,5 +661,37 @@ describe("ACP settings normalization", () => {
     expect(normalized.acpNetworkUrl).toBe("");
     expect(normalized.acpAuthToken).toBe("");
     expect(normalized.acpModel).toBe("");
+  });
+
+  test("trims string settings for cursorExecutable and cursorModel", () => {
+    const normalized = normalizePluginSettings({
+      cursorExecutable: "  C:\\bin\\agent.cmd  ",
+      cursorModel: "  claude-3-7-sonnet  ",
+    });
+    expect(normalized).toMatchObject({
+      cursorExecutable: "C:\\bin\\agent.cmd",
+      cursorModel: "claude-3-7-sonnet",
+    });
+  });
+
+  test("falls back to defaults for non-string cursor values", () => {
+    for (const garbage of [42, null, {}, [], true]) {
+      expect(normalizePluginSettings({
+        cursorExecutable: garbage,
+        cursorModel: garbage,
+      })).toMatchObject({
+        cursorExecutable: "",
+        cursorModel: "",
+      });
+    }
+  });
+
+  test("keeps each cursor setting on its own key", () => {
+    const normalized = normalizePluginSettings({
+      cursorExecutable: "C:\\cursor.exe",
+      cursorModel: "cursor-small",
+    });
+    expect(normalized.cursorExecutable).toBe("C:\\cursor.exe");
+    expect(normalized.cursorModel).toBe("cursor-small");
   });
 });

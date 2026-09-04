@@ -23,8 +23,7 @@ describe("the settings tab", () => {
 
   test("declares ACP backend options and controls", () => {
     const source = readFileSync(resolve(process.cwd(), "main.ts"), "utf8");
-    expect(source).toContain('acp: "Cursor / ACP Agent"');
-    expect(source).toContain('"ACP sign-in"');
+    expect(source).toContain('acp: "Agent Client Protocol (ACP)"');
     expect(source).toContain('"ACP model"');
     expect(source).toContain('"ACP transport"');
     expect(source).toContain('"ACP executable"');
@@ -33,5 +32,13 @@ describe("the settings tab", () => {
     expect(source).toContain('"ACP authentication token"');
     expect(source).toContain('"acpTransport"');
     expect(source).toContain('"acpExecutable"');
+  });
+
+  test("declares Cursor CLI backend options and controls", () => {
+    const source = readFileSync(resolve(process.cwd(), "main.ts"), "utf8");
+    expect(source).toContain('cursor: "Cursor CLI"');
+    expect(source).toContain('"Cursor CLI model"');
+    expect(source).toContain('"Cursor CLI executable"');
+    expect(source).toContain('"cursorExecutable"');
   });
 });

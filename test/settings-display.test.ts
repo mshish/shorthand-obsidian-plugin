@@ -7,6 +7,7 @@ import {
   catalogLoadingDescription,
   claudeExecutableDescription,
   codexExecutableDescription,
+  cursorExecutableDescription,
   decideEffortRow,
   decideModelRow,
   effortNeedsModelDescription,
@@ -79,7 +80,7 @@ describe("codexExecutableDescription", () => {
 
 describe("acpExecutableDescription", () => {
   test("empty means core detects the CLI, and the shipped default is empty", () => {
-    const detected = "Cursor is found automatically.";
+    const detected = "ACP executable is found automatically.";
     expect(acpExecutableDescription("")).toBe(detected);
     expect(acpExecutableDescription("   ")).toBe(detected);
     expect(acpExecutableDescription(DEFAULT_PLUGIN_SETTINGS.acpExecutable)).toBe(detected);
@@ -87,6 +88,19 @@ describe("acpExecutableDescription", () => {
 
   test("a configured path describes nothing", () => {
     expect(acpExecutableDescription("C:\\tools\\agent.exe")).toBe("");
+  });
+});
+
+describe("cursorExecutableDescription", () => {
+  test("empty means core detects the CLI, and the shipped default is empty", () => {
+    const detected = "Cursor CLI is found automatically.";
+    expect(cursorExecutableDescription("")).toBe(detected);
+    expect(cursorExecutableDescription("   ")).toBe(detected);
+    expect(cursorExecutableDescription(DEFAULT_PLUGIN_SETTINGS.cursorExecutable)).toBe(detected);
+  });
+
+  test("a configured path describes nothing", () => {
+    expect(cursorExecutableDescription("C:\\tools\\agent.cmd")).toBe("");
   });
 });
 
@@ -148,6 +162,11 @@ describe("baseUrlDescription", () => {
       .toBe("Required. The provider name alone does not identify an endpoint.");
   });
 
+  test("optional with default for ollama", () => {
+    expect(baseUrlDescription("ollama"))
+      .toBe("Optional. Defaults to http://localhost:11434 if left blank.");
+  });
+
   test("optional for the named providers, and while none is chosen", () => {
     const optional = "Optional. Leave it blank unless you route through a gateway or proxy.";
     expect(baseUrlDescription("openai")).toBe(optional);
@@ -171,6 +190,7 @@ describe("catalogFetchFailedDescription", () => {
     for (const reason of reasons) {
       expect(catalogFetchFailedDescription("Claude", reason)).toContain("Claude");
       expect(catalogFetchFailedDescription("Codex", reason)).toContain("Codex");
+      expect(catalogFetchFailedDescription("Cursor CLI", reason)).toContain("Cursor CLI");
       expect(catalogFetchFailedDescription("ACP", reason)).toContain("ACP");
     }
   });
@@ -183,6 +203,10 @@ describe("catalogFetchFailedDescription", () => {
   test("executable-not-found points at installing it or setting its path", () => {
     expect(catalogFetchFailedDescription("Claude", "executable-not-found"))
       .toBe("Shorthand could not find Claude. Install it, or set its path under Advanced.");
+    expect(catalogFetchFailedDescription("Cursor CLI", "executable-not-found"))
+      .toBe("Shorthand could not find Cursor CLI. Install the CLI from https://cursor.com/cli, or set its path below.");
+    expect(catalogFetchFailedDescription("ACP", "executable-not-found"))
+      .toBe("Shorthand could not find the ACP executable. Install it, or set its path below.");
   });
 
   test("timeout and spawn-failed and protocol name the failure without inventing a fix", () => {
@@ -248,6 +272,12 @@ describe("apiKeyDescription", () => {
     // description, so all three are unavailable while the sentence is on screen.
     expect(apiKeyDescription("absent")).toBe("No key is stored.");
     expect(apiKeyDescription("unknown")).toBe("The stored key cannot be read.");
+  });
+
+  test("ollama requires no API key regardless of state", () => {
+    expect(apiKeyDescription("absent", "ollama")).toBe("No API key is needed for local Ollama.");
+    expect(apiKeyDescription("stored", "ollama")).toBe("No API key is needed for local Ollama.");
+    expect(apiKeyDescription("unknown", "ollama")).toBe("No API key is needed for local Ollama.");
   });
 });
 

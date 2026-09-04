@@ -10,7 +10,7 @@
 Shorthand turns a live meeting transcript into a note in the Obsidian file you already have open. The [Shorthand desktop app](https://shorthand.ing) captures your microphone and computer audio locally; this plugin keeps the note organized as the conversation unfolds.
 
 - **Listen** — works with Zoom, Meet, Teams, or any other call while keeping speakers separate.
-- **Think** — uses the Claude or ChatGPT plan you already pay for, an API provider, or a local model.
+- **Think** — uses the Claude, ChatGPT, or Cursor plan you already pay for, an ACP agent, an API provider, or a local model.
 - **Write** — updates only the section of the note owned by Shorthand. Your own writing stays put.
 
 By default, Shorthand deletes the recording, transcript, and AI session when the meeting ends. It is free and open source.
@@ -19,7 +19,7 @@ By default, Shorthand deletes the recording, transcript, and AI session when the
 
 1. Install **Shorthand** from **Settings → Community plugins** in desktop Obsidian.
 2. Install and run the [Shorthand desktop app](https://shorthand.ing), then enable **Follow live transcript output** under **Advanced**.
-3. In Shorthand's plugin settings, choose an AI backend: Claude Code, Codex, or an LLM provider.
+3. In Shorthand's plugin settings, choose an AI backend: Claude Code, Codex, Cursor CLI, an ACP agent, or an LLM provider.
 4. Open the note you want to update, then open **Shorthand panel** from the command palette or microphone ribbon icon.
 5. Choose **Meeting** for a conversation or **Assisted notes** for solo thinking. Stop from the panel or status bar when you are done.
 
@@ -40,7 +40,7 @@ Shorthand checks its ownership markers before every update and preserves the exi
 
 - Shorthand transcribes locally and does not collect telemetry.
 - The plugin reads and updates your active note and an optional linked transcript. Claude Code may also search other notes in your vault when you choose that backend.
-- The selected AI backend receives the current note and transcript. Claude, Codex, OpenAI, Anthropic, and compatible providers use the account or endpoint you configure; Ollama and other local endpoints can keep that traffic on your machine.
+- The selected AI backend receives the current note and transcript. Claude, Codex, Cursor, OpenAI, Anthropic, and compatible providers use the account or endpoint you configure; Ollama and other local endpoints can keep that traffic on your machine.
 - The plugin launches the local Shorthand and selected AI executables, and stores provider credentials outside the vault so vault sync does not copy secrets.
 
 ## Learn more

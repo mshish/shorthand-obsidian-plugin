@@ -22,6 +22,7 @@ describe("LLM profile draft rules", () => {
   test("accepts each provider when its required fields are present", () => {
     expect(isCompleteLlmProfileDraft(draft({ provider: "openai" }))).toBeTrue();
     expect(isCompleteLlmProfileDraft(draft({ provider: "anthropic", model: "claude-opus-4-1" }))).toBeTrue();
+    expect(isCompleteLlmProfileDraft(draft({ provider: "ollama", model: "llama3.2" }))).toBeTrue();
     expect(isCompleteLlmProfileDraft(draft({
       provider: "openai-compatible",
       model: "llama3.2",
@@ -46,6 +47,7 @@ describe("LLM profile draft rules", () => {
     }))).toEqual(["base URL"]);
     expect(missingLlmProfileFields(draft({ provider: "openai", base_url: "" }))).toEqual([]);
     expect(missingLlmProfileFields(draft({ provider: "anthropic", base_url: "" }))).toEqual([]);
+    expect(missingLlmProfileFields(draft({ provider: "ollama", base_url: "" }))).toEqual([]);
   });
 
   test("accepts a keyless profile", () => {

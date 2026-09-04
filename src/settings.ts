@@ -20,7 +20,7 @@ import {
  * have dropped a newly added option on the floor — the dropdown moves, nothing saves, and no
  * error is raised anywhere.
  */
-const ENHANCEMENT_BACKENDS = ["claude-agent-sdk", "llm", "codex", "acp"] as const;
+const ENHANCEMENT_BACKENDS = ["claude-agent-sdk", "codex", "cursor", "acp", "llm"] as const;
 
 export type EnhancementBackend = (typeof ENHANCEMENT_BACKENDS)[number];
 
@@ -50,6 +50,8 @@ export type ShorthandPluginSettings = Readonly<{
   /** Blank values inherit the installed Codex CLI defaults. */
   codexModel: string;
   codexEffort: CodexReasoningEffort | "";
+  cursorExecutable: string;
+  cursorModel: string;
   acpTransport: AcpTransport;
   acpExecutable: string;
   acpArgs: string;
@@ -125,6 +127,8 @@ export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
   codexExecutable: "",
   codexModel: "",
   codexEffort: "",
+  cursorExecutable: "",
+  cursorModel: "",
   acpTransport: "stdio",
   acpExecutable: "",
   acpArgs: "acp",
@@ -164,6 +168,8 @@ export function normalizePluginSettings(input: unknown): ShorthandPluginSettings
     codexExecutable: stringValue(value.codexExecutable, DEFAULT_PLUGIN_SETTINGS.codexExecutable),
     codexModel: stringValue(value.codexModel, DEFAULT_PLUGIN_SETTINGS.codexModel),
     codexEffort: enumValue(value.codexEffort, CODEX_REASONING_EFFORTS, DEFAULT_PLUGIN_SETTINGS.codexEffort),
+    cursorExecutable: stringValue(value.cursorExecutable, DEFAULT_PLUGIN_SETTINGS.cursorExecutable),
+    cursorModel: stringValue(value.cursorModel, DEFAULT_PLUGIN_SETTINGS.cursorModel),
     acpTransport: acpTransportValue(value.acpTransport, DEFAULT_PLUGIN_SETTINGS.acpTransport),
     acpExecutable: stringValue(value.acpExecutable, DEFAULT_PLUGIN_SETTINGS.acpExecutable),
     acpArgs: stringValue(value.acpArgs, DEFAULT_PLUGIN_SETTINGS.acpArgs),
