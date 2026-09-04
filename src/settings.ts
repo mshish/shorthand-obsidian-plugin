@@ -11,6 +11,7 @@ import {
   type CodexReasoningEffort,
   type Section,
 } from "shorthand-core";
+import type { CaptureMode } from "./follow-policy.js";
 
 /**
  * Every stored enhancement-backend identifier, and the one source the union below is derived
@@ -305,6 +306,20 @@ export function validatePromptSettings(
 export function resolveTemplateSections(templateSectionText: string): readonly Section[] {
   const parsed = parseTemplateSections(templateSectionText);
   return parsed.ok ? parsed.sections : DEFAULT_CONFIG.templateSections;
+}
+
+/**
+ * Resolves the sections a note is scaffolded with based on the capture mode.
+ * Meeting notes receive the configured or default template sections (Summary, Decisions, Actions).
+ * Assisted notes receives an empty section array so that only the ownership comments
+ * (<!-- shorthand:notes -->, <!-- shorthand:ai:start -->, <!-- shorthand:ai:end -->) are inserted.
+ */
+export function resolveScaffoldSections(
+  mode: CaptureMode,
+  templateSectionText: string,
+): readonly Section[] {
+  if (mode === "assisted-notes") return [];
+  return resolveTemplateSections(templateSectionText);
 }
 
 /** Shown as the heading field's placeholder, so a user can read what they are replacing. */

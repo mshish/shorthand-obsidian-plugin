@@ -77,7 +77,7 @@ import {
   defaultTemplateSectionText,
   initialPromptFieldState,
   normalizePluginSettings,
-  resolveTemplateSections,
+  resolveScaffoldSections,
   storedPromptFieldValue,
   validatePromptSettings,
   type EnhancementBackend,
@@ -623,7 +623,7 @@ export default class ShorthandPlugin extends Plugin {
         // gives the later frontmatter transform the already-prepared file as its input. Both
         // capture modes cross this same gate, and declining still leaves every byte untouched
         // because this is the first mutation in the start path.
-        if (!await this.prepareScaffold(noteSink)) return;
+        if (!await this.prepareScaffold(noteSink, mode)) return;
         let sidecar: SidecarWriter | undefined;
         if (this.settings.writeTranscriptNote) {
           const noteContent = await noteSink.readContent();
@@ -1257,7 +1257,10 @@ export default class ShorthandPlugin extends Plugin {
         this.fail(mode.message);
         return;
       }
-      if (!await this.prepareScaffold(noteSink)) return;
+      const captureMode: CaptureMode = command === "clean-up-this-note"
+        ? "assisted-notes"
+        : (this.#capture?.mode ?? "meeting");
+      if (!await this.prepareScaffold(noteSink, captureMode)) return;
       switch (mode.kind) {
         case "live-capture":
           // `liveEnhancer` is what made this mode reachable; re-checking is for the compiler.
@@ -1500,7 +1503,7 @@ export default class ShorthandPlugin extends Plugin {
     });
   }
 
-  private async prepareScaffold(sink: ObsidianNoteSink): Promise<boolean> {
+  private async prepareScaffold(sink: ObsidianNoteSink, mode: CaptureMode = "meeting"): Promise<boolean> {
     const preflight = await preflightMarkers(sink);
     if (preflight.status === "error") {
       this.fail(preflight.message);
@@ -1508,12 +1511,13 @@ export default class ShorthandPlugin extends Plugin {
     }
     if (preflight.status === "needs-scaffold"
       && !this.settings.autoScaffold
-      && !await confirmScaffold(this.app)) return false;
-    return this.ensureScaffold(sink);
+      && !await confirmScaffold(this.app, mode)) return false;
+    return this.ensureScaffold(sink, mode);
   }
 
-  private async ensureScaffold(sink: ObsidianNoteSink): Promise<boolean> {
-    const result = await scaffoldAfterPreflight(sink, resolveTemplateSections(this.settings.templateSectionText));
+  private async ensureScaffold(sink: ObsidianNoteSink, mode: CaptureMode = "meeting"): Promise<boolean> {
+    const sections = resolveScaffoldSections(mode, this.settings.templateSectionText);
+    const result = await scaffoldAfterPreflight(sink, sections);
     if (result.ok) return true;
     this.fail(result.message);
     return false;
@@ -3052,15 +3056,20 @@ class ShorthandPanelView extends ItemView {
 class ScaffoldModal extends Modal {
   #settled = false;
 
-  constructor(app: App, private readonly resolveChoice: (choice: boolean) => void) {
+  constructor(
+    app: App,
+    private readonly resolveChoice: (choice: boolean) => void,
+    private readonly mode: CaptureMode = "meeting",
+  ) {
     super(app);
   }
 
   onOpen(): void {
     this.titleEl.setText("Add Shorthand markers?");
-    this.contentEl.createEl("p", {
-      text: "This note has no Shorthand AI ownership block. Add the user-notes marker and seeded AI section scaffold without changing existing note text?",
-    });
+    const text = this.mode === "assisted-notes"
+      ? "This note has no Shorthand AI ownership block. Add the user-notes and AI markers without changing existing note text?"
+      : "This note has no Shorthand AI ownership block. Add the user-notes marker and seeded AI section scaffold without changing existing note text?";
+    this.contentEl.createEl("p", { text });
     const buttons = this.contentEl.createDiv();
     const add = buttons.createEl("button", { text: "Add scaffold" });
     add.addClass("mod-cta");
@@ -3268,8 +3277,8 @@ class NotePromptModal extends Modal {
   }
 }
 
-function confirmScaffold(app: App): Promise<boolean> {
-  return new Promise((resolveChoice) => new ScaffoldModal(app, resolveChoice).open());
+function confirmScaffold(app: App, mode: CaptureMode = "meeting"): Promise<boolean> {
+  return new Promise((resolveChoice) => new ScaffoldModal(app, resolveChoice, mode).open());
 }
 
 function timestampName(date: Date): string {

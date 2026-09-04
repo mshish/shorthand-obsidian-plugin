@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { TFile } from "obsidian";
-import { ensureTranscriptLink, preflightMarkers, type TranscriptLinkApi } from "../src/obsidian-note-setup.js";
+import type { Section } from "shorthand-core";
+import { scaffoldMarkdownDocument } from "shorthand-core/markdown";
+import {
+  ensureTranscriptLink,
+  preflightMarkers,
+  scaffoldAfterPreflight,
+  type TranscriptLinkApi,
+} from "../src/obsidian-note-setup.js";
 import type { ObsidianNoteSink } from "../src/obsidian-note-sink.js";
 
 const START = "<!-- shorthand:ai:start -->";
@@ -28,6 +35,31 @@ describe("preflightMarkers", () => {
       readContent: async () => ({ ok: false, message: "The meeting note was deleted." }),
     } as unknown as ObsidianNoteSink);
     expect(result).toEqual({ status: "error", message: "The meeting note was deleted." });
+  });
+});
+
+describe("scaffoldAfterPreflight", () => {
+  test("scaffolds with empty sections for assisted notes, inserting only ownership markers", async () => {
+    let capturedContent = "";
+    const mockSink = {
+      scaffold: async (sections: readonly Section[]) => {
+        const result = scaffoldMarkdownDocument("# My Note\n\nRaw draft text.\n", sections);
+        if (result.status === "written") {
+          capturedContent = result.content;
+          return { status: "written" };
+        }
+        return { status: result.status };
+      },
+    } as unknown as ObsidianNoteSink;
+
+    const result = await scaffoldAfterPreflight(mockSink, []);
+    expect(result).toEqual({ ok: true });
+    expect(capturedContent).toContain("<!-- shorthand:notes -->");
+    expect(capturedContent).toContain("<!-- shorthand:ai:start -->");
+    expect(capturedContent).toContain("<!-- shorthand:ai:end -->");
+    expect(capturedContent).not.toContain("## Summary");
+    expect(capturedContent).not.toContain("## Decisions");
+    expect(capturedContent).not.toContain("## Actions");
   });
 });
 

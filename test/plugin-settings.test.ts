@@ -8,6 +8,7 @@ import {
   initialPromptFieldState,
   isEnhancementBackend,
   normalizePluginSettings,
+  resolveScaffoldSections,
   resolveTemplateSections,
   storedPromptFieldValue,
   validatePromptSettings,
@@ -457,6 +458,19 @@ describe("prompt setting resolution", () => {
 
   test("a valid heading list resolves to those sections", () => {
     expect(resolveTemplateSections("Agenda\n\nRisks")).toEqual([
+      { heading: "Agenda", markdown: "" },
+      { heading: "Risks", markdown: "" },
+    ]);
+  });
+
+  test("assisted notes scaffolding resolves to empty sections regardless of template text", () => {
+    expect(resolveScaffoldSections("assisted-notes", "")).toEqual([]);
+    expect(resolveScaffoldSections("assisted-notes", "Summary\nDecisions\nActions")).toEqual([]);
+  });
+
+  test("meeting scaffolding resolves to the configured or default template sections", () => {
+    expect(resolveScaffoldSections("meeting", "")).toEqual(DEFAULT_CONFIG.templateSections);
+    expect(resolveScaffoldSections("meeting", "Agenda\n\nRisks")).toEqual([
       { heading: "Agenda", markdown: "" },
       { heading: "Risks", markdown: "" },
     ]);
