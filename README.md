@@ -5,15 +5,19 @@
 [![MIT License](https://img.shields.io/badge/license-MIT-536f9e)](LICENSE)
 [![Support](https://img.shields.io/badge/Support-Stripe-635BFF?logo=stripe&logoColor=white)](https://buy.stripe.com/bJe28r91b87UemkahifEk02)
 
-**Focus on the conversation, not taking notes.**
+**AI meeting notes and personal note taking using your existing AI subscription (ChatGPT, Claude, or Cursor).**
 
-Shorthand turns a live meeting transcript into a note in the Obsidian file you already have open. The [Shorthand desktop app](https://shorthand.ing) captures your microphone and computer audio locally; this plugin keeps the note organized as the conversation unfolds.
+Take meeting notes, think out loud, or tidy up your writing directly in Obsidian. Shorthand organizes conversations and dictated thoughts into clear notes as you speak.
 
-- **Listen** — works with Zoom, Meet, Teams, or any other call while keeping speakers separate.
-- **Think** — uses the Claude, ChatGPT, or Cursor plan you already pay for, an ACP agent, an API provider, or a local model.
-- **Write** — updates only the section of the note owned by Shorthand. Your own writing stays put.
+- **Meeting notes** — capture your microphone and system audio for notes that keep up with the discussion, whether you use Zoom, Meet, Teams, or another calling app.
+- **Personal notes** — think out loud, dictate your thoughts, or improve writing without a recording.
+- **Your writing style** — customize how Shorthand structures and writes your notes.
+- **Linked transcripts** — optionally save the transcript so you can revisit the original conversation.
+- **More AI options** — connect another AI agent via ACP, choose an API provider, or use a local model with Ollama.
 
-By default, Shorthand deletes the recording, transcript, and AI session when the meeting ends. It is free and open source.
+Live transcription runs locally using the [Shorthand desktop app](https://shorthand.ing), which is required for recording.
+
+By default, Shorthand deletes recordings, transcripts, and AI agent sessions when you finish. It is free and open source.
 
 ## Start here
 
