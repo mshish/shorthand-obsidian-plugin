@@ -15,14 +15,14 @@ Take meeting notes, think out loud, or tidy up your writing directly in Obsidian
 - **Linked transcripts** — optionally save the transcript so you can revisit the original conversation.
 - **More AI options** — connect another AI agent via ACP, choose an API provider, or use a local model with Ollama.
 
-Live transcription runs locally using the [Shorthand desktop app](https://shorthand.ing), which is required for recording.
+Live transcription runs locally using the [Shorthand desktop app](https://shorthand.ing), which is required for note taking.
 
 By default, Shorthand deletes recordings, transcripts, and AI agent sessions when you finish. It is free and open source.
 
 ## Start here
 
 1. Install **Shorthand** from **Settings → Community plugins** in desktop Obsidian.
-2. Install and run the [Shorthand desktop app](https://shorthand.ing), then enable **Follow live transcript output** under **Advanced**.
+2. Install and run the [Shorthand desktop app](https://shorthand.ing).
 3. In Shorthand's plugin settings, choose an AI backend: Claude Code, Codex, Cursor CLI, an ACP agent, or an LLM provider.
 4. Open the note you want to update, then open **Shorthand panel** from the command palette or microphone ribbon icon.
 5. Choose **Meeting** for a conversation or **Assisted notes** for solo thinking. Stop from the panel or status bar when you are done.
