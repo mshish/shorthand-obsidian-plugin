@@ -106,6 +106,12 @@
   text-transform: uppercase;
 }
 
+.shorthand-panel-mode-label {
+  line-height: var(--line-height-tight);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .shorthand-panel-mode-icon {
   align-items: center;
   background-color: color-mix(in srgb, var(--shorthand-panel-accent) 14%, transparent);
@@ -129,6 +135,7 @@
 
 .shorthand-panel-elapsed {
   color: var(--text-normal);
+  flex: 0 0 auto;
   font-size: calc(var(--font-ui-large) * 1.35);
   font-variant-numeric: tabular-nums;
   font-weight: var(--font-semibold);
@@ -150,6 +157,7 @@
   display: flex;
   font-size: var(--font-ui-small);
   gap: var(--size-4-2);
+  max-width: 100%;
   min-width: 0;
   text-decoration: none;
   width: fit-content;
@@ -167,6 +175,7 @@
 }
 
 .shorthand-panel-note-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -177,6 +186,7 @@
   font-size: var(--font-ui-small);
   line-height: var(--line-height-normal);
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .shorthand-panel-activity {
@@ -187,8 +197,14 @@
   gap: var(--size-4-2);
 }
 
+.shorthand-panel-activity > :last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .shorthand-panel-pulse {
   display: inline-flex;
+  flex: 0 0 auto;
   gap: var(--size-2-1);
 }
 
@@ -227,7 +243,7 @@
 .shorthand-panel-buttons {
   display: grid;
   gap: var(--size-4-2);
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
 }
 
 button.shorthand-panel-button {
@@ -285,12 +301,14 @@ button.shorthand-panel-button.is-start-assisted-notes {
   display: flex;
   flex-direction: column;
   gap: var(--size-2-1);
+  min-width: 0;
 }
 
 .shorthand-panel-button-label {
   font-size: var(--font-ui-small);
   font-weight: var(--font-semibold);
   line-height: var(--line-height-tight);
+  overflow-wrap: anywhere;
 }
 
 .shorthand-panel-button-hint {
