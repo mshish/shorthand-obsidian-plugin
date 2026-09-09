@@ -29,6 +29,22 @@ describe("the plugin stylesheet", () => {
     expect(css).toMatch(/\.shorthand-panel \[hidden\]\s*\{\s*display: none;\s*\}/);
   });
 
+  test("stacks mode actions and constrains narrow panel text", () => {
+    const css = readFileSync(resolve(process.cwd(), "styles.css"), "utf8");
+    expect(css).toMatch(
+      /\.shorthand-panel-buttons\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);/s,
+    );
+    expect(css).toMatch(
+      /\.shorthand-panel-note\s*\{[^}]*max-width:\s*100%;/s,
+    );
+    expect(css).toMatch(
+      /\.shorthand-panel-note-name\s*\{[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/s,
+    );
+    expect(css).toMatch(
+      /\.shorthand-panel-mode-label\s*\{[^}]*overflow-wrap:\s*anywhere;/s,
+    );
+  });
+
   test("keeps the panel's semantic accents stable across Obsidian themes", () => {
     const css = readFileSync(resolve(process.cwd(), "styles.css"), "utf8");
     expect(css).toContain("--shorthand-panel-green: #4d8b74");
