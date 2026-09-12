@@ -183,6 +183,51 @@ describe("AppConnection.dispose", () => {
     expect(await connection.ensure()).toBe(second);
     expect(connect).toHaveBeenCalledTimes(2);
   });
+
+  test("a stale connect resolving after dispose() does not clobber a newer ensure()'s pending", async () => {
+    const late = new FakeAppClient();
+    const second = new FakeAppClient();
+    let attempts = 0;
+    let resolveFirstConnect: (client: AppClientLike) => void = () => undefined;
+    let resolveSecondConnect: (client: AppClientLike) => void = () => undefined;
+    const connect = mock(() => {
+      attempts += 1;
+      if (attempts === 1) {
+        return new Promise<AppClientLike>((resolve) => {
+          resolveFirstConnect = resolve;
+        });
+      }
+      return new Promise<AppClientLike>((resolve) => {
+        resolveSecondConnect = resolve;
+      });
+    });
+    const connection = new AppConnection(connect);
+
+    const firstEnsure = connection.ensure(); // attempt #1, still in flight
+    connection.dispose();
+    const secondEnsure = connection.ensure(); // attempt #2, installs a new #pending
+
+    // Attempt #1 settles late, after dispose() and after ensure() #2 is already in flight.
+    resolveFirstConnect(late);
+    let caught: unknown;
+    try {
+      await firstEnsure;
+    } catch (thrown) {
+      caught = thrown;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(late.closed).toBe(true);
+
+    // A third ensure(), issued after the stale settlement, must return attempt #2's
+    // promise/client rather than dialing again: the bug this guards against cleared #pending
+    // unconditionally from attempt #1's own handler, clobbering attempt #2's in-flight promise.
+    const thirdEnsure = connection.ensure();
+    resolveSecondConnect(second);
+
+    expect(await secondEnsure).toBe(second);
+    expect(await thirdEnsure).toBe(second);
+    expect(connect).toHaveBeenCalledTimes(2);
+  });
 });
 
 const vaultId = "3f9a1c2b4d5e6f70";

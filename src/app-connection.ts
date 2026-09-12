@@ -37,9 +37,13 @@ export class AppConnection {
     if (this.#pending !== undefined) return this.#pending;
 
     const generation = this.#generation;
-    const pending = this.connect().then(
+    const pending: Promise<AppClientLike> = this.connect().then(
       (client) => {
-        this.#pending = undefined;
+        // Only clear the slot if it still holds this attempt's own promise: a stale attempt
+        // that resolves after dispose() started a newer ensure() must not clobber that newer
+        // #pending out from under it, or a later ensure() would return this attempt's already-
+        // settled (and about-to-be-rejected) promise instead of the in-flight one.
+        if (this.#pending === pending) this.#pending = undefined;
         if (generation !== this.#generation) {
           // dispose() bumped #generation while this connect was still in flight. Closing the
           // client and rejecting here — rather than adopting it — is what stops it leaking an
@@ -58,7 +62,9 @@ export class AppConnection {
         return client;
       },
       (error: unknown) => {
-        this.#pending = undefined;
+        // Same guard as the success handler: don't clear a newer #pending a later ensure()
+        // has since installed.
+        if (this.#pending === pending) this.#pending = undefined;
         throw error;
       },
     );

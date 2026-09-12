@@ -2512,13 +2512,17 @@ class ShorthandSettingTab extends PluginSettingTab {
           ...this.credentialKeyRow(
             () => acpSlot(this.plugin.vaultId(), this.plugin.settings.acpNetworkUrl),
             () => "",
-            () => this.plugin.settings.acpTransport === "network"
+            () => this.plugin.settings.backend === "acp"
+              && this.plugin.settings.acpTransport === "network"
               && this.plugin.settings.acpNetworkUrl.trim().length > 0,
           ),
           // Only offered once there is a URL to derive a slot from: an empty field has
           // nowhere for a key to be stored under yet, the same reason the URL row itself
-          // requires network transport.
-          visible: () => this.plugin.settings.acpTransport === "network"
+          // requires network transport. Also gated on the backend itself — otherwise a user
+          // on the llm backend with a leftover network transport and URL from a previous ACP
+          // session would still trigger an app status read from a row nobody can see.
+          visible: () => this.plugin.settings.backend === "acp"
+            && this.plugin.settings.acpTransport === "network"
             && this.plugin.settings.acpNetworkUrl.trim().length > 0,
         },
       ],
