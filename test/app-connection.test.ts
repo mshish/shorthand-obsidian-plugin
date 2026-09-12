@@ -98,7 +98,13 @@ describe("AppConnection.ensure", () => {
     const connect = mock(() => Promise.reject(error));
     const connection = new AppConnection(connect);
 
-    await expect(connection.ensure()).rejects.toBe(error);
+    let caught: unknown;
+    try {
+      await connection.ensure();
+    } catch (thrown) {
+      caught = thrown;
+    }
+    expect(caught).toBe(error);
   });
 
   test("concurrent calls before the connect settles share the same connection attempt", async () => {
@@ -219,9 +225,14 @@ describe("runCredentialMigration", () => {
     const save = mock(() => Promise.resolve());
     const connection = new AppConnection(() => Promise.resolve<AppClientLike>(client));
 
-    await expect(
-      runCredentialMigration({ settings, vaultId, readLegacy, deleteLegacy, connection, save }),
-    ).rejects.toThrow("keyring rejected the secret");
+    let caught: unknown;
+    try {
+      await runCredentialMigration({ settings, vaultId, readLegacy, deleteLegacy, connection, save });
+    } catch (thrown) {
+      caught = thrown;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toBe("keyring rejected the secret");
 
     expect(deleteLegacy).not.toHaveBeenCalled();
     expect(save).not.toHaveBeenCalled();

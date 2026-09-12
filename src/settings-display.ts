@@ -1,4 +1,4 @@
-import type { AgentCatalog, CatalogFailureReason } from "shorthand-core";
+import type { AgentCatalog, AppCredentialStatus, CatalogFailureReason } from "shorthand-core";
 
 /**
  * Every settings-tab string computed from a stored value, plus the handful of decisions
@@ -285,13 +285,26 @@ export function baseUrlDescription(provider: string): string {
   return "Optional. Leave it blank unless you route through a gateway or proxy.";
 }
 
-export type StoredKeyState = "stored" | "absent" | "unknown";
+/**
+ * What the "API key" row's description depends on: the app's own answer for the slot
+ * (`AppCredentialStatus`), or the app being unreachable at all — carried as the message
+ * already resolved for that case (`appUnavailableMessage` in `app-credentials.ts`), so this
+ * function stays free of any import that would drag `AppUnavailableError` in just to read a
+ * `.message` back off it.
+ */
+export type ApiKeyState = AppCredentialStatus | Readonly<{ appUnavailable: string }>;
 
-export function apiKeyDescription(state: StoredKeyState, provider?: string): string {
+export function apiKeyDescription(state: ApiKeyState, provider?: string): string {
   if (provider === "ollama") return "No API key is needed for local Ollama.";
-  if (state === "absent") return "No key is stored.";
-  if (state === "unknown") return "The stored key cannot be read.";
-  return "A key is stored. Blank keeps the stored key, a new value replaces it, and Clear key removes it.";
+  if (typeof state !== "string") return state.appUnavailable;
+  switch (state) {
+    case "missing":
+      return "No key is saved.";
+    case "unavailable":
+      return "Secure storage is unavailable on this device.";
+    case "configured":
+      return "A key is saved in the Shorthand app. Blank keeps it, a new value replaces it, and Clear key removes it.";
+  }
 }
 
 function countOf(count: number, unit: string): string {
