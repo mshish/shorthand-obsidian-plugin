@@ -8,7 +8,6 @@ import {
   PluginSettingTab,
   Setting,
   setIcon,
-  requestUrl,
   type App,
   type ButtonComponent,
   type DropdownComponent,
@@ -21,6 +20,7 @@ import {
   type WorkspaceLeaf,
 } from "obsidian";
 import { existsSync } from "node:fs";
+import { rm } from "node:fs/promises";
 // Core is consumed by package name through its `exports` map — never a deep path.
 // It is a separate repository (mshish/shorthand-core), pinned by tag in package.json.
 import {
@@ -32,6 +32,8 @@ import {
   DEFAULT_ASSISTED_NOTES_EDITORIAL_GUIDANCE,
   DEFAULT_MEETING_EDITORIAL_GUIDANCE,
   MAX_USER_NAME_CHARACTERS,
+  createAppFetch,
+  createAppWebSocketConstructor,
   detectClaudeExecutable,
   detectCodexExecutable,
   detectCursorExecutable,
@@ -45,12 +47,14 @@ import {
   LlmAgentClient,
   llmCredentialsPath,
   readLlmCredentials,
+  ShorthandAppClient,
   ShorthandControl,
   SidecarWriter,
   StreamClient,
   TranscriptStore,
   enhancementDelta,
   type AgentCatalog,
+  type AppClientLike,
   type ControlResult,
   type ControlSignal,
   type EnhanceStatus,
@@ -76,6 +80,7 @@ import {
   codexAgentOptions,
   defaultTemplateSectionText,
   initialPromptFieldState,
+  llmProfileFromSettings,
   normalizePluginSettings,
   resolveScaffoldSections,
   storedPromptFieldValue,
@@ -83,6 +88,14 @@ import {
   type EnhancementBackend,
   type ShorthandPluginSettings,
 } from "./src/settings.js";
+import {
+  APP_NOT_RUNNING_MESSAGE,
+  acpSlot,
+  appUnavailableMessage,
+  llmSlot,
+  vaultIdFor,
+} from "./src/app-credentials.js";
+import { AppConnection, runCredentialMigration } from "./src/app-connection.js";
 import {
   acpExecutableDescription,
   apiKeyDescription,
@@ -134,7 +147,6 @@ import {
 } from "./src/capture-log.js";
 import { describeStatus } from "./src/status-text.js";
 import { describePanel, SHORTHAND_PANEL_VIEW, type PanelButtonId, type PanelModel } from "./src/panel-model.js";
-import { createRequestUrlFetch } from "./src/request-url-fetch.js";
 import { deleteLlmCredentials, writeLlmCredentials } from "./src/llm-credentials-writer.js";
 import { LlmProfileCommitQueue } from "./src/llm-profile-commit-queue.js";
 import { ObsidianNoteSink } from "./src/obsidian-note-sink.js";
@@ -449,9 +461,19 @@ export default class ShorthandPlugin extends Plugin {
    * `PENDING_ATTACH_BUFFER_CAP`'s own comment for why "unbounded" is not safe either.
    */
   #idlePendingAttachBuffer: PendingAttachBuffer = EMPTY_PENDING_ATTACH_BUFFER;
+  /**
+   * The one connection to the Shorthand app's request socket, shared by the credential
+   * migration, the LLM backend, and an ACP network transport — see `AppConnection`'s own
+   * doc comment for why a single shared client beats one per caller.
+   */
+  readonly #appConnection: AppConnection = new AppConnection(() => ShorthandAppClient.connect());
 
   async onload(): Promise<void> {
     this.settings = normalizePluginSettings(await this.loadData());
+    // Depends on the app being open, which onload itself must not block on: a plugin that
+    // cannot finish loading until Shorthand starts would break every command that has
+    // nothing to do with provider secrets.
+    void this.migrateCredentials();
     this.#statusBar = this.addStatusBarItem();
     // Clickable, and stop-only. The item is hidden while idle (see describeStatus),
     // so there is never a moment where a click could mean "start" — starting lives on
@@ -567,6 +589,38 @@ export default class ShorthandPlugin extends Plugin {
   onunload(): void {
     this.stopIdleFollower();
     this.forceStopCapture();
+    this.#appConnection.dispose();
+  }
+
+  /**
+   * Moves any secret still in `data.json` or the legacy `llm-credentials.json` file into the
+   * Shorthand app's keyring, then marks the move done — see `runCredentialMigration`'s own
+   * doc comment for the ordering guarantee. Silent on `"skipped"`, since that is every load
+   * after the first successful one. `"deferred"` (the app was not open) only tells the user
+   * anything when there was actually a secret waiting to move — an empty settings file
+   * deferring silently forever is the expected, permanent state for a user who has never
+   * configured a provider key.
+   */
+  private async migrateCredentials(): Promise<void> {
+    const credentialsPath = llmCredentialsPath();
+    const legacyFileExisted = existsSync(credentialsPath);
+    const hadAcpToken = this.settings.acpAuthToken.length > 0;
+    const result = await runCredentialMigration({
+      settings: this.settings,
+      vaultId: this.vaultId(),
+      readLegacy: async () => {
+        const read = await readLlmCredentials(credentialsPath);
+        return read.ok ? read.value : undefined;
+      },
+      deleteLegacy: () => rm(credentialsPath, { force: true }),
+      connection: this.#appConnection,
+      save: (patch) => this.saveSettings({ ...this.settings, ...patch }),
+    });
+    if (result === "done") {
+      new Notice("Shorthand: provider keys moved to the Shorthand app.");
+    } else if (result === "deferred" && (legacyFileExisted || hadAcpToken)) {
+      new Notice(`${APP_NOT_RUNNING_MESSAGE} Provider keys will move on the next load.`);
+    }
   }
 
   async saveSettings(candidate: unknown): Promise<void> {
@@ -1435,11 +1489,20 @@ export default class ShorthandPlugin extends Plugin {
         if (url.length === 0) {
           throw new Error("ACP network URL is required when using network transport. Configure the URL in Shorthand settings.");
         }
+        // The agent's own token, if any, lives in the app's keyring under this slot — see
+        // acpSlot's doc comment. Core never sees it: the app attaches it on its side of the
+        // fetch/WebSocket shims below.
+        const slot = acpSlot(this.vaultId(), url);
+        if (slot === undefined) {
+          throw new Error(`"${url}" is not a valid ACP network URL. Update it in Shorthand settings.`);
+        }
+        const client = await this.connectToApp();
         agent = new AcpAgentClient({
           transport: {
             type: "network",
             url,
-            ...(this.settings.acpAuthToken.length === 0 ? {} : { authToken: this.settings.acpAuthToken }),
+            fetch: createAppFetch(client, slot),
+            WebSocket: createAppWebSocketConstructor(client, slot),
           },
           ...(this.settings.acpModel.length === 0 ? {} : { model: this.settings.acpModel }),
         });
@@ -1464,13 +1527,18 @@ export default class ShorthandPlugin extends Plugin {
         });
       }
     } else {
-      const credentialsPath = llmCredentialsPath();
-      const credentials = await readLlmCredentials(credentialsPath);
-      if (!credentials.ok) throw new Error(credentials.message);
+      const profile = llmProfileFromSettings(this.settings);
+      if ("missing" in profile) {
+        throw new Error(`LLM provider profile is missing: ${profile.missing.join(", ")}.`);
+      }
+      const slot = llmSlot(this.settings);
+      if (slot === undefined) {
+        throw new Error("The LLM provider profile does not resolve to a request endpoint. Check the base URL in Shorthand settings.");
+      }
+      const client = await this.connectToApp();
       agent = new LlmAgentClient({
-        credentials: credentials.value,
-        credentialsPath,
-        fetch: createRequestUrlFetch(requestUrl),
+        profile,
+        fetch: createAppFetch(client, slot),
       });
     }
     // Snapshotted, not read live: core takes traceMachine once at construction, so reading
@@ -1789,6 +1857,31 @@ export default class ShorthandPlugin extends Plugin {
     if (adapter instanceof FileSystemAdapter) return adapter.getBasePath();
     this.fail("Shorthand requires a desktop filesystem-backed Obsidian vault.");
     return undefined;
+  }
+
+  /**
+   * Identifies this vault to the Shorthand app's keyring (`vaultIdFor`), without `vaultRoot`'s
+   * Notice: computing an id is not itself a user action that failed, and every ACP-network
+   * call that actually needs one already fails on its own missing slot when a non-desktop
+   * adapter leaves this hashing an empty path.
+   */
+  private vaultId(): string {
+    const adapter = this.app.vault.adapter;
+    return vaultIdFor(adapter instanceof FileSystemAdapter ? adapter.getBasePath() : "");
+  }
+
+  /**
+   * `ensure()`'s connection failures are `AppUnavailableError` almost always; this is the one
+   * place that turns that into copy a user can act on, so `createEnhancer`'s two call sites
+   * (the LLM backend and an ACP network transport) do not each repeat the mapping.
+   */
+  private async connectToApp(): Promise<AppClientLike> {
+    try {
+      return await this.#appConnection.ensure();
+    } catch (error) {
+      const message = appUnavailableMessage(error);
+      throw message === undefined ? error : new Error(message);
+    }
   }
 
   /**
