@@ -61,6 +61,10 @@
       padding: 20px;
     }
 
+    .preview.is-narrow {
+      max-width: 220px;
+    }
+
     .caption {
       color: var(--text-muted);
       font-size: 12px;
@@ -76,20 +80,20 @@
 </head>
 <body>
   <main class="preview-grid">
-    <section class="preview">
-      <p class="caption">Idle</p>
+    <section class="preview is-narrow">
+      <p class="caption">Idle — narrow sidebar</p>
       <div class="shorthand-panel">
         <div class="shorthand-panel-status is-idle">
           <div class="shorthand-panel-status-top">
             <div class="shorthand-panel-mode">
               <span class="shorthand-panel-mode-icon fake-icon">✓</span>
-              <span>Ready</span>
+              <span class="shorthand-panel-mode-label">Ready</span>
             </div>
           </div>
           <h3 class="shorthand-panel-headline">Ready to take notes</h3>
           <a class="shorthand-panel-note internal-link" href="#">
             <span class="shorthand-panel-note-icon fake-icon">▤</span>
-            <span class="shorthand-panel-note-name">Weekly sync</span>
+            <span class="shorthand-panel-note-name">Quarterly product and research planning sync</span>
           </a>
         </div>
         <div class="shorthand-panel-actions">
@@ -121,7 +125,7 @@
           <div class="shorthand-panel-status-top">
             <div class="shorthand-panel-mode">
               <span class="shorthand-panel-mode-icon fake-icon">♟</span>
-              <span>Meeting</span>
+              <span class="shorthand-panel-mode-label">Meeting</span>
             </div>
             <time class="shorthand-panel-elapsed">12:34</time>
           </div>
@@ -151,7 +155,7 @@
           <div class="shorthand-panel-status-top">
             <div class="shorthand-panel-mode">
               <span class="shorthand-panel-mode-icon fake-icon">✦</span>
-              <span>Assisted notes</span>
+              <span class="shorthand-panel-mode-label">Assisted notes</span>
             </div>
             <time class="shorthand-panel-elapsed">7:08</time>
           </div>
@@ -181,7 +185,7 @@
           <div class="shorthand-panel-status-top">
             <div class="shorthand-panel-mode">
               <span class="shorthand-panel-mode-icon fake-icon">!</span>
-              <span>Needs attention</span>
+              <span class="shorthand-panel-mode-label">Needs attention</span>
             </div>
           </div>
           <h3 class="shorthand-panel-headline">Something went wrong</h3>
