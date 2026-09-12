@@ -90,6 +90,11 @@ export function planCredentialMigration(
   vaultId: string,
   legacy: LlmCredentials | undefined,
 ): MigrationPlan {
+  // Sticky per settings.ts's own doc comment on appCredentialsMigrated: re-running after the
+  // user has since cleared a field (e.g. blanked llmProvider back out) must not look like a
+  // legacy secret reappearing from nowhere.
+  if (settings.appCredentialsMigrated) return { sets: [], patch: {} };
+
   const sets: { slot: AppCredentialSlot; secret: string }[] = [];
   // `Partial<ShorthandPluginSettings>` keeps every field's `readonly` modifier — correct for
   // the type this function *returns*, since a caller has no business mutating a settings
@@ -112,7 +117,12 @@ export function planCredentialMigration(
     profileSettings = { ...settings, llmProvider: legacy.provider, llmModel: legacy.model, llmBaseUrl: legacy.base_url ?? "" };
   }
 
-  if (legacy?.api_key !== undefined && legacy.api_key.length > 0) {
+  // Guarded on the legacy file naming the SAME provider profileSettings is about to use: when
+  // settings already has its own provider chosen, profileSettings keeps it rather than the
+  // legacy file's, and pushing the legacy key there anyway would write one provider's secret
+  // into another provider's slot — silently overwriting whatever correct secret is already
+  // in the keyring for it.
+  if (legacy?.api_key !== undefined && legacy.api_key.length > 0 && legacy.provider === profileSettings.llmProvider) {
     const slot = llmSlot(profileSettings);
     if (slot !== undefined) sets.push({ slot, secret: legacy.api_key });
   }

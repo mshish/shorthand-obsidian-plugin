@@ -166,6 +166,32 @@ describe("planCredentialMigration", () => {
     expect(plan.patch).not.toHaveProperty("llmBaseUrl");
     expect(plan.patch).toEqual({ appCredentialsMigrated: true });
   });
+
+  // The failure a missing provider check would produce: settings is already on anthropic
+  // (with its own correct secret already in the keyring), and a stale llm-credentials.json
+  // still holds an openai key. Migrating that key into the anthropic slot would silently
+  // overwrite the real anthropic secret with the wrong provider's key.
+  test("does not migrate a legacy api_key whose provider does not match the settings already chosen", () => {
+    const settings = settingsWith({ llmProvider: "anthropic", llmModel: "claude-opus-4-6" });
+    const plan = planCredentialMigration(settings, vaultId, {
+      provider: "openai",
+      model: "gpt-5",
+      api_key: "sk-test",
+    });
+    expect(plan.sets).toEqual([]);
+  });
+
+  // Sticky per settings.ts's doc comment on appCredentialsMigrated: once migration has run,
+  // re-running it must not look like a legacy secret reappearing from nowhere.
+  test("plans nothing once migration has already run", () => {
+    const settings = settingsWith({ appCredentialsMigrated: true, acpAuthToken: "tok" });
+    const plan = planCredentialMigration(settings, vaultId, {
+      provider: "openai",
+      model: "gpt-5",
+      api_key: "sk-test",
+    });
+    expect(plan).toEqual({ sets: [], patch: {} });
+  });
 });
 
 describe("appUnavailableMessage", () => {
