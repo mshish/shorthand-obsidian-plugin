@@ -14,6 +14,7 @@ class FakeAppClient implements AppClientLike {
   readonly capabilities: readonly string[] = [];
   readonly setCredentialCalls: { slot: AppCredentialSlot; secret: string }[] = [];
   readonly clearCredentialCalls: AppCredentialSlot[] = [];
+  closed = false;
   #closeListeners = new Set<(error?: Error) => void>();
   #setCredentialImpl: (slot: AppCredentialSlot, secret: string) => Promise<void>;
 
@@ -41,7 +42,7 @@ class FakeAppClient implements AppClientLike {
   }
 
   close(): void {
-    // No real socket to tear down.
+    this.closed = true;
   }
 
   async setCredential(slot: AppCredentialSlot, secret: string): Promise<void> {
@@ -141,6 +142,44 @@ describe("AppConnection.dispose", () => {
 
     expect(await connection.ensure()).toBe(first);
     connection.dispose();
+    expect(await connection.ensure()).toBe(second);
+    expect(connect).toHaveBeenCalledTimes(2);
+  });
+
+  test("closes, rather than adopts, a client that connects after dispose() already ran", async () => {
+    const late = new FakeAppClient();
+    const second = new FakeAppClient();
+    let attempts = 0;
+    let resolveFirstConnect: (client: AppClientLike) => void = () => undefined;
+    const connect = mock(() => {
+      attempts += 1;
+      if (attempts === 1) {
+        return new Promise<AppClientLike>((resolve) => {
+          resolveFirstConnect = resolve;
+        });
+      }
+      return Promise.resolve<AppClientLike>(second);
+    });
+    const connection = new AppConnection(connect);
+
+    // Started, but not yet settled, when dispose() runs.
+    const firstEnsure = connection.ensure();
+    connection.dispose();
+    resolveFirstConnect(late);
+
+    let caught: unknown;
+    try {
+      await firstEnsure;
+    } catch (thrown) {
+      caught = thrown;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    // The late client is closed instead of adopted: dispose() must not leak an open socket
+    // just because its connect attempt was already on the wire when dispose() ran.
+    expect(late.closed).toBe(true);
+
+    // Documented policy: dispose() is followed by a plain reconnect, not permanent rejection —
+    // the next ensure() call starts (and succeeds with) a brand new connect attempt.
     expect(await connection.ensure()).toBe(second);
     expect(connect).toHaveBeenCalledTimes(2);
   });

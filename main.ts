@@ -598,26 +598,38 @@ export default class ShorthandPlugin extends Plugin {
    * anything when there was actually a secret waiting to move — an empty settings file
    * deferring silently forever is the expected, permanent state for a user who has never
    * configured a provider key.
+   *
+   * Called `void`d from `onload` (nothing there awaits it), so a rejection this method does
+   * not catch itself becomes an unhandled promise rejection with no user-facing message at
+   * all — a plausible failure here, since `runCredentialMigration` rethrows anything that
+   * is not `AppUnavailableError` (a rejected `setCredential`, `deleteLegacy`'s `rm`, or
+   * `saveSettings`). The catch names the failure without ever formatting a secret into it:
+   * every value this method or its dependencies can throw about is a path, a status code or
+   * an error message, never the credential itself.
    */
   private async migrateCredentials(): Promise<void> {
     const credentialsPath = llmCredentialsPath();
     const legacyFileExisted = existsSync(credentialsPath);
     const hadAcpToken = this.settings.acpAuthToken.length > 0;
-    const result = await runCredentialMigration({
-      settings: this.settings,
-      vaultId: this.vaultId(),
-      readLegacy: async () => {
-        const read = await readLlmCredentials(credentialsPath);
-        return read.ok ? read.value : undefined;
-      },
-      deleteLegacy: () => rm(credentialsPath, { force: true }),
-      connection: this.#appConnection,
-      save: (patch) => this.saveSettings({ ...this.settings, ...patch }),
-    });
-    if (result === "done") {
-      new Notice("Shorthand: provider keys moved to the Shorthand app.");
-    } else if (result === "deferred" && (legacyFileExisted || hadAcpToken)) {
-      new Notice(`${APP_NOT_RUNNING_MESSAGE} Provider keys will move on the next load.`);
+    try {
+      const result = await runCredentialMigration({
+        settings: this.settings,
+        vaultId: this.vaultId(),
+        readLegacy: async () => {
+          const read = await readLlmCredentials(credentialsPath);
+          return read.ok ? read.value : undefined;
+        },
+        deleteLegacy: () => rm(credentialsPath, { force: true }),
+        connection: this.#appConnection,
+        save: (patch) => this.saveSettings({ ...this.settings, ...patch }),
+      });
+      if (result === "done") {
+        new Notice("Shorthand: provider keys moved to the Shorthand app.");
+      } else if (result === "deferred" && (legacyFileExisted || hadAcpToken)) {
+        new Notice(`${APP_NOT_RUNNING_MESSAGE} Provider keys will move on the next load.`);
+      }
+    } catch (error) {
+      new Notice(`Shorthand: provider keys could not be moved to the Shorthand app: ${errorMessage(error)}`, 10_000);
     }
   }
 
@@ -2035,12 +2047,13 @@ class ShorthandSettingTab extends PluginSettingTab {
   /**
    * Called on every re-render and once more when the tab is registered, purely to index its
    * rows for Obsidian's settings search — so this must stay a plain, side-effect-free read of
-   * current settings. The agent catalog fetch and the LLM credential read are the two things
-   * here that are neither: both sit inside a `render` callback (see `agentCatalogItem` and
-   * `llmProfileGroup`), which Obsidian never invokes for the search-indexing pass. `render`
-   * *does* run for every declared row on a display pass, including rows in a group whose
-   * `visible` is false — visibility is applied afterwards, as CSS — so each of those callbacks
-   * also checks the selected backend itself before spawning or reading anything.
+   * current settings. The agent catalog fetch and the "API key" row's `credentialStatus` read
+   * are the two things here that are neither: both sit inside a `render` callback (see
+   * `agentCatalogItem` and `credentialKeyRow`), which Obsidian never invokes for the
+   * search-indexing pass. `render` *does* run for every declared row on a display pass,
+   * including rows in a group whose `visible` is false — visibility is applied afterwards, as
+   * CSS — so each of those callbacks also checks the selected backend (or transport) itself
+   * before spawning or reading anything.
    */
   getSettingDefinitions(): SettingDefinitionItem<SettingsKey>[] {
     return [
@@ -2499,6 +2512,8 @@ class ShorthandSettingTab extends PluginSettingTab {
           ...this.credentialKeyRow(
             () => acpSlot(this.plugin.vaultId(), this.plugin.settings.acpNetworkUrl),
             () => "",
+            () => this.plugin.settings.acpTransport === "network"
+              && this.plugin.settings.acpNetworkUrl.trim().length > 0,
           ),
           // Only offered once there is a URL to derive a slot from: an empty field has
           // nowhere for a key to be stored under yet, the same reason the URL row itself
@@ -2641,6 +2656,7 @@ class ShorthandSettingTab extends PluginSettingTab {
         this.credentialKeyRow(
           () => llmSlot(this.plugin.settings),
           () => this.plugin.settings.llmProvider,
+          () => this.plugin.settings.backend === "llm",
         ),
       ],
     };
@@ -2659,10 +2675,17 @@ class ShorthandSettingTab extends PluginSettingTab {
    * and click handlers, rather than captured once: the row outlives a single value of either.
    * `getProvider` returns `""` for the ACP row — enough for `apiKeyDescription` to skip its
    * ollama-only branch and nothing else, since an ACP token is not an LLM key.
+   *
+   * `shouldFetch` mirrors the check every other imperative row in this file makes for itself
+   * (see the "ACP model" row above): `render` runs for a group's declared items even while the
+   * group's own `visible` is false — visibility is CSS applied afterwards — so without this
+   * gate, editing an unrelated backend's settings would still open a connection to the app and
+   * read a slot's credential status for a row nobody can see.
    */
   private credentialKeyRow(
     getSlot: () => AppCredentialSlot | undefined,
     getProvider: () => LlmProviderId | "",
+    shouldFetch: () => boolean,
   ): SettingDefinition<SettingsKey> {
     return {
       name: "API key",
@@ -2671,6 +2694,11 @@ class ShorthandSettingTab extends PluginSettingTab {
         let disposed = false;
         let keyInput!: TextComponent;
         let clearButton!: ButtonComponent;
+        // Pointerdown on Clear key fires before the password field's blur. Without this,
+        // clicking Clear while a freshly typed key still sits in the field would commit that
+        // typed value via setCredential and only then clear it — briefly writing, then
+        // discarding, a secret the user was trying to remove rather than rotate.
+        let suppressBlurCommit = false;
 
         const applyOutcome = (outcome: CredentialRowOutcome): void => {
           if (disposed) return;
@@ -2684,6 +2712,7 @@ class ShorthandSettingTab extends PluginSettingTab {
           keyInput = text.setDisabled(true);
           text.inputEl.type = "password";
           text.inputEl.addEventListener("blur", () => {
+            if (suppressBlurCommit) return;
             const value = keyInput.getValue();
             if (value.length === 0) return;
             const slot = getSlot();
@@ -2714,7 +2743,21 @@ class ShorthandSettingTab extends PluginSettingTab {
                 row.setDesc(`The key could not be cleared: ${errorMessage(error)}`);
               });
           });
+          button.buttonEl.addEventListener("pointerdown", () => {
+            suppressBlurCommit = true;
+            keyInput.setValue("");
+            // The blur this pointerdown precedes has fired by the next tick at the latest;
+            // resetting here rather than after the click lets a later, unrelated blur (the
+            // user tabs away without retyping) commit normally.
+            window.setTimeout(() => { suppressBlurCommit = false; }, 0);
+          });
         });
+
+        if (!shouldFetch()) {
+          keyInput.setDisabled(true);
+          clearButton.setDisabled(true);
+          return () => { disposed = true; };
+        }
 
         const slot = getSlot();
         if (slot === undefined) {

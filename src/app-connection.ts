@@ -12,6 +12,15 @@ import type { LlmCredentials } from "shorthand-core";
 export class AppConnection {
   #client: AppClientLike | undefined;
   #pending: Promise<AppClientLike> | undefined;
+  /**
+   * Bumped by `dispose()`. A connect attempt started before the bump checks it again once it
+   * resolves, so a client that only finishes connecting after `dispose()` ran is closed
+   * instead of adopted — see `ensure()`'s success handler. Not a boolean "disposed forever"
+   * flag: `dispose()` is meant to be followed by a plain reconnect (the plugin's own
+   * `onunload`/next `onload` is the only caller today), so a *later* `ensure()` call starts a
+   * brand new attempt rather than staying permanently rejected.
+   */
+  #generation = 0;
 
   constructor(private readonly connect: () => Promise<AppClientLike>) {}
 
@@ -27,9 +36,19 @@ export class AppConnection {
     if (this.#client !== undefined) return Promise.resolve(this.#client);
     if (this.#pending !== undefined) return this.#pending;
 
+    const generation = this.#generation;
     const pending = this.connect().then(
       (client) => {
         this.#pending = undefined;
+        if (generation !== this.#generation) {
+          // dispose() bumped #generation while this connect was still in flight. Closing the
+          // client and rejecting here — rather than adopting it — is what stops it leaking an
+          // open socket nothing would ever close, and stops it silently overriding whatever a
+          // newer ensure() has since connected instead. The caller who started this attempt
+          // sees that rejection, since this `.then` handler settles their `ensure()` promise.
+          client.close();
+          throw new Error("The Shorthand app connection was disposed before this connect attempt finished.");
+        }
         this.#client = client;
         client.onClose(() => {
           // Only clear the slot if this is still the client that closed: dispose() may
@@ -47,8 +66,14 @@ export class AppConnection {
     return pending;
   }
 
-  /** Closes a live client and forgets it, so the next `ensure()` dials a fresh connection. */
+  /**
+   * Closes a live client and forgets it, so the next `ensure()` dials a fresh connection.
+   * Also invalidates any connect attempt already in flight (see `#generation`): its caller's
+   * `ensure()` promise rejects once that attempt resolves, instead of quietly handing back a
+   * client this connection no longer owns.
+   */
   dispose(): void {
+    this.#generation += 1;
     this.#client?.close();
     this.#client = undefined;
     this.#pending = undefined;
