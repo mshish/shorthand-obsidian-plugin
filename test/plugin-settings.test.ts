@@ -7,6 +7,7 @@ import {
   defaultTemplateSectionText,
   initialPromptFieldState,
   isEnhancementBackend,
+  llmProfileFromSettings,
   normalizePluginSettings,
   resolveScaffoldSections,
   resolveTemplateSections,
@@ -106,6 +107,10 @@ describe("plugin settings normalization", () => {
       assistedNotesNoteTakingGuidance: "  Build clear outlines.  ",
       templateSectionText: " Agenda \n\n Decisions ",
       followAppRecording: true,
+      llmProvider: "openai",
+      llmModel: "  gpt-5  ",
+      llmBaseUrl: "  https://gateway.example/v1  ",
+      appCredentialsMigrated: true,
     })).toEqual({
       backend: "llm",
       shorthandExecutable: "C:\\Apps\\shorthand.exe",
@@ -137,6 +142,10 @@ describe("plugin settings normalization", () => {
       assistedNotesNoteTakingGuidance: "Build clear outlines.",
       templateSectionText: "Agenda \n\n Decisions",
       followAppRecording: true,
+      llmProvider: "openai",
+      llmModel: "gpt-5",
+      llmBaseUrl: "https://gateway.example/v1",
+      appCredentialsMigrated: true,
     });
   });
 
@@ -707,5 +716,75 @@ describe("ACP settings normalization", () => {
     });
     expect(normalized.cursorExecutable).toBe("C:\\cursor.exe");
     expect(normalized.cursorModel).toBe("cursor-small");
+  });
+});
+
+describe("app-managed LLM settings normalization", () => {
+  // Defaults to "": the fields exist so migration and the (later) settings tab can write
+  // them, but a fresh install has no provider chosen and no legacy file to migrate.
+  test("defaults to no provider chosen and no migration performed", () => {
+    expect(DEFAULT_PLUGIN_SETTINGS).toMatchObject({
+      llmProvider: "",
+      llmModel: "",
+      llmBaseUrl: "",
+      appCredentialsMigrated: false,
+    });
+    expect(normalizePluginSettings({})).toMatchObject({
+      llmProvider: "",
+      llmModel: "",
+      llmBaseUrl: "",
+      appCredentialsMigrated: false,
+    });
+  });
+
+  test("rejects a provider id data.json did not actually ship", () => {
+    expect(normalizePluginSettings({ llmProvider: "nope" }).llmProvider).toBe("");
+  });
+
+  test("accepts every real provider id", () => {
+    const providerIds = ["openai", "anthropic", "ollama", "openai-compatible"] as const;
+    for (const llmProvider of providerIds) {
+      expect(normalizePluginSettings({ llmProvider }).llmProvider).toBe(llmProvider);
+    }
+  });
+
+  test("trims llmModel and llmBaseUrl", () => {
+    expect(normalizePluginSettings({ llmModel: "  gpt-5  " }).llmModel).toBe("gpt-5");
+    expect(normalizePluginSettings({ llmBaseUrl: "  https://gateway.example/v1  " }).llmBaseUrl)
+      .toBe("https://gateway.example/v1");
+  });
+
+  // appCredentialsMigrated gates a one-time migration (planCredentialMigration); a
+  // non-boolean stored value must not accidentally re-arm or skip it.
+  test("appCredentialsMigrated falls back to false for a non-boolean stored value", () => {
+    expect(normalizePluginSettings({ appCredentialsMigrated: "yes" }).appCredentialsMigrated).toBe(false);
+    expect(normalizePluginSettings({ appCredentialsMigrated: true }).appCredentialsMigrated).toBe(true);
+  });
+
+  test("llmProfileFromSettings reports both missing fields for the defaults", () => {
+    expect(llmProfileFromSettings(DEFAULT_PLUGIN_SETTINGS)).toEqual({ missing: ["provider", "model"] });
+  });
+
+  test("llmProfileFromSettings reports a missing base URL for openai-compatible", () => {
+    const settings = normalizePluginSettings({ llmProvider: "openai-compatible", llmModel: "local-model" });
+    expect(llmProfileFromSettings(settings)).toEqual({ missing: ["base URL"] });
+  });
+
+  test("llmProfileFromSettings returns a profile once every required field is present", () => {
+    const settings = normalizePluginSettings({ llmProvider: "openai", llmModel: "gpt-5" });
+    expect(llmProfileFromSettings(settings)).toEqual({ provider: "openai", model: "gpt-5" });
+  });
+
+  test("llmProfileFromSettings carries a filled base URL through as base_url", () => {
+    const settings = normalizePluginSettings({
+      llmProvider: "openai-compatible",
+      llmModel: "local-model",
+      llmBaseUrl: "https://gateway.example/v1",
+    });
+    expect(llmProfileFromSettings(settings)).toEqual({
+      provider: "openai-compatible",
+      model: "local-model",
+      base_url: "https://gateway.example/v1",
+    });
   });
 });
