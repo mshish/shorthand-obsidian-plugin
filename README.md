@@ -27,6 +27,8 @@ By default, Shorthand deletes recordings, transcripts, and AI agent sessions whe
 4. Open the note you want to update, then open **Shorthand panel** from the command palette or microphone ribbon icon.
 5. Choose **Meeting** for a conversation or **Assisted notes** for solo thinking. Stop from the panel or status bar when you are done.
 
+Requires Shorthand 0.5.0 or newer for the OpenAI, Anthropic, Ollama, OpenAI-compatible, and ACP network backends.
+
 The first start adds Shorthand's note section automatically. Turn off **Automatic note scaffolding** in settings if you prefer to approve it first.
 
 ## What you get
@@ -45,7 +47,7 @@ Shorthand checks its ownership markers before every update and preserves the exi
 - Shorthand transcribes locally and does not collect telemetry.
 - The plugin reads and updates your active note and an optional linked transcript. Claude Code may also search other notes in your vault when you choose that backend.
 - The selected AI backend receives the current note and transcript. Claude, Codex, Cursor, OpenAI, Anthropic, and compatible providers use the account or endpoint you configure; Ollama and other local endpoints can keep that traffic on your machine.
-- The plugin launches the local Shorthand and selected AI executables, and stores provider credentials outside the vault so vault sync does not copy secrets.
+- The plugin launches the local Shorthand and selected AI executables. Provider keys are stored by the Shorthand app in your operating system's credential store; the plugin never writes them to disk.
 
 ## Learn more
 

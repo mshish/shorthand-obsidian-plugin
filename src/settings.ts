@@ -9,9 +9,20 @@ import {
   type ClaudeEffort,
   type CodexAgentClientOptions,
   type CodexReasoningEffort,
+  type LlmProfile,
+  type LlmProviderId,
   type Section,
 } from "shorthand-core";
 import type { CaptureMode } from "./follow-policy.js";
+
+/**
+ * Every LLM provider id the settings tab can offer, and the one source `llmProvider`'s
+ * union and its normalizer both derive from — the same "derive, don't restate" discipline
+ * `ENHANCEMENT_BACKENDS` documents above, for the same reason: a hand-written literal
+ * comparison here could fall out of step with `LlmProviderId` and silently reject a
+ * provider core still accepts.
+ */
+const LLM_PROVIDER_IDS = ["openai", "anthropic", "ollama", "openai-compatible"] as const;
 
 /**
  * Every stored enhancement-backend identifier, and the one source the union below is derived
@@ -57,8 +68,30 @@ export type ShorthandPluginSettings = Readonly<{
   acpExecutable: string;
   acpArgs: string;
   acpNetworkUrl: string;
+  /**
+   * Legacy stdio-ACP secret. The Shorthand app now holds every provider secret in its own
+   * keyring (see `app-credentials.ts`), so after `appCredentialsMigrated` turns true this is
+   * always "" and no UI writes it — it stays in the type only so `normalizePluginSettings`
+   * keeps validating whatever an older `data.json` still has here, long enough to migrate it.
+   */
   acpAuthToken: string;
   acpModel: string;
+  /** Blank means no provider chosen yet; see `llmProfileFromSettings`. */
+  llmProvider: LlmProviderId | "";
+  /** Blank means no model chosen yet, independent of provider. */
+  llmModel: string;
+  /**
+   * Overrides the provider's fixed default endpoint. Blank means "use the provider's own
+   * default" — required for `openai-compatible`, which names no endpoint of its own.
+   */
+  llmBaseUrl: string;
+  /**
+   * Whether the one-time move of secrets out of `data.json` and the legacy
+   * `llm-credentials.json` file, into the Shorthand app's keyring, has already run. Sticky
+   * once true: re-running the migration after the user has since cleared a field would look
+   * like data reappearing from nowhere.
+   */
+  appCredentialsMigrated: boolean;
   sidecarDirectory: string;
   minNewChars: number;
   minIntervalMs: number;
@@ -136,6 +169,10 @@ export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
   acpNetworkUrl: "",
   acpAuthToken: "",
   acpModel: "",
+  llmProvider: "",
+  llmModel: "",
+  llmBaseUrl: "",
+  appCredentialsMigrated: false,
   sidecarDirectory: DEFAULT_CONFIG.sidecarDirectory.replaceAll("\\", "/"),
   minNewChars: DEFAULT_CONFIG.thresholds.enhancementNewCharacters,
   minIntervalMs: DEFAULT_CONFIG.thresholds.enhancementIntervalMs,
@@ -177,6 +214,12 @@ export function normalizePluginSettings(input: unknown): ShorthandPluginSettings
     acpNetworkUrl: stringValue(value.acpNetworkUrl, DEFAULT_PLUGIN_SETTINGS.acpNetworkUrl),
     acpAuthToken: stringValue(value.acpAuthToken, DEFAULT_PLUGIN_SETTINGS.acpAuthToken),
     acpModel: stringValue(value.acpModel, DEFAULT_PLUGIN_SETTINGS.acpModel),
+    llmProvider: enumValue(value.llmProvider, LLM_PROVIDER_IDS, DEFAULT_PLUGIN_SETTINGS.llmProvider),
+    llmModel: stringValue(value.llmModel, DEFAULT_PLUGIN_SETTINGS.llmModel),
+    llmBaseUrl: stringValue(value.llmBaseUrl, DEFAULT_PLUGIN_SETTINGS.llmBaseUrl),
+    appCredentialsMigrated: typeof value.appCredentialsMigrated === "boolean"
+      ? value.appCredentialsMigrated
+      : DEFAULT_PLUGIN_SETTINGS.appCredentialsMigrated,
     sidecarDirectory: vaultRelativeDirectory(value.sidecarDirectory, DEFAULT_PLUGIN_SETTINGS.sidecarDirectory),
     minNewChars: finiteInteger(value.minNewChars, DEFAULT_PLUGIN_SETTINGS.minNewChars, 1),
     // The plugin UI deliberately has a ten-second floor: starting an agent pass more often
@@ -230,6 +273,30 @@ export function codexAgentOptions(
     ...(settings.codexModel.length === 0 ? {} : { model: settings.codexModel }),
     ...(settings.codexEffort === "" ? {} : { modelReasoningEffort: settings.codexEffort }),
     retainSessionHistory: settings.retainAgentSessionHistory,
+  };
+}
+
+/**
+ * Whether the stored LLM fields are enough to build a request: a provider, a model, and
+ * — for `openai-compatible` only, which names no fixed endpoint — a base URL. Returns the
+ * profile itself rather than a boolean so a caller with a valid profile never has to read
+ * the fields back off `settings` a second time; `missing` names every absent field at once,
+ * rather than the first one found, so the settings tab can flag them all in a single pass.
+ */
+export function llmProfileFromSettings(
+  settings: ShorthandPluginSettings,
+): LlmProfile | { missing: readonly string[] } {
+  const missing: string[] = [];
+  if (settings.llmProvider === "") missing.push("provider");
+  if (settings.llmModel.length === 0) missing.push("model");
+  if (settings.llmProvider === "openai-compatible" && settings.llmBaseUrl.length === 0) {
+    missing.push("base URL");
+  }
+  if (missing.length > 0) return { missing };
+  return {
+    provider: settings.llmProvider as LlmProviderId,
+    model: settings.llmModel,
+    ...(settings.llmBaseUrl.length > 0 ? { base_url: settings.llmBaseUrl } : {}),
   };
 }
 

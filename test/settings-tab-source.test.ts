@@ -29,7 +29,6 @@ describe("the settings tab", () => {
     expect(source).toContain('"ACP executable"');
     expect(source).toContain('"ACP arguments"');
     expect(source).toContain('"ACP network URL"');
-    expect(source).toContain('"ACP authentication token"');
     expect(source).toContain('"acpTransport"');
     expect(source).toContain('"acpExecutable"');
   });
@@ -40,5 +39,43 @@ describe("the settings tab", () => {
     expect(source).toContain('"Cursor CLI model"');
     expect(source).toContain('"Cursor CLI executable"');
     expect(source).toContain('"cursorExecutable"');
+  });
+
+  /**
+   * Every provider secret now lives in the Shorthand app's keyring, not `data.json` (see
+   * `src/app-credentials.ts`). `writeLlmCredentials` and `LlmProfileEditor` are the
+   * writer-based UI that used to own that file directly; their presence here would mean a
+   * credential path core no longer supports is still reachable from the settings tab.
+   */
+  test("does not write credentials directly, and the old writer-based profile editor is gone", () => {
+    const source = readFileSync(resolve(process.cwd(), "main.ts"), "utf8");
+    expect(source).not.toContain("writeLlmCredentials");
+    expect(source).not.toContain("LlmProfileEditor");
+  });
+
+  /**
+   * `acpAuthToken` survives in `ShorthandPluginSettings` only so `normalizePluginSettings` can
+   * keep validating an older `data.json` long enough for the one-time migration to read it —
+   * see the field's own doc comment in `src/settings.ts`. A second reference anywhere else in
+   * `main.ts` would mean some other code path still treats it as live, rather than as a value
+   * on its way to being cleared and forgotten.
+   */
+  test("acpAuthToken is read only by the one-time credential migration", () => {
+    const source = readFileSync(resolve(process.cwd(), "main.ts"), "utf8");
+    const occurrences = source.split("acpAuthToken").length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  test('declares one write-only "API key" row, shared by the LLM profile and the ACP network transport', () => {
+    const source = readFileSync(resolve(process.cwd(), "main.ts"), "utf8");
+    expect(source).toContain('"API key"');
+    expect(source).not.toContain('"ACP authentication token"');
+  });
+
+  test("declares provider, model and base URL as plain controls bound to their settings keys", () => {
+    const source = readFileSync(resolve(process.cwd(), "main.ts"), "utf8");
+    expect(source).toContain('key: "llmProvider"');
+    expect(source).toContain('key: "llmModel"');
+    expect(source).toContain('key: "llmBaseUrl"');
   });
 });

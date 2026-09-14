@@ -260,24 +260,31 @@ describe("effortNeedsModelDescription", () => {
 });
 
 describe("apiKeyDescription", () => {
-  const semantics = "Blank keeps the stored key, a new value replaces it, and Clear key removes it.";
+  const semantics = "Blank keeps it, a new value replaces it, and Clear key removes it.";
 
-  test("a stored key explains what blank does to it, because the field cannot show it", () => {
-    expect(apiKeyDescription("stored")).toBe(`A key is stored. ${semantics}`);
+  test("a configured key explains what blank does to it, because the field cannot show it", () => {
+    expect(apiKeyDescription("configured")).toBe(`A key is saved in the Shorthand app. ${semantics}`);
   });
 
-  test("the states that can take none of those three actions offer none of them", () => {
-    // Nothing stored: blank keeps nothing and Clear key removes nothing. Unreadable profile:
-    // renderMalformed disables the field and the Clear key button before setting this
-    // description, so all three are unavailable while the sentence is on screen.
-    expect(apiKeyDescription("absent")).toBe("No key is stored.");
-    expect(apiKeyDescription("unknown")).toBe("The stored key cannot be read.");
+  test("no key saved names the state plainly", () => {
+    expect(apiKeyDescription("missing")).toBe("No key is saved.");
+  });
+
+  test("the OS keyring itself being unavailable is a device problem, not a missing key", () => {
+    expect(apiKeyDescription("unavailable")).toBe("Secure storage is unavailable on this device.");
+  });
+
+  test("the app being unreachable surfaces the message already resolved for that case", () => {
+    expect(apiKeyDescription({ appUnavailable: "Open Shorthand to use AI enhancement." }))
+      .toBe("Open Shorthand to use AI enhancement.");
   });
 
   test("ollama requires no API key regardless of state", () => {
-    expect(apiKeyDescription("absent", "ollama")).toBe("No API key is needed for local Ollama.");
-    expect(apiKeyDescription("stored", "ollama")).toBe("No API key is needed for local Ollama.");
-    expect(apiKeyDescription("unknown", "ollama")).toBe("No API key is needed for local Ollama.");
+    expect(apiKeyDescription("missing", "ollama")).toBe("No API key is needed for local Ollama.");
+    expect(apiKeyDescription("configured", "ollama")).toBe("No API key is needed for local Ollama.");
+    expect(apiKeyDescription("unavailable", "ollama")).toBe("No API key is needed for local Ollama.");
+    expect(apiKeyDescription({ appUnavailable: "Open Shorthand to use AI enhancement." }, "ollama"))
+      .toBe("No API key is needed for local Ollama.");
   });
 });
 

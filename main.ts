@@ -8,19 +8,20 @@ import {
   PluginSettingTab,
   Setting,
   setIcon,
-  requestUrl,
   type App,
   type ButtonComponent,
   type DropdownComponent,
   type TFile,
   normalizePath,
   type Editor,
+  type SettingDefinition,
   type SettingDefinitionControl,
   type SettingDefinitionItem,
   type TextComponent,
   type WorkspaceLeaf,
 } from "obsidian";
 import { existsSync } from "node:fs";
+import { rm } from "node:fs/promises";
 // Core is consumed by package name through its `exports` map — never a deep path.
 // It is a separate repository (mshish/shorthand-core), pinned by tag in package.json.
 import {
@@ -32,6 +33,8 @@ import {
   DEFAULT_ASSISTED_NOTES_EDITORIAL_GUIDANCE,
   DEFAULT_MEETING_EDITORIAL_GUIDANCE,
   MAX_USER_NAME_CHARACTERS,
+  createAppFetch,
+  createAppWebSocketConstructor,
   detectClaudeExecutable,
   detectCodexExecutable,
   detectCursorExecutable,
@@ -45,18 +48,22 @@ import {
   LlmAgentClient,
   llmCredentialsPath,
   readLlmCredentials,
+  ShorthandAppClient,
   ShorthandControl,
   SidecarWriter,
   StreamClient,
   TranscriptStore,
   enhancementDelta,
   type AgentCatalog,
+  type AppClientLike,
+  type AppCredentialSlot,
   type ControlResult,
   type ControlSignal,
   type EnhanceStatus,
   type ExitDiagnosis,
   type KnownRefusalReason,
   type KnownStartFailureCode,
+  type LlmProviderId,
   type PassOutcome,
 } from "shorthand-core";
 import {
@@ -76,6 +83,7 @@ import {
   codexAgentOptions,
   defaultTemplateSectionText,
   initialPromptFieldState,
+  llmProfileFromSettings,
   normalizePluginSettings,
   resolveScaffoldSections,
   storedPromptFieldValue,
@@ -84,9 +92,16 @@ import {
   type ShorthandPluginSettings,
 } from "./src/settings.js";
 import {
+  APP_NOT_RUNNING_MESSAGE,
+  acpSlot,
+  appUnavailableMessage,
+  llmSlot,
+  vaultIdFor,
+} from "./src/app-credentials.js";
+import { AppConnection, runCredentialMigration } from "./src/app-connection.js";
+import { credentialRowState, type CredentialRowOutcome } from "./src/credential-row.js";
+import {
   acpExecutableDescription,
-  apiKeyDescription,
-  baseUrlDescription,
   catalogFetchFailedDescription,
   catalogLoadingDescription,
   claudeExecutableDescription,
@@ -100,7 +115,6 @@ import {
   transcriptFolderDescription,
   type AgentBackendLabel,
   type CatalogRowDecision,
-  type StoredKeyState,
 } from "./src/settings-display.js";
 import {
   INITIAL_PLUGIN_STATE,
@@ -134,9 +148,6 @@ import {
 } from "./src/capture-log.js";
 import { describeStatus } from "./src/status-text.js";
 import { describePanel, SHORTHAND_PANEL_VIEW, type PanelButtonId, type PanelModel } from "./src/panel-model.js";
-import { createRequestUrlFetch } from "./src/request-url-fetch.js";
-import { deleteLlmCredentials, writeLlmCredentials } from "./src/llm-credentials-writer.js";
-import { LlmProfileCommitQueue } from "./src/llm-profile-commit-queue.js";
 import { ObsidianNoteSink } from "./src/obsidian-note-sink.js";
 import { ObsidianSidecarStore } from "./src/obsidian-sidecar-store.js";
 import {
@@ -144,12 +155,6 @@ import {
   preflightMarkers,
   scaffoldAfterPreflight,
 } from "./src/obsidian-note-setup.js";
-import {
-  EMPTY_LLM_PROFILE_DRAFT,
-  missingLlmProfileFields,
-  resolveLlmProfileReadState,
-  type LlmProfileDraft,
-} from "./src/llm-profile-draft.js";
 
 /**
  * Shorthand's follower needs a moment after spawn before Shorthand's events reach it, and the
@@ -449,9 +454,24 @@ export default class ShorthandPlugin extends Plugin {
    * `PENDING_ATTACH_BUFFER_CAP`'s own comment for why "unbounded" is not safe either.
    */
   #idlePendingAttachBuffer: PendingAttachBuffer = EMPTY_PENDING_ATTACH_BUFFER;
+  /**
+   * The one connection to the Shorthand app's request socket, shared by the credential
+   * migration, the LLM backend, and an ACP network transport — see `AppConnection`'s own
+   * doc comment for why a single shared client beats one per caller.
+   */
+  readonly #appConnection: AppConnection = new AppConnection(() => ShorthandAppClient.connect());
+
+  /** Lets the settings tab's "API key" row share the same connection every other caller uses. */
+  get appConnection(): AppConnection {
+    return this.#appConnection;
+  }
 
   async onload(): Promise<void> {
     this.settings = normalizePluginSettings(await this.loadData());
+    // Depends on the app being open, which onload itself must not block on: a plugin that
+    // cannot finish loading until Shorthand starts would break every command that has
+    // nothing to do with provider secrets.
+    void this.migrateCredentials();
     this.#statusBar = this.addStatusBarItem();
     // Clickable, and stop-only. The item is hidden while idle (see describeStatus),
     // so there is never a moment where a click could mean "start" — starting lives on
@@ -567,6 +587,50 @@ export default class ShorthandPlugin extends Plugin {
   onunload(): void {
     this.stopIdleFollower();
     this.forceStopCapture();
+    this.#appConnection.dispose();
+  }
+
+  /**
+   * Moves any secret still in `data.json` or the legacy `llm-credentials.json` file into the
+   * Shorthand app's keyring, then marks the move done — see `runCredentialMigration`'s own
+   * doc comment for the ordering guarantee. Silent on `"skipped"`, since that is every load
+   * after the first successful one. `"deferred"` (the app was not open) only tells the user
+   * anything when there was actually a secret waiting to move — an empty settings file
+   * deferring silently forever is the expected, permanent state for a user who has never
+   * configured a provider key.
+   *
+   * Called `void`d from `onload` (nothing there awaits it), so a rejection this method does
+   * not catch itself becomes an unhandled promise rejection with no user-facing message at
+   * all — a plausible failure here, since `runCredentialMigration` rethrows anything that
+   * is not `AppUnavailableError` (a rejected `setCredential`, `deleteLegacy`'s `rm`, or
+   * `saveSettings`). The catch names the failure without ever formatting a secret into it:
+   * every value this method or its dependencies can throw about is a path, a status code or
+   * an error message, never the credential itself.
+   */
+  private async migrateCredentials(): Promise<void> {
+    const credentialsPath = llmCredentialsPath();
+    const legacyFileExisted = existsSync(credentialsPath);
+    const hadAcpToken = this.settings.acpAuthToken.length > 0;
+    try {
+      const result = await runCredentialMigration({
+        settings: this.settings,
+        vaultId: this.vaultId(),
+        readLegacy: async () => {
+          const read = await readLlmCredentials(credentialsPath);
+          return read.ok ? read.value : undefined;
+        },
+        deleteLegacy: () => rm(credentialsPath, { force: true }),
+        connection: this.#appConnection,
+        save: (patch) => this.saveSettings({ ...this.settings, ...patch }),
+      });
+      if (result === "done") {
+        new Notice("Shorthand: provider keys moved to the Shorthand app.");
+      } else if (result === "deferred" && (legacyFileExisted || hadAcpToken)) {
+        new Notice(`${APP_NOT_RUNNING_MESSAGE} Provider keys will move on the next load.`);
+      }
+    } catch (error) {
+      new Notice(`Shorthand: provider keys could not be moved to the Shorthand app: ${errorMessage(error)}`, 10_000);
+    }
   }
 
   async saveSettings(candidate: unknown): Promise<void> {
@@ -1435,11 +1499,20 @@ export default class ShorthandPlugin extends Plugin {
         if (url.length === 0) {
           throw new Error("ACP network URL is required when using network transport. Configure the URL in Shorthand settings.");
         }
+        // The agent's own token, if any, lives in the app's keyring under this slot — see
+        // acpSlot's doc comment. Core never sees it: the app attaches it on its side of the
+        // fetch/WebSocket shims below.
+        const slot = acpSlot(this.vaultId(), url);
+        if (slot === undefined) {
+          throw new Error(`"${url}" is not a valid ACP network URL. Update it in Shorthand settings.`);
+        }
+        const client = await this.connectToApp();
         agent = new AcpAgentClient({
           transport: {
             type: "network",
             url,
-            ...(this.settings.acpAuthToken.length === 0 ? {} : { authToken: this.settings.acpAuthToken }),
+            fetch: createAppFetch(client, slot),
+            WebSocket: createAppWebSocketConstructor(client, slot),
           },
           ...(this.settings.acpModel.length === 0 ? {} : { model: this.settings.acpModel }),
         });
@@ -1464,13 +1537,18 @@ export default class ShorthandPlugin extends Plugin {
         });
       }
     } else {
-      const credentialsPath = llmCredentialsPath();
-      const credentials = await readLlmCredentials(credentialsPath);
-      if (!credentials.ok) throw new Error(credentials.message);
+      const profile = llmProfileFromSettings(this.settings);
+      if ("missing" in profile) {
+        throw new Error(`LLM provider profile is missing: ${profile.missing.join(", ")}.`);
+      }
+      const slot = llmSlot(this.settings);
+      if (slot === undefined) {
+        throw new Error("The LLM provider profile does not resolve to a request endpoint. Check the base URL in Shorthand settings.");
+      }
+      const client = await this.connectToApp();
       agent = new LlmAgentClient({
-        credentials: credentials.value,
-        credentialsPath,
-        fetch: createRequestUrlFetch(requestUrl),
+        profile,
+        fetch: createAppFetch(client, slot),
       });
     }
     // Snapshotted, not read live: core takes traceMachine once at construction, so reading
@@ -1792,6 +1870,31 @@ export default class ShorthandPlugin extends Plugin {
   }
 
   /**
+   * Identifies this vault to the Shorthand app's keyring (`vaultIdFor`), without `vaultRoot`'s
+   * Notice: computing an id is not itself a user action that failed, and every ACP-network
+   * call that actually needs one already fails on its own missing slot when a non-desktop
+   * adapter leaves this hashing an empty path.
+   */
+  vaultId(): string {
+    const adapter = this.app.vault.adapter;
+    return vaultIdFor(adapter instanceof FileSystemAdapter ? adapter.getBasePath() : "");
+  }
+
+  /**
+   * `ensure()`'s connection failures are `AppUnavailableError` almost always; this is the one
+   * place that turns that into copy a user can act on, so `createEnhancer`'s two call sites
+   * (the LLM backend and an ACP network transport) do not each repeat the mapping.
+   */
+  private async connectToApp(): Promise<AppClientLike> {
+    try {
+      return await this.#appConnection.ensure();
+    } catch (error) {
+      const message = appUnavailableMessage(error);
+      throw message === undefined ? error : new Error(message);
+    }
+  }
+
+  /**
    * One line per capture lifecycle event, when Debug logging is on. `console.debug`, like
    * `onEnhanceStatus`'s trace, so the two halves of a capture read as one stream in the
    * developer console. Silent otherwise: this fires several times per capture and once per
@@ -1937,14 +2040,6 @@ class ShorthandSettingTab extends PluginSettingTab {
    */
   #effortRows: Map<"claude" | "codex", { row: Setting; dropdown: DropdownComponent }> = new Map();
 
-  /**
-   * The editor behind the five "LLM provider profile" rows, created by the status row's
-   * `render` and attached to by the four field rows' renders (see `llmProfileGroup`). Same
-   * constraint as `#effortRows`: the fields have to be declared items, so their shared state
-   * lives here rather than in one row's closure.
-   */
-  #llmProfile: LlmProfileEditor | undefined;
-
   constructor(app: App, private readonly plugin: ShorthandPlugin) {
     super(app, plugin);
   }
@@ -1952,12 +2047,13 @@ class ShorthandSettingTab extends PluginSettingTab {
   /**
    * Called on every re-render and once more when the tab is registered, purely to index its
    * rows for Obsidian's settings search — so this must stay a plain, side-effect-free read of
-   * current settings. The agent catalog fetch and the LLM credential read are the two things
-   * here that are neither: both sit inside a `render` callback (see `agentCatalogItem` and
-   * `llmProfileGroup`), which Obsidian never invokes for the search-indexing pass. `render`
-   * *does* run for every declared row on a display pass, including rows in a group whose
-   * `visible` is false — visibility is applied afterwards, as CSS — so each of those callbacks
-   * also checks the selected backend itself before spawning or reading anything.
+   * current settings. The agent catalog fetch and the "API key" row's `credentialStatus` read
+   * are the two things here that are neither: both sit inside a `render` callback (see
+   * `agentCatalogItem` and `credentialKeyRow`), which Obsidian never invokes for the
+   * search-indexing pass. `render` *does* run for every declared row on a display pass,
+   * including rows in a group whose `visible` is false — visibility is applied afterwards, as
+   * CSS — so each of those callbacks also checks the selected backend (or transport) itself
+   * before spawning or reading anything.
    */
   getSettingDefinitions(): SettingDefinitionItem<SettingsKey>[] {
     return [
@@ -2413,10 +2509,21 @@ class ShorthandSettingTab extends PluginSettingTab {
           visible: () => this.plugin.settings.acpTransport === "network",
         },
         {
-          name: "ACP authentication token",
-          desc: "Optional authentication token for the remote agent.",
-          control: { type: "text", key: "acpAuthToken" },
-          visible: () => this.plugin.settings.acpTransport === "network",
+          ...this.credentialKeyRow(
+            () => acpSlot(this.plugin.vaultId(), this.plugin.settings.acpNetworkUrl),
+            () => "",
+            () => this.plugin.settings.backend === "acp"
+              && this.plugin.settings.acpTransport === "network"
+              && this.plugin.settings.acpNetworkUrl.trim().length > 0,
+          ),
+          // Only offered once there is a URL to derive a slot from: an empty field has
+          // nowhere for a key to be stored under yet, the same reason the URL row itself
+          // requires network transport. Also gated on the backend itself — otherwise a user
+          // on the llm backend with a leftover network transport and URL from a previous ACP
+          // session would still trigger an app status read from a row nobody can see.
+          visible: () => this.plugin.settings.backend === "acp"
+            && this.plugin.settings.acpTransport === "network"
+            && this.plugin.settings.acpNetworkUrl.trim().length > 0,
         },
       ],
     };
@@ -2511,20 +2618,10 @@ class ShorthandSettingTab extends PluginSettingTab {
    * "LLM provider profile"'s heading and its introductory sentence are two separate items for
    * the same reason `noteWritingGroup()` splits them — `SettingDefinitionGroup` has no `desc`.
    *
-   * The status row and the four fields are five declared items sharing one `LlmProfileEditor`
-   * through `#llmProfile` — not one `render` that appends the fields via `group.addSetting`,
-   * which 0.6.0–0.6.9 did and which left the group with only its status row: Obsidian resets a
-   * group's `listEl` to its declared rows once they are rendered (see `#effortRows`). The
-   * status row's `render` creates the editor and starts the credential-file read; each field's
-   * `render` attaches its controls. Obsidian renders sibling items in declaration order,
-   * synchronously, so every field is attached before that read can resolve — which is the
-   * ordering `LlmProfileEditor`'s definite-assignment fields rely on.
-   *
-   * The read stays behind `render` for the reasons `agentCatalogItem` gives, and with the same
-   * caveat: `render` runs for this group even while the `llm` backend is not selected, so the
-   * read is skipped unless it is. `dispose()` (called from the status row's cleanup) stands in
-   * for the old `#displayGeneration` guard so a read or write that resolves after these rows
-   * are torn down cannot write into them.
+   * Provider, Model and Base URL are plain declarative controls now that no secret lives in
+   * `data.json` to validate as a unit before writing: each commits on its own, the way any
+   * other text or dropdown row does. Only the API key row stays imperative — see
+   * `credentialKeyRow`.
    */
   private llmProfileGroup(): SettingDefinitionItem<SettingsKey> {
     return {
@@ -2532,39 +2629,155 @@ class ShorthandSettingTab extends PluginSettingTab {
       heading: "LLM provider profile",
       visible: () => this.plugin.settings.backend === "llm",
       items: [
-        { name: "", desc: "The API key is stored outside your vault, so it never syncs." },
         {
-          name: "Profile status",
-          desc: "Loading the provider profile…",
-          render: (statusSetting) => {
-            const editor = new LlmProfileEditor(() => this.update());
-            this.#llmProfile = editor;
-            editor.attachStatus(statusSetting);
-            if (this.plugin.settings.backend === "llm") editor.load();
-            return () => {
-              editor.dispose();
-              if (this.#llmProfile === editor) this.#llmProfile = undefined;
-            };
-          },
+          name: "",
+          desc: "Provider keys are stored by the Shorthand app in your system's credential store and never enter your vault.",
         },
         {
           name: "Provider",
-          render: (row) => { this.#llmProfile?.attachProvider(row); },
+          control: {
+            type: "dropdown",
+            key: "llmProvider",
+            options: {
+              "": "No provider chosen",
+              openai: "OpenAI",
+              anthropic: "Anthropic",
+              ollama: "Ollama",
+              "openai-compatible": "OpenAI-compatible",
+            },
+          },
         },
         {
           name: "Model",
           desc: "Model IDs are exact strings, not display names.",
-          render: (row) => { this.#llmProfile?.attachModel(row); },
+          control: { type: "text", key: "llmModel" },
         },
         {
           name: "Base URL",
-          render: (row) => { this.#llmProfile?.attachBaseUrl(row); },
+          desc: "Required for OpenAI-compatible endpoints. Optional gateway URL for the others.",
+          control: { type: "text", key: "llmBaseUrl" },
         },
-        {
-          name: "API key",
-          render: (row) => { this.#llmProfile?.attachApiKey(row); },
-        },
+        this.credentialKeyRow(
+          () => llmSlot(this.plugin.settings),
+          () => this.plugin.settings.llmProvider,
+          () => this.plugin.settings.backend === "llm",
+        ),
       ],
+    };
+  }
+
+  /**
+   * The write-only "API key" row, shared by the LLM provider profile and the ACP network
+   * transport: a password field that commits on blur via `setCredential`, and a "Clear key"
+   * button via `clearCredential`, both reached through the plugin's one `AppConnection` (see
+   * its own doc comment for why every caller shares a client). `credential-row.ts` owns the
+   * decision — what the description says, whether the controls accept input — so this is only
+   * the DOM wiring and the three calls (`credentialStatus`, `setCredential`, `clearCredential`)
+   * `getSettingDefinitions()` itself must never make.
+   *
+   * `getSlot` and `getProvider` are read fresh on every call, including from inside the blur
+   * and click handlers, rather than captured once: the row outlives a single value of either.
+   * `getProvider` returns `""` for the ACP row — enough for `apiKeyDescription` to skip its
+   * ollama-only branch and nothing else, since an ACP token is not an LLM key.
+   *
+   * `shouldFetch` mirrors the check every other imperative row in this file makes for itself
+   * (see the "ACP model" row above): `render` runs for a group's declared items even while the
+   * group's own `visible` is false — visibility is CSS applied afterwards — so without this
+   * gate, editing an unrelated backend's settings would still open a connection to the app and
+   * read a slot's credential status for a row nobody can see.
+   */
+  private credentialKeyRow(
+    getSlot: () => AppCredentialSlot | undefined,
+    getProvider: () => LlmProviderId | "",
+    shouldFetch: () => boolean,
+  ): SettingDefinition<SettingsKey> {
+    return {
+      name: "API key",
+      desc: "Checking the Shorthand app…",
+      render: (row) => {
+        let disposed = false;
+        let keyInput!: TextComponent;
+        let clearButton!: ButtonComponent;
+        // Pointerdown on Clear key fires before the password field's blur. Without this,
+        // clicking Clear while a freshly typed key still sits in the field would commit that
+        // typed value via setCredential and only then clear it — briefly writing, then
+        // discarding, a secret the user was trying to remove rather than rotate.
+        let suppressBlurCommit = false;
+
+        const applyOutcome = (outcome: CredentialRowOutcome): void => {
+          if (disposed) return;
+          const state = credentialRowState(outcome, getProvider());
+          row.setDesc(state.description);
+          keyInput.setDisabled(state.fieldsDisabled);
+          clearButton.setDisabled(state.clearDisabled);
+        };
+
+        row.addText((text) => {
+          keyInput = text.setDisabled(true);
+          text.inputEl.type = "password";
+          text.inputEl.addEventListener("blur", () => {
+            if (suppressBlurCommit) return;
+            const value = keyInput.getValue();
+            if (value.length === 0) return;
+            const slot = getSlot();
+            if (slot === undefined) return;
+            void this.plugin.appConnection.ensure()
+              .then((client) => client.setCredential(slot, value))
+              .then(() => {
+                keyInput.setValue("");
+                applyOutcome({ kind: "status", status: "configured" });
+              })
+              .catch((error: unknown) => {
+                if (disposed) return;
+                row.setDesc(`The key could not be saved: ${errorMessage(error)}`);
+              });
+          });
+        }).addButton((button) => {
+          clearButton = button.setButtonText("Clear key").setDisabled(true).onClick(() => {
+            const slot = getSlot();
+            if (slot === undefined) return;
+            void this.plugin.appConnection.ensure()
+              .then((client) => client.clearCredential(slot))
+              .then(() => {
+                keyInput.setValue("");
+                applyOutcome({ kind: "status", status: "missing" });
+              })
+              .catch((error: unknown) => {
+                if (disposed) return;
+                row.setDesc(`The key could not be cleared: ${errorMessage(error)}`);
+              });
+          });
+          button.buttonEl.addEventListener("pointerdown", () => {
+            suppressBlurCommit = true;
+            keyInput.setValue("");
+            // The blur this pointerdown precedes has fired by the next tick at the latest;
+            // resetting here rather than after the click lets a later, unrelated blur (the
+            // user tabs away without retyping) commit normally.
+            window.setTimeout(() => { suppressBlurCommit = false; }, 0);
+          });
+        });
+
+        if (!shouldFetch()) {
+          keyInput.setDisabled(true);
+          clearButton.setDisabled(true);
+          return () => { disposed = true; };
+        }
+
+        const slot = getSlot();
+        if (slot === undefined) {
+          row.setDesc("Choose a provider above to manage its key.");
+          keyInput.setDisabled(true);
+          clearButton.setDisabled(true);
+          return () => { disposed = true; };
+        }
+
+        void this.plugin.appConnection.ensure()
+          .then((client) => client.credentialStatus([slot]))
+          .then((statuses) => { applyOutcome({ kind: "status", status: statuses[0] ?? "missing" }); })
+          .catch((error: unknown) => { applyOutcome({ kind: "error", error }); });
+
+        return () => { disposed = true; };
+      },
     };
   }
 }
@@ -2593,258 +2806,21 @@ function applyCatalogDecision(dropdown: DropdownComponent, row: Setting, decisio
 }
 
 /**
- * The imperative state behind the "LLM provider profile" rows: the draft, the stored key, the
- * commit queue, and the controls each of the five declared rows hands over through its
- * `attach*` call (see `ShorthandSettingTab.llmProfileGroup`). One instance per render of the
- * status row; `dispose()` fences off every callback that could land after the rows are gone.
- *
- * The control fields are definite-assignment rather than optional because every `attach*` call
- * happens synchronously, in declaration order, before `load()`'s read can resolve — Obsidian
- * renders a group's items in one pass — and reading one before then is a programming error
- * this class would rather surface than paper over with an `undefined` check per line.
- */
-class LlmProfileEditor {
-  #disposed = false;
-  #draft: LlmProfileDraft = EMPTY_LLM_PROFILE_DRAFT;
-  #storedKey = "";
-  #ready = false;
-  #commitQueue: LlmProfileCommitQueue | undefined;
-  #clearKeyPointerDown = false;
-  readonly #credentialsPath = llmCredentialsPath();
-  readonly #credentialsFileExisted = existsSync(this.#credentialsPath);
-
-  #statusSetting!: Setting;
-  #startOverButton!: ButtonComponent;
-  #providerSetting!: Setting;
-  #providerInput!: DropdownComponent;
-  #modelSetting!: Setting;
-  #modelInput!: TextComponent;
-  #baseUrlSetting!: Setting;
-  #baseUrlInput!: TextComponent;
-  #apiKeySetting!: Setting;
-  #apiKeyInput!: TextComponent;
-  #clearKeyButton!: ButtonComponent;
-
-  /** `rebuildTab` is the tab's `update()`: Discard file rebuilds every row from a clean read. */
-  constructor(private readonly rebuildTab: () => void) {}
-
-  attachStatus(setting: Setting): void {
-    this.#statusSetting = setting;
-    setting.addButton((button) => {
-      this.#startOverButton = button
-        .setButtonText("Discard file")
-        .setDestructive()
-        .onClick(() => { void this.#startOver(); });
-      button.buttonEl.hide();
-    });
-  }
-
-  attachProvider(row: Setting): void {
-    this.#providerSetting = row;
-    row.addDropdown((dropdown) => {
-      this.#providerInput = dropdown
-        .addOption("", "No provider chosen")
-        .addOption("openai", "OpenAI")
-        .addOption("anthropic", "Anthropic")
-        .addOption("ollama", "Ollama")
-        .addOption("openai-compatible", "OpenAI-compatible")
-        .setDisabled(true)
-        .onChange((value) => {
-          if (value !== "" && value !== "openai" && value !== "anthropic" && value !== "ollama" && value !== "openai-compatible") return;
-          this.#draft = { ...this.#draft, provider: value };
-          this.#commitQueue?.acceptEdit(this.#draft);
-          this.#showDraftStatus();
-        });
-      dropdown.selectEl.addEventListener("blur", () => { void this.#commitDraft(); });
-    });
-  }
-
-  attachModel(row: Setting): void {
-    this.#modelSetting = row;
-    row.addText((text) => {
-      this.#modelInput = text.setDisabled(true).onChange((value) => {
-        this.#draft = { ...this.#draft, model: value };
-        this.#commitQueue?.acceptEdit(this.#draft);
-        this.#showDraftStatus();
-      });
-      text.inputEl.addEventListener("blur", () => { void this.#commitDraft(); });
-    });
-  }
-
-  attachBaseUrl(row: Setting): void {
-    this.#baseUrlSetting = row.setDesc(baseUrlDescription(this.#draft.provider));
-    row.addText((text) => {
-      this.#baseUrlInput = text.setDisabled(true).onChange((value) => {
-        this.#draft = { ...this.#draft, base_url: value };
-        this.#commitQueue?.acceptEdit(this.#draft);
-        this.#showDraftStatus();
-      });
-      text.inputEl.addEventListener("blur", () => { void this.#commitDraft(); });
-    });
-  }
-
-  attachApiKey(row: Setting): void {
-    this.#apiKeySetting = row;
-    row
-      .addText((text) => {
-        this.#apiKeyInput = text.setDisabled(true).onChange((value) => {
-          // The rendered field stays blank for a loaded secret. An empty edit therefore
-          // restores the carried key; otherwise deleting masked text would clear it by
-          // accident.
-          this.#draft = { ...this.#draft, api_key: value.length === 0 ? this.#storedKey : value };
-          this.#commitQueue?.acceptEdit(this.#draft);
-          this.#showDraftStatus();
-        });
-        text.inputEl.type = "password";
-        text.inputEl.addEventListener("blur", () => {
-          if (!this.#clearKeyPointerDown) void this.#commitDraft();
-        });
-      })
-      .addButton((button) => {
-        this.#clearKeyButton = button
-          .setButtonText("Clear key")
-          .setDisabled(true)
-          .onClick(() => {
-            this.#draft = { ...this.#draft, api_key: "" };
-            this.#apiKeyInput.setValue("");
-            this.#commitQueue?.acceptEdit(this.#draft);
-            this.#clearKeyPointerDown = false;
-            this.#showDraftStatus();
-            void this.#commitDraft();
-          });
-        button.buttonEl.addEventListener("pointerdown", () => {
-          // Pointer-down precedes the password field's blur. Suppressing that blur prevents
-          // Clear key from first writing a partially typed rotation and then writing a clear.
-          this.#clearKeyPointerDown = true;
-          window.setTimeout(() => { this.#clearKeyPointerDown = false; }, 0);
-        });
-      });
-  }
-
-  /** Reads the credentials file and, once it resolves, enables the fields it populated. */
-  load(): void {
-    void readLlmCredentials(this.#credentialsPath).then((result) => {
-      if (this.#disposed) return;
-      const state = resolveLlmProfileReadState(result, this.#credentialsFileExisted);
-      if (state.status === "malformed") {
-        this.#renderMalformed(state.message);
-        return;
-      }
-
-      this.#draft = state.draft;
-      this.#storedKey = state.hasStoredKey ? this.#draft.api_key : "";
-      this.#commitQueue = new LlmProfileCommitQueue(this.#draft, {
-        write: writeLlmCredentials,
-        onInvalid: (missing) => {
-          // Same wording as #showDraftStatus: one condition must not have two sentences.
-          this.#statusSetting.setDesc(`Not saved yet. Still needed: ${missing.join(", ")}.`);
-        },
-        onSaving: () => {
-          this.#statusSetting.setDesc(`Saving to ${this.#credentialsPath}…`);
-        },
-        onSaved: (credentials, isLatestRevision) => {
-          if (this.#disposed) return;
-          this.#storedKey = credentials.api_key ?? "";
-          if (isLatestRevision) this.#apiKeyInput.setValue("");
-          this.#setKeyDescription();
-          if (isLatestRevision) {
-            this.#statusSetting.setDesc(`Profile saved to ${this.#credentialsPath}.`);
-          } else {
-            this.#showDraftStatus();
-          }
-        },
-        onSaveFailed: (error) => {
-          if (this.#disposed) return;
-          this.#statusSetting.setDesc(`The profile could not be saved: ${errorMessage(error)}`);
-        },
-      });
-      this.#providerInput.setValue(this.#draft.provider);
-      this.#modelInput.setValue(this.#draft.model);
-      this.#baseUrlInput.setValue(this.#draft.base_url);
-      this.#apiKeyInput.setValue("");
-      this.#ready = true;
-      // setValue() does not fire onChange, so nothing above recomputed the provider-dependent
-      // copy. Without this, a loaded openai-compatible profile shows Base URL as optional.
-      this.#showDraftStatus();
-      this.#setFieldsDisabled(false);
-      this.#setKeyDescription();
-      this.#statusSetting.setDesc(state.status === "missing"
-        ? "The profile is written once every required field has a value."
-        : `Profile loaded from ${this.#credentialsPath}.`);
-    }).catch((error: unknown) => {
-      if (!this.#disposed) this.#renderMalformed(`The provider profile could not be loaded: ${errorMessage(error)}`);
-    });
-  }
-
-  dispose(): void {
-    this.#disposed = true;
-  }
-
-  #setFieldsDisabled(disabled: boolean): void {
-    this.#providerSetting.setDisabled(disabled);
-    this.#modelSetting.setDisabled(disabled);
-    this.#baseUrlSetting.setDisabled(disabled);
-    this.#apiKeySetting.setDisabled(disabled);
-    this.#clearKeyButton.setDisabled(disabled);
-  }
-
-  #setKeyDescription(keyStatus: "known" | "unknown" = "known"): void {
-    const state: StoredKeyState = keyStatus === "unknown"
-      ? "unknown"
-      : this.#storedKey.length > 0 ? "stored" : "absent";
-    this.#apiKeySetting.setDesc(apiKeyDescription(state, this.#draft.provider));
-  }
-
-  #showDraftStatus(): void {
-    if (!this.#ready) return;
-    this.#baseUrlSetting.setDesc(baseUrlDescription(this.#draft.provider));
-    this.#setKeyDescription();
-    const missing = missingLlmProfileFields(this.#draft);
-    this.#statusSetting.setDesc(missing.length > 0
-      ? `Not saved yet. Still needed: ${missing.join(", ")}.`
-      : "Saved when you leave the field you are editing.");
-  }
-
-  // This deliberately introduces commit-on-blur. The credentials file is an external,
-  // whole-profile document validated as a unit: keystroke writes would emit profiles core
-  // rejects wholesale and would put an API key on disk once for every character typed.
-  async #commitDraft(): Promise<void> {
-    if (!this.#ready) return;
-    await this.#commitQueue?.commit();
-  }
-
-  async #startOver(): Promise<void> {
-    this.#startOverButton.setDisabled(true);
-    this.#statusSetting.setDesc(`Discarding the malformed profile at ${this.#credentialsPath}…`);
-    try {
-      await deleteLlmCredentials();
-      if (!this.#disposed) this.rebuildTab();
-    } catch (error) {
-      if (this.#disposed) return;
-      this.#statusSetting.setDesc(`The profile could not be discarded: ${errorMessage(error)}`);
-      this.#startOverButton.setDisabled(false);
-    }
-  }
-
-  #renderMalformed(message: string): void {
-    this.#ready = false;
-    this.#setFieldsDisabled(true);
-    this.#statusSetting.setDesc(`${message} Discard file deletes the existing profile, including any key that could still be recovered from it by hand.`);
-    this.#startOverButton.buttonEl.show();
-    this.#startOverButton.setDisabled(false);
-    this.#setKeyDescription("unknown");
-  }
-}
-
-/**
  * Keys whose value changes what a row's `render` has to do, rather than merely hiding or
  * showing a row that already does — e.g. `backend` selects which agent model/effort group or
  * LLM profile group is live, and each of those `render` callbacks skips its fetch or read
  * while its backend is not the selected one. `refreshDomState()` only toggles CSS on rows that
  * already exist in the DOM; it cannot re-run a `render`, so a key in this set must go through
  * `update()`'s full rebuild instead. See `ShorthandSettingTab.setControlValue`.
+ *
+ * `llmProvider` and `llmBaseUrl` also gate `llmSlot`'s origin, and `acpNetworkUrl` gates
+ * `acpSlot`'s: each names the credential slot the "API key" row's `render` reads and writes,
+ * so a change to any of the three has to tear that row down and re-fetch `credentialStatus`
+ * for the new slot, not merely re-describe the one it already fetched. `acpNetworkUrl` also
+ * governs that row's own `visible` (network transport with a non-empty URL) — the same
+ * rebuild that gets the new slot also re-evaluates that predicate.
  */
-const RESTRUCTURING_KEYS = new Set<string>(["backend", "acpTransport"]);
+const RESTRUCTURING_KEYS = new Set<string>(["backend", "acpTransport", "llmProvider", "llmBaseUrl", "acpNetworkUrl"]);
 
 /**
  * Keys whose value gates another declarative row's `visible` predicate where that row is a
