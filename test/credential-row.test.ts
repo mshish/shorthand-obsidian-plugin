@@ -9,7 +9,7 @@ describe("credentialRowDescription", () => {
 
   test("a status outcome delegates to apiKeyDescription", () => {
     expect(credentialRowDescription({ kind: "status", status: "configured" }, "openai"))
-      .toBe("A key is saved in the Shorthand app. Blank keeps it, a new value replaces it, and Clear key removes it.");
+      .toBe("A key is saved in the Shorthand app — leave this blank to keep it, or use Clear key to remove it.");
     expect(credentialRowDescription({ kind: "status", status: "missing" }, "openai")).toBe("No key is saved.");
     expect(credentialRowDescription({ kind: "status", status: "unavailable" }, "openai"))
       .toBe("Secure storage is unavailable on this device.");

@@ -260,10 +260,10 @@ describe("effortNeedsModelDescription", () => {
 });
 
 describe("apiKeyDescription", () => {
-  const semantics = "Blank keeps it, a new value replaces it, and Clear key removes it.";
-
   test("a configured key explains what blank does to it, because the field cannot show it", () => {
-    expect(apiKeyDescription("configured")).toBe(`A key is saved in the Shorthand app. ${semantics}`);
+    expect(apiKeyDescription("configured")).toBe(
+      "A key is saved in the Shorthand app — leave this blank to keep it, or use Clear key to remove it.",
+    );
   });
 
   test("no key saved names the state plainly", () => {

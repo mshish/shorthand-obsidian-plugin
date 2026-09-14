@@ -303,7 +303,7 @@ export function apiKeyDescription(state: ApiKeyState, provider?: string): string
     case "unavailable":
       return "Secure storage is unavailable on this device.";
     case "configured":
-      return "A key is saved in the Shorthand app. Blank keeps it, a new value replaces it, and Clear key removes it.";
+      return "A key is saved in the Shorthand app — leave this blank to keep it, or use Clear key to remove it.";
   }
 }
 
