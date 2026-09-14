@@ -2151,6 +2151,21 @@ class ShorthandSettingTab extends PluginSettingTab {
         desc: "Shorthand adds its section markers to a note that has none, instead of asking you first.",
         control: { type: "toggle", key: "autoScaffold" },
       },
+      {
+        name: "Auto-start notes from Shorthand hotkey",
+        desc: createFragment((desc) => {
+          desc.appendText(
+            "Starts taking notes automatically when you begin a meeting or assisted notes recording with Shorthand's own hotkey. "
+            + "While this is on, the plugin checks whether Shorthand is running every 30 seconds — see ",
+          );
+          desc.createEl("a", {
+            text: "Auto-start notes from Shorthand hotkey",
+            href: "https://github.com/mshish/shorthand-obsidian-plugin/blob/main/docs/advanced-usage.md#auto-start-notes-from-shorthand-hotkey",
+          });
+          desc.appendText(".");
+        }),
+        control: { type: "toggle", key: "followAppRecording" },
+      },
       this.noteWritingGroup(),
     ];
   }
@@ -2584,26 +2599,12 @@ class ShorthandSettingTab extends PluginSettingTab {
             );
             desc.createEl("a", {
               text: "Read how recorder control works",
-              href: "https://github.com/mshish/shorthand-obsidian-plugin#driving-shorthands-recorder",
+              href: "https://github.com/mshish/shorthand-obsidian-plugin/blob/main/docs/advanced-usage.md#recorder-control",
               cls: "shorthand-settings-link",
             });
             desc.appendText(".");
           }),
           control: { type: "toggle", key: "controlShorthandRecording" },
-        },
-        {
-          name: "Auto-start notes from Shorthand hotkey",
-          desc: createFragment((desc) => {
-            desc.appendText(
-              "Automatically start taking notes on your active note whenever you begin a meeting or assisted notes recording with Shorthand's global hotkey. See ",
-            );
-            desc.createEl("a", {
-              text: "Auto-start notes from Shorthand hotkey",
-              href: "https://github.com/mshish/shorthand-obsidian-plugin#auto-start-notes-from-shorthand-hotkey",
-            });
-            desc.appendText(".");
-          }),
-          control: { type: "toggle", key: "followAppRecording" },
         },
         {
           name: "Debug logging",
