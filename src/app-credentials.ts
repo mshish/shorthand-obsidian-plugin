@@ -92,9 +92,6 @@ export function planCredentialMigration(
   // the type this function *returns*, since a caller has no business mutating a settings
   // patch, but wrong for building one incrementally. `-readonly` here is local to that build
   // step; `MigrationPlan.patch` stays the read-only type callers see.
-  // `Partial<ShorthandPluginSettings>` keeps every field's `readonly` modifier — correct for
-  // the type this function *returns*, but wrong for building one incrementally. `-readonly`
-  // here is local to that build step; `MigrationPlan.patch` stays the read-only type callers see.
   const patch: { -readonly [K in keyof ShorthandPluginSettings]?: ShorthandPluginSettings[K] } = {
     appCredentialsMigrated: true,
   };

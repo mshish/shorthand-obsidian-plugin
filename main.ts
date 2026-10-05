@@ -684,18 +684,19 @@ export default class ShorthandPlugin extends Plugin {
 
   /**
    * Moves any secret still in `data.json` into the Shorthand app's keyring, then marks the
-   * move done — see `runCredentialMigration`'s own doc comment for the ordering guarantee. Silent on `"skipped"`, since that is every load
-   * after the first successful one. `"deferred"` (the app was not open) only tells the user
-   * anything when there was actually a secret waiting to move — an empty settings file
-   * deferring silently forever is the expected, permanent state for a user who has never
-   * configured a provider key.
+   * move done — see `runCredentialMigration`'s own doc comment for the ordering guarantee.
+   * Silent on `"skipped"`, since that is every load after the first successful one. `"done"`
+   * and `"deferred"` only tell the user anything when there was actually a secret to move:
+   * with the legacy file gone, a first load with an empty settings file is almost every
+   * install, and announcing "keys moved" there reports a move that never happened.
    *
    * Called `void`d from `onload` (nothing there awaits it), so a rejection this method does
    * not catch itself becomes an unhandled promise rejection with no user-facing message at
    * all — a plausible failure here, since `runCredentialMigration` rethrows anything that
-   * is not `AppUnavailableError` (a rejected `setCredential` or `saveSettings`). The catch names the failure without ever formatting a secret into it:
-   * every value this method or its dependencies can throw about is a path, a status code or
-   * an error message, never the credential itself.
+   * is not `AppUnavailableError` (a rejected `setCredential` or `saveSettings`). The catch
+   * names the failure without ever formatting a secret into it: every value this method or
+   * its dependencies can throw about is a path, a status code or an error message, never the
+   * credential itself.
    */
   private async migrateCredentials(): Promise<void> {
     const hadAcpToken = this.settings.acpAuthToken.length > 0;
@@ -706,7 +707,7 @@ export default class ShorthandPlugin extends Plugin {
         connection: this.#appConnection,
         save: (patch) => this.saveSettings({ ...this.settings, ...patch }),
       });
-      if (result === "done") {
+      if (result === "done" && hadAcpToken) {
         new Notice("Shorthand: provider keys moved to the Shorthand app.");
       } else if (result === "deferred" && hadAcpToken) {
         new Notice(`${APP_NOT_RUNNING_MESSAGE} Provider keys will move on the next load.`);
