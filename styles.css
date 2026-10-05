@@ -360,3 +360,33 @@ button.shorthand-panel-button.is-stop .shorthand-panel-button-copy {
   text-decoration: underline;
   text-underline-offset: var(--size-2-1);
 }
+
+.shorthand-panel-agent {
+  border-top: 1px solid var(--background-modifier-border);
+  margin-top: var(--size-4-3);
+  padding-top: var(--size-4-2);
+}
+
+.shorthand-panel-agent-line {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  margin: 0 0 var(--size-2-1);
+  overflow-wrap: anywhere;
+}
+
+.shorthand-panel-agent-line.is-ok {
+  color: var(--text-success);
+}
+
+.shorthand-panel-agent-line.is-warning {
+  color: var(--text-warning);
+}
+
+/* Text, not colour alone, carries the problem; the colour only reinforces it. */
+.shorthand-panel-agent-warning {
+  color: var(--text-warning);
+  font-size: var(--font-ui-small);
+  line-height: var(--line-height-normal);
+  margin: var(--size-2-1) 0;
+  overflow-wrap: anywhere;
+}

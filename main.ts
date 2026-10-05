@@ -11,6 +11,7 @@ import {
   type App,
   type ButtonComponent,
   type DropdownComponent,
+  type ExtraButtonComponent,
   type TFile,
   normalizePath,
   type Editor,
@@ -89,6 +90,7 @@ import {
   storedPromptFieldValue,
   validatePromptSettings,
   type EnhancementBackend,
+  isEnhancementBackend,
   type ShorthandPluginSettings,
 } from "./src/settings.js";
 import {
@@ -148,6 +150,18 @@ import {
 } from "./src/capture-log.js";
 import { describeStatus } from "./src/status-text.js";
 import { describePanel, SHORTHAND_PANEL_VIEW, type PanelButtonId, type PanelModel } from "./src/panel-model.js";
+import {
+  BACKEND_DISPLAY_NAMES,
+  captureStartNotice,
+  describeAgentStatus,
+  INITIAL_PROBE_STATE,
+  needsProbe,
+  probeKey,
+  reduceProbeState,
+  type AgentStatusModel,
+  type ProbeEvent,
+  type ProbeState,
+} from "./src/agent-status.js";
 import { ObsidianNoteSink } from "./src/obsidian-note-sink.js";
 import { ObsidianSidecarStore } from "./src/obsidian-sidecar-store.js";
 import {
@@ -419,6 +433,13 @@ export default class ShorthandPlugin extends Plugin {
   /** Makes the selected mode visible during setup, before a runtime exists to own it. */
   #requestedCaptureMode: CaptureMode | undefined = undefined;
   /**
+   * The last sign-in probe's answer for the selected agent. `#agentProbeToken` numbers the
+   * probes so a result that arrives after a newer probe started is dropped (see
+   * `reduceProbeState`).
+   */
+  #agentProbe: ProbeState = INITIAL_PROBE_STATE;
+  #agentProbeToken = 0;
+  /**
    * A follower held open while no capture owns one, so a recording started with
    * Shorthand's hotkey is seen at all. Adopted by an attached capture rather than
    * replaced — see `adoptIdleFollower`.
@@ -472,6 +493,8 @@ export default class ShorthandPlugin extends Plugin {
     // cannot finish loading until Shorthand starts would break every command that has
     // nothing to do with provider secrets.
     void this.migrateCredentials();
+    // Not awaited: onload must not wait on a subprocess, and capture does not depend on it.
+    this.ensureAgentProbe();
     this.#statusBar = this.addStatusBarItem();
     // Clickable, and stop-only. The item is hidden while idle (see describeStatus),
     // so there is never a moment where a click could mean "start" — starting lives on
@@ -637,6 +660,66 @@ export default class ShorthandPlugin extends Plugin {
     this.settings = normalizePluginSettings(candidate);
     await this.saveData(this.settings);
     this.syncIdleFollower();
+    // Covers every path that changes the selection (the settings tab and the panel's switcher),
+    // so neither has to remember to re-probe. A no-op when the cached answer still applies.
+    this.ensureAgentProbe();
+  }
+
+  /** What the panel's agent section shows. Reads the cached probe; never starts one. */
+  agentStatus(): AgentStatusModel {
+    return describeAgentStatus({
+      settings: this.settings,
+      probe: this.#agentProbe,
+      captureInFlight: this.#capture !== undefined,
+    });
+  }
+
+  /** The panel's switcher. A running capture keeps the enhancer it built at start. */
+  async switchAgent(backend: EnhancementBackend): Promise<void> {
+    if (backend === this.settings.backend) return;
+    await this.saveSettings({ ...this.settings, backend });
+    this.#renderPanel();
+  }
+
+  /** The panel's refresh control: re-asks even when the cached answer would still apply. */
+  refreshAgentProbe(): void {
+    this.#runAgentProbe();
+  }
+
+  /** A no-op while the cached answer still applies, so opening the panel is cheap. */
+  ensureAgentProbe(): void {
+    if (needsProbe(this.#agentProbe, this.settings)) this.#runAgentProbe();
+  }
+
+  #applyProbeEvent(event: ProbeEvent): void {
+    this.#agentProbe = reduceProbeState(this.#agentProbe, event);
+    this.#renderPanel();
+  }
+
+  /**
+   * Fire and forget: capture never awaits this, so a slow or hung CLI can only leave the panel
+   * on "Checking sign-in…" (core's own timeout ends it), not delay a start.
+   */
+  #runAgentProbe(): void {
+    const settings = this.settings;
+    const key = probeKey(settings);
+    const fetchCatalog = key === undefined ? undefined : fetchAgentCatalog(settings);
+    if (key === undefined || fetchCatalog === undefined) {
+      this.#applyProbeEvent({ type: "probe-cleared" });
+      return;
+    }
+    const token = ++this.#agentProbeToken;
+    this.#applyProbeEvent({ type: "probe-started", key, token });
+    void fetchCatalog.then((catalog) => {
+      this.#applyProbeEvent({ type: "probe-succeeded", token, signedIn: catalog.signedIn, account: catalog.account });
+    }).catch((error: unknown) => {
+      this.#applyProbeEvent({
+        type: "probe-failed",
+        token,
+        reason: error instanceof AgentCatalogError ? error.reason : "protocol",
+        message: error instanceof Error ? error.message : undefined,
+      });
+    });
   }
 
   async startCaptureOnActiveNote(
@@ -806,6 +889,11 @@ export default class ShorthandPlugin extends Plugin {
         };
         this.#capture = runtime;
         handedOff = true;
+        // Shown only once the start can no longer bail out, so it never warns about a capture
+        // that did not begin. Advisory: capture proceeds, because a stale or wrong "signed out"
+        // must never cost a user their recording.
+        const signedOutNotice = captureStartNotice(this.#agentProbe, this.settings);
+        if (signedOutNotice !== undefined) new Notice(signedOutNotice, 10_000);
         unownedEnhancer = undefined;
         // Only a capture with no recorder of its own — an attach, or control switched off —
         // goes straight to capturing. Everything this plugin starts itself waits for
@@ -2295,10 +2383,9 @@ class ShorthandSettingTab extends PluginSettingTab {
 
             if (this.plugin.settings.backend !== ownsBackend) return;
 
-            const executableOverride = this.plugin.settings[backend === "claude" ? "claudeExecutable" : "codexExecutable"];
-            const fetchCatalog = backend === "claude"
-              ? listClaudeModels(executableOverride.length === 0 ? {} : { executableOverride })
-              : listCodexModels(executableOverride.length === 0 ? {} : { codexPathOverride: executableOverride });
+            // The same request the panel's sign-in probe makes, so the two never ask different programs.
+            const fetchCatalog = fetchAgentCatalog(this.plugin.settings);
+            if (fetchCatalog === undefined) return;
 
             void fetchCatalog.then((loadedCatalog) => {
               if (disposed) return;
@@ -2393,11 +2480,8 @@ class ShorthandSettingTab extends PluginSettingTab {
 
             if (this.plugin.settings.backend !== "cursor") return;
 
-            const executableOverride = this.plugin.settings.cursorExecutable;
-            const fetchCatalog = listAcpModels({
-              ...(executableOverride.length === 0 ? {} : { executableOverride }),
-              args: ["acp"],
-            });
+            const fetchCatalog = fetchAgentCatalog(this.plugin.settings);
+            if (fetchCatalog === undefined) return;
 
             void fetchCatalog.then((loadedCatalog) => {
               if (disposed) return;
@@ -2466,13 +2550,8 @@ class ShorthandSettingTab extends PluginSettingTab {
               };
             }
 
-            const args = this.plugin.settings.acpArgs.trim().length > 0
-              ? this.plugin.settings.acpArgs.trim().split(/\s+/)
-              : [];
-            const fetchCatalog = listAcpModels({
-              command: configuredExecutable,
-              args,
-            });
+            const fetchCatalog = fetchAgentCatalog(this.plugin.settings);
+            if (fetchCatalog === undefined) return;
 
             void fetchCatalog.then((loadedCatalog) => {
               if (disposed) return;
@@ -2866,6 +2945,32 @@ function numberControlItem(
 }
 
 /**
+ * The same core catalog fetch the settings tab runs for each backend, with the same arguments.
+ * `undefined` for a selection with nothing to ask (see `probeKey`).
+ */
+function fetchAgentCatalog(settings: ShorthandPluginSettings): Promise<AgentCatalog> | undefined {
+  // One skip rule for the probe key and the request, so they cannot disagree about what is asked.
+  if (probeKey(settings) === undefined) return undefined;
+  switch (settings.backend) {
+    case "claude-agent-sdk":
+      return listClaudeModels(settings.claudeExecutable.length === 0 ? {} : { executableOverride: settings.claudeExecutable });
+    case "codex":
+      return listCodexModels(settings.codexExecutable.length === 0 ? {} : { codexPathOverride: settings.codexExecutable });
+    case "cursor":
+      return listAcpModels({
+        ...(settings.cursorExecutable.length === 0 ? {} : { executableOverride: settings.cursorExecutable }),
+        args: ["acp"],
+      });
+    case "acp": {
+      const args = settings.acpArgs.trim().length > 0 ? settings.acpArgs.trim().split(/\s+/) : [];
+      return listAcpModels({ command: settings.acpExecutable.trim(), args });
+    }
+    case "llm":
+      return undefined;
+  }
+}
+
+/**
  * The right-sidebar controls. Everything it decides is `describePanel`; this class is the
  * DOM wiring only, which is what keeps it reviewable by reading — it cannot be imported
  * under `bun test`.
@@ -2886,6 +2991,12 @@ class ShorthandPanelView extends ItemView {
   #activityEl!: HTMLElement;
   #activityLabelEl!: HTMLElement;
   #detailEl!: HTMLElement;
+  #agentDropdown!: DropdownComponent;
+  #agentModelEl!: HTMLElement;
+  #agentStatusEl!: HTMLElement;
+  #agentWarningEl!: HTMLElement;
+  #agentNoteEl!: HTMLElement;
+  #agentRefresh!: ExtraButtonComponent;
   #actionsEl!: HTMLElement;
   #buttonEls: ReadonlyMap<PanelButtonId, Readonly<{
     button: HTMLButtonElement;
@@ -2910,6 +3021,7 @@ class ShorthandPanelView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
+    this.plugin.ensureAgentProbe();
     this.render();
   }
 
@@ -2965,6 +3077,8 @@ class ShorthandPanelView extends ItemView {
     this.#activityLabelEl = this.#activityEl.createSpan();
     this.#detailEl = this.#statusEl.createEl("p", { cls: "shorthand-panel-detail" });
 
+    this.#buildAgentSection(container);
+
     this.#actionsEl = container.createDiv({ cls: "shorthand-panel-actions" });
     this.#actionsEl.createEl("p", { cls: "shorthand-panel-actions-label", text: "Choose a mode" });
     const buttons = this.#actionsEl.createDiv({ cls: "shorthand-panel-buttons" });
@@ -2988,6 +3102,44 @@ class ShorthandPanelView extends ItemView {
       buttonEls.set(button.id, { button: element, label, hint });
     }
     this.#buttonEls = buttonEls;
+  }
+
+  /** Built once, like the rest of the panel; `#patchAgentSection` only changes text and state. */
+  #buildAgentSection(container: HTMLElement): void {
+    const section = container.createDiv({ cls: "shorthand-panel-agent" });
+    const row = new Setting(section).setName("Agent");
+    row.addDropdown((dropdown) => {
+      for (const [value, label] of Object.entries(BACKEND_DISPLAY_NAMES)) dropdown.addOption(value, label);
+      dropdown.onChange((value) => {
+        if (isEnhancementBackend(value)) void this.plugin.switchAgent(value);
+      });
+      this.#agentDropdown = dropdown;
+    });
+    row.addExtraButton((button) => {
+      button.setIcon("refresh-cw").setTooltip("Check sign-in again").onClick(() => { this.plugin.refreshAgentProbe(); });
+      this.#agentRefresh = button;
+    });
+    this.#agentModelEl = section.createEl("p", { cls: "shorthand-panel-agent-line" });
+    this.#agentStatusEl = section.createEl("p", { cls: "shorthand-panel-agent-line", attr: { "aria-live": "polite" } });
+    this.#agentWarningEl = section.createEl("p", { cls: "shorthand-panel-agent-warning", attr: { role: "alert" } });
+    this.#agentNoteEl = section.createEl("p", { cls: "shorthand-panel-agent-line" });
+  }
+
+  #patchAgentSection(agent: AgentStatusModel): void {
+    // Only when different: this runs once a second, and rewriting an open dropdown's value
+    // would close it under the user's pointer.
+    if (this.#agentDropdown.getValue() !== agent.backendValue) this.#agentDropdown.setValue(agent.backendValue);
+    this.#agentModelEl.textContent = `Model: ${agent.modelLabel}`;
+    this.#agentStatusEl.textContent = agent.statusText ?? "";
+    for (const tone of ["neutral", "checking", "ok", "warning"] as const) {
+      this.#agentStatusEl.classList.toggle(`is-${tone}`, agent.tone === tone);
+    }
+    this.#agentStatusEl.hidden = agent.statusText === undefined;
+    this.#agentWarningEl.textContent = agent.warning ?? "";
+    this.#agentWarningEl.hidden = agent.warning === undefined;
+    this.#agentNoteEl.textContent = agent.switchNote ?? "";
+    this.#agentNoteEl.hidden = agent.switchNote === undefined;
+    this.#agentRefresh.setDisabled(!agent.canRefresh);
   }
 
   /**
@@ -3016,6 +3168,7 @@ class ShorthandPanelView extends ItemView {
     this.#activityEl.hidden = model.activityLabel === undefined;
     this.#detailEl.textContent = model.detail ?? "";
     this.#detailEl.hidden = model.detail === undefined;
+    this.#patchAgentSection(this.plugin.agentStatus());
     this.#actionsEl.hidden = !model.buttons.some(({ id, visible }) => id !== "stop" && visible);
 
     for (const button of model.buttons) {

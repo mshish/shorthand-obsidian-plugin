@@ -33,7 +33,7 @@ The first start adds Shorthand's note section automatically. Turn off **Automati
 
 ## What you get
 
-- A right-sidebar panel that always shows the current state, elapsed time, and the note being updated.
+- A right-sidebar panel that always shows the current state, elapsed time, and the note being updated. It also shows the selected agent, model and sign-in status, lets you switch agent for the next capture, and warns at capture start if the agent is signed out.
 - Live meeting notes that improve as new transcript arrives.
 - A linked transcript note when you turn on **Transcript notes**.
 - **Enhance now** for a saved transcript, or **Clean up this note** for writing with no transcript.
