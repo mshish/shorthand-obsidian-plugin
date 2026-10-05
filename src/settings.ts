@@ -86,10 +86,10 @@ export type ShorthandPluginSettings = Readonly<{
    */
   llmBaseUrl: string;
   /**
-   * Whether the one-time move of secrets out of `data.json` and the legacy
-   * `llm-credentials.json` file, into the Shorthand app's keyring, has already run. Sticky
-   * once true: re-running the migration after the user has since cleared a field would look
-   * like data reappearing from nowhere.
+   * Whether the one-time move of secrets out of `data.json` into the Shorthand app's
+   * keyring has already run.
+   * Sticky once true: re-running the migration after the user has since cleared a field would
+   * look like data reappearing from nowhere.
    */
   appCredentialsMigrated: boolean;
   sidecarDirectory: string;

@@ -3,7 +3,6 @@ import {
   AppUnavailableError,
   llmEndpointOrigin,
   type AppCredentialSlot,
-  type LlmCredentials,
   type LlmProfile,
 } from "shorthand-core";
 import type { ShorthandPluginSettings } from "./settings.js";
@@ -75,24 +74,17 @@ export type MigrationPlan = Readonly<{
 }>;
 
 /**
- * Plans the one-time move of secrets out of `data.json` and the legacy
- * `llm-credentials.json` file into the Shorthand app's keyring. Returns a plan rather than
+ * Plans the one-time move of secrets out of `data.json` into the Shorthand app's keyring. Returns a plan rather than
  * performing the move itself, because setting a credential is a request-socket call — I/O
  * that belongs in `main.ts` wiring, not in a rule `bun test` can reach; this function is the
  * part of that rule worth testing without a socket.
- *
- * Settings the user already has on the new fields outrank the legacy file: a user who has
- * already chosen a provider (by hand, or from an earlier partial migration) must not have it
- * silently replaced by whatever an old `llm-credentials.json` still names.
  */
 export function planCredentialMigration(
   settings: ShorthandPluginSettings,
   vaultId: string,
-  legacy: LlmCredentials | undefined,
 ): MigrationPlan {
   // Sticky per settings.ts's own doc comment on appCredentialsMigrated: re-running after the
-  // user has since cleared a field (e.g. blanked llmProvider back out) must not look like a
-  // legacy secret reappearing from nowhere.
+  // user has since cleared a field must not look like a secret reappearing from nowhere.
   if (settings.appCredentialsMigrated) return { sets: [], patch: {} };
 
   const sets: { slot: AppCredentialSlot; secret: string }[] = [];
@@ -100,32 +92,12 @@ export function planCredentialMigration(
   // the type this function *returns*, since a caller has no business mutating a settings
   // patch, but wrong for building one incrementally. `-readonly` here is local to that build
   // step; `MigrationPlan.patch` stays the read-only type callers see.
+  // `Partial<ShorthandPluginSettings>` keeps every field's `readonly` modifier — correct for
+  // the type this function *returns*, but wrong for building one incrementally. `-readonly`
+  // here is local to that build step; `MigrationPlan.patch` stays the read-only type callers see.
   const patch: { -readonly [K in keyof ShorthandPluginSettings]?: ShorthandPluginSettings[K] } = {
     appCredentialsMigrated: true,
   };
-
-  // Built from whichever provider/model/base URL the migration is about to leave in place —
-  // the settings the user already chose when present, the legacy file's when they were
-  // blank — so a secret this function moves lands in the slot the profile that will
-  // actually make requests uses, once the patch below is applied.
-  let profileSettings = settings;
-
-  if (settings.llmProvider === "" && legacy !== undefined) {
-    patch.llmProvider = legacy.provider;
-    patch.llmModel = legacy.model;
-    patch.llmBaseUrl = legacy.base_url ?? "";
-    profileSettings = { ...settings, llmProvider: legacy.provider, llmModel: legacy.model, llmBaseUrl: legacy.base_url ?? "" };
-  }
-
-  // Guarded on the legacy file naming the SAME provider profileSettings is about to use: when
-  // settings already has its own provider chosen, profileSettings keeps it rather than the
-  // legacy file's, and pushing the legacy key there anyway would write one provider's secret
-  // into another provider's slot — silently overwriting whatever correct secret is already
-  // in the keyring for it.
-  if (legacy?.api_key !== undefined && legacy.api_key.length > 0 && legacy.provider === profileSettings.llmProvider) {
-    const slot = llmSlot(profileSettings);
-    if (slot !== undefined) sets.push({ slot, secret: legacy.api_key });
-  }
 
   const acpToken = settings.acpAuthToken.trim();
   if (acpToken.length > 0) {

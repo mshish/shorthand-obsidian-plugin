@@ -1,7 +1,6 @@
 import { AppUnavailableError, type AppClientLike } from "shorthand-core";
 import { planCredentialMigration } from "./app-credentials.js";
 import type { ShorthandPluginSettings } from "./settings.js";
-import type { LlmCredentials } from "shorthand-core";
 
 /**
  * Owns the one `AppClientLike` this plugin talks to the Shorthand app through, so every
@@ -89,15 +88,13 @@ export class AppConnection {
 export type CredentialMigrationDeps = Readonly<{
   settings: ShorthandPluginSettings;
   vaultId: string;
-  readLegacy: () => Promise<LlmCredentials | undefined>;
-  deleteLegacy: () => Promise<void>;
   connection: AppConnection;
   save: (patch: Partial<ShorthandPluginSettings>) => Promise<void>;
 }>;
 
 /**
  * Performs the one-time move `planCredentialMigration` plans: every secret into the app's
- * keyring, then the legacy file gone and `appCredentialsMigrated` set, in that order — so a
+ * keyring, then `appCredentialsMigrated` set, in that order — so a
  * crash or a rejected `setCredential` between the two never reports a move `data.json` did
  * not actually receive.
  *
@@ -111,8 +108,7 @@ export type CredentialMigrationDeps = Readonly<{
 export async function runCredentialMigration(deps: CredentialMigrationDeps): Promise<"done" | "skipped" | "deferred"> {
   if (deps.settings.appCredentialsMigrated) return "skipped";
 
-  const legacy = await deps.readLegacy();
-  const plan = planCredentialMigration(deps.settings, deps.vaultId, legacy);
+  const plan = planCredentialMigration(deps.settings, deps.vaultId);
 
   if (plan.sets.length > 0) {
     let client: AppClientLike;
@@ -127,7 +123,6 @@ export async function runCredentialMigration(deps: CredentialMigrationDeps): Pro
     }
   }
 
-  await deps.deleteLegacy();
   await deps.save(plan.patch);
   return "done";
 }

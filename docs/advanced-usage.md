@@ -68,11 +68,7 @@ Choose one enhancement backend in the plugin settings:
 
 Claude Code, Codex, Cursor CLI, and ACP receive the current note and transcript. The LLM provider sends them to the provider or endpoint you configure. Ollama and other local compatible endpoints can keep that traffic on your machine. Shorthand itself does not collect telemetry.
 
-Provider credentials are kept outside the vault so sync does not copy them:
-
-- Windows: `%APPDATA%\Shorthand\llm-credentials.json`
-- macOS: `~/Library/Application Support/Shorthand/llm-credentials.json`
-- Linux: `${XDG_CONFIG_HOME:-~/.config}/shorthand/llm-credentials.json`
+Provider credentials are kept in the Shorthand app's credential store, outside the vault, so sync does not copy them.
 
 Leave the API key field blank to keep the saved key. Use **Clear key** to remove it.
 

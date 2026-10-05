@@ -731,7 +731,7 @@ describe("ACP settings normalization", () => {
 
 describe("app-managed LLM settings normalization", () => {
   // Defaults to "": the fields exist so migration and the (later) settings tab can write
-  // them, but a fresh install has no provider chosen and no legacy file to migrate.
+  // them, but a fresh install has no provider chosen.
   test("defaults to no provider chosen and no migration performed", () => {
     expect(DEFAULT_PLUGIN_SETTINGS).toMatchObject({
       llmProvider: "",
@@ -745,6 +745,13 @@ describe("app-managed LLM settings normalization", () => {
       llmBaseUrl: "",
       appCredentialsMigrated: false,
     });
+  });
+
+  // The llm-credentials.json migration is gone, and its marker was never a separate key; an
+  // older data.json can still carry keys this build no longer reads, and must not throw.
+  test("ignores unknown stale keys left in an older data.json", () => {
+    const normalized = normalizePluginSettings({ llmCredentialsMigrated: true, legacyFile: "x" });
+    expect(normalized).toEqual(normalizePluginSettings({}));
   });
 
   test("rejects a provider id data.json did not actually ship", () => {
