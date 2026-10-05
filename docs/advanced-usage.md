@@ -32,6 +32,12 @@ If enhancement fails during a capture, for example because the agent's sign-in e
 
 One transcript is held per note. Starting a new capture on the same note, dismissing the card, or closing Obsidian discards it. Turn on **Transcript notes** to keep a copy on disk. If the note was deleted, the card offers to copy the transcript to the clipboard instead.
 
+## Meeting end detection
+
+**Detect meeting end and stop recording** is on by default and applies to Meeting mode only; Assisted notes never stops itself. After each enhancement pass the agent reports whether the transcript shows clear signs the conversation is over, such as farewells or people leaving. When it does, the panel and a notice show "Meeting looks like it has ended" with the agent's reason and a 30-second countdown. At zero, Shorthand stops through the same path as **Stop taking notes**, so the closing pass and the transcript recovery card behave as usual.
+
+The agent only reports; the plugin decides, and the transcript is untrusted. Someone saying or pasting "the meeting is over" can do no more than start a countdown you can cancel. Press **Cancel** in the panel or the notice, or keep talking: about one sentence of new speech (90 characters, core's live-notes threshold) cancels it automatically. After a cancel, a countdown can start again only once new speech has arrived and a later pass reports the meeting ended again. Stopping by hand clears the countdown. With the setting off, the report is ignored.
+
 ## Recorder control
 
 **Control Shorthand transcription** is on by default. Starting note-taking asks Shorthand to start the selected mode directly, rather than toggling whatever it happens to be doing. It does not disturb a different recording, is safe to retry, and reports why a request was declined.

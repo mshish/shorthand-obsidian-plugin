@@ -1,6 +1,7 @@
 import { formatElapsed } from "./elapsed.js";
 import { canStartCapture, type PluginUiState } from "./state.js";
 import type { CaptureMode } from "./follow-policy.js";
+import type { MeetingEndCountdown } from "./meeting-end.js";
 
 /** The view type Obsidian registers this panel under. Stable: it is persisted in workspace layout. */
 export const SHORTHAND_PANEL_VIEW = "shorthand-controls";
@@ -16,6 +17,16 @@ export type PanelButton = Readonly<{
   icon: Extract<PanelIcon, "users" | "lightbulb" | "square">;
   enabled: boolean;
   visible: boolean;
+}>;
+
+/** The countdown card shown while a detected meeting end is about to stop the capture. */
+export type PanelMeetingEnd = Readonly<{
+  headline: string;
+  /** Live, so the card shows how long is left without a second timer of its own. */
+  countdown: string;
+  /** The agent's reason, or `undefined` when it gave none. */
+  reason: string | undefined;
+  cancelLabel: string;
 }>;
 
 export type PanelModel = Readonly<{
@@ -34,6 +45,7 @@ export type PanelModel = Readonly<{
   statusIcon: PanelIcon;
   tone: PanelTone;
   buttons: readonly PanelButton[];
+  meetingEnd: PanelMeetingEnd | undefined;
 }>;
 
 export type PanelInput = Readonly<{
@@ -60,10 +72,29 @@ export type PanelInput = Readonly<{
    * does not.
    */
   hasCapture: boolean;
+  /** A running meeting-end countdown, if any. */
+  meetingEnd: MeetingEndCountdown | undefined;
 }>;
 
 /** What the side panel shows for a given state. */
 export function describePanel(input: PanelInput): PanelModel {
+  const model = describePanelStatus(input);
+  const { state, hasCapture, meetingEnd } = input;
+  // Not while stopping: the countdown is over by then, and a Cancel that cannot cancel
+  // anything would be a button that lies.
+  if (meetingEnd === undefined || !hasCapture || state.stopping || state.mode === "idle") return model;
+  return {
+    ...model,
+    meetingEnd: {
+      headline: "Meeting looks like it has ended",
+      countdown: `Stopping in ${meetingEnd.remainingSeconds}s`,
+      reason: meetingEnd.reason.length === 0 ? undefined : meetingEnd.reason,
+      cancelLabel: "Cancel",
+    },
+  };
+}
+
+function describePanelStatus(input: PanelInput): PanelModel {
   const {
     state, elapsedMs, noteName, notePath, activeNoteName, activeNotePath, captureMode, hasActiveNote, hasCapture,
   } = input;
@@ -132,6 +163,7 @@ export function describePanel(input: PanelInput): PanelModel {
       statusIcon: "loader-circle",
       tone: "working",
       buttons,
+      meetingEnd: undefined,
     };
   }
 
@@ -151,6 +183,7 @@ export function describePanel(input: PanelInput): PanelModel {
         statusIcon: "circle-check",
         tone: "idle",
         buttons,
+        meetingEnd: undefined,
       };
     case "starting":
       return {
@@ -164,6 +197,7 @@ export function describePanel(input: PanelInput): PanelModel {
         statusIcon: "loader-circle",
         tone: "working",
         buttons,
+        meetingEnd: undefined,
       };
     case "capturing":
     case "enhancing":
@@ -178,6 +212,7 @@ export function describePanel(input: PanelInput): PanelModel {
         statusIcon: captureMode === "assisted-notes" ? "lightbulb" : "users",
         tone: captureMode === "assisted-notes" ? "assisted-notes" : "meeting",
         buttons,
+        meetingEnd: undefined,
       };
     case "stopping":
       // `state.stopping` is the authority and returned above. This remains exhaustive for
@@ -193,6 +228,7 @@ export function describePanel(input: PanelInput): PanelModel {
         statusIcon: "loader-circle",
         tone: "working",
         buttons,
+        meetingEnd: undefined,
       };
     case "enhancement-stopped":
       return {
@@ -206,6 +242,7 @@ export function describePanel(input: PanelInput): PanelModel {
         statusIcon: "triangle-alert",
         tone: "warning",
         buttons,
+        meetingEnd: undefined,
       };
     case "error":
       return {
@@ -219,6 +256,7 @@ export function describePanel(input: PanelInput): PanelModel {
         statusIcon: "triangle-alert",
         tone: "error",
         buttons,
+        meetingEnd: undefined,
       };
     default: {
       const unhandled: never = state.mode;

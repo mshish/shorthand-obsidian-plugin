@@ -170,6 +170,12 @@ import {
   type ReprocessResult,
   type RecoveryCardModel,
 } from "./src/transcript-recovery.js";
+import {
+  MeetingEndWatch,
+  meetingEndNoticeText,
+  type MeetingEndCancelCause,
+  type MeetingEndCountdown,
+} from "./src/meeting-end.js";
 import { ObsidianNoteSink } from "./src/obsidian-note-sink.js";
 import { ObsidianSidecarStore } from "./src/obsidian-sidecar-store.js";
 import {
@@ -290,6 +296,12 @@ type CaptureRuntime = {
    * back, and because `enhancer` is `undefined` exactly when enhancement failed to start.
    */
   record: CaptureRecord;
+  /**
+   * Turns the agent's "the meeting looks over" report into a cancellable countdown. Disposed
+   * on every path that sets `stopping`, so a countdown can never outlive the capture it
+   * belongs to.
+   */
+  meetingEnd: MeetingEndWatch;
   settled: Promise<ExitDiagnosis>;
   stopping: boolean;
   /**
@@ -458,6 +470,8 @@ export default class ShorthandPlugin extends Plugin {
    * user reprocesses or dismisses them. In memory only: see `src/transcript-recovery.ts`.
    */
   #recovery = new RecoveryStore<TFile>();
+  /** The persistent Notice for a running meeting-end countdown, and the text line it updates. */
+  #meetingEndNotice: Readonly<{ notice: Notice; text: HTMLElement }> | undefined = undefined;
   /**
    * A follower held open while no capture owns one, so a recording started with
    * Shorthand's hotkey is seen at all. Adopted by an attached capture rather than
@@ -527,7 +541,7 @@ export default class ShorthandPlugin extends Plugin {
     // The elapsed-time display is otherwise only refreshed from a transcript-delta handler
     // and from dispatch(), so between utterances it would visibly freeze. A ticking interval
     // keeps it advancing during silence; registerInterval auto-clears it on unload.
-    this.registerInterval(window.setInterval(() => this.#render(), 1_000));
+    this.registerInterval(window.setInterval(() => { this.#render(); this.#tickMeetingEndNotice(); }, 1_000));
     this.addSettingTab(new ShorthandSettingTab(this.app, this));
 
     this.registerView(SHORTHAND_PANEL_VIEW, (leaf) => new ShorthandPanelView(leaf, this));
@@ -642,6 +656,7 @@ export default class ShorthandPlugin extends Plugin {
   onunload(): void {
     this.stopIdleFollower();
     this.forceStopCapture();
+    this.#hideMeetingEndNotice();
     this.#recovery.releaseAll();
     this.#appConnection.dispose();
   }
@@ -850,6 +865,32 @@ export default class ShorthandPlugin extends Plugin {
         }
         const transcript = new TranscriptStore();
         const captureRecord = new CaptureRecord(mode);
+        // A new capture clears any Notice a previous one left, even though every finish path
+        // already disposes its own watch: a Notice that outlived its capture would carry a
+        // Cancel button that cancels nothing.
+        this.#hideMeetingEndNotice();
+        let ownRuntime: CaptureRuntime | undefined;
+        const meetingEnd = new MeetingEndWatch({
+          mode,
+          enabled: () => this.settings.detectMeetingEnd,
+          // Core's live-notes gate, not the minNewChars setting: this decides whether speech
+          // is real conversation resuming, and that should not move with a tuning knob.
+          minSpeechCharacters: DEFAULT_CONFIG.thresholds.enhancementNewCharacters,
+          now: () => Date.now(),
+          timers: {
+            setTimeout: (run, ms) => window.setTimeout(run, ms),
+            clearTimeout: (id) => window.clearTimeout(id as number),
+          },
+          onChange: (countdown) => this.#showMeetingEnd(countdown),
+          onCancel: (cause) => this.#meetingEndCancelled(cause),
+          onExpire: () => {
+            // The same stop a manual press makes, so the closing pass, the recorder's
+            // idempotent stop and the transcript-recovery cards all behave identically.
+            if (ownRuntime === undefined || this.#capture !== ownRuntime || ownRuntime.stopping) return;
+            new Notice("Shorthand: stopping, the meeting looked like it had ended.");
+            void this.stopCapture().catch((error: unknown) => this.fail(errorMessage(error)));
+          },
+        });
         let enhancer: EnhanceRunner | undefined;
         let enhancementUnavailable: string | undefined;
         try {
@@ -857,7 +898,10 @@ export default class ShorthandPlugin extends Plugin {
             noteSink,
             DEFAULT_CONFIG.enhancement.timeoutMs,
             mode,
-            (status) => captureRecord.noteStatus(status),
+            (status) => {
+              captureRecord.noteStatus(status);
+              meetingEnd.noteStatus(status);
+            },
           );
           unownedEnhancer = enhancer;
         } catch (error) {
@@ -926,10 +970,12 @@ export default class ShorthandPlugin extends Plugin {
           sidecar,
           enhancer,
           record: captureRecord,
+          meetingEnd,
           settled,
           stopping: false,
           startedAt: Date.now(),
         };
+        ownRuntime = runtime;
         this.#capture = runtime;
         handedOff = true;
         // Released here, not earlier: a start that bails out before this point must not cost
@@ -988,6 +1034,7 @@ export default class ShorthandPlugin extends Plugin {
           // Before the runner, and regardless of whether it exists or its passes succeed:
           // this copy is what a later reprocess replays.
           captureRecord.appendDelta(delta);
+          meetingEnd.noteSpeech(delta.length);
           enhancer?.appendTranscript(delta);
           if (enhancer !== undefined && this.settings.enableLiveEnhancement) {
             enhancer.requestTick();
@@ -1174,6 +1221,7 @@ export default class ShorthandPlugin extends Plugin {
       return;
     }
     runtime.stopping = true;
+    runtime.meetingEnd.dispose();
     // Synchronous, before the first await: a start sequence still in flight has to see the
     // stop at its next checkpoint, and it is the only thing that can recall its own spawn.
     runtime.recorder?.requestStop();
@@ -1218,6 +1266,7 @@ export default class ShorthandPlugin extends Plugin {
     const runtime = this.#capture;
     if (runtime === undefined) return;
     runtime.stopping = true;
+    runtime.meetingEnd.dispose();
     runtime.enhancer?.stopLiveTicks();
     // dispose() calls stop() synchronously before its first await, so no provider work can
     // outlive unload even though Obsidian cannot await this hook.
@@ -1257,6 +1306,7 @@ export default class ShorthandPlugin extends Plugin {
   private async abortCaptureStart(runtime: CaptureRuntime): Promise<void> {
     if (this.#capture !== runtime) return;
     runtime.stopping = true;
+    runtime.meetingEnd.dispose();
     runtime.enhancer?.stopLiveTicks();
     runtime.client.forceStop();
     await runtime.settled;
@@ -1855,6 +1905,7 @@ export default class ShorthandPlugin extends Plugin {
 
   private async finishRuntime(runtime: CaptureRuntime, reason: "stopped" | "died"): Promise<void> {
     if (this.#capture !== runtime) return;
+    runtime.meetingEnd.dispose();
     // Backstop, once nothing is left to finalize: the mode's own stop signal is a no-op
     // against an idle Shorthand, so firing it costs nothing and is the only thing that
     // guarantees a capture cannot leave Shorthand recording when the belief about its state
@@ -1910,6 +1961,7 @@ export default class ShorthandPlugin extends Plugin {
   private async captureSettled(runtime: CaptureRuntime, diagnosis: ExitDiagnosis): Promise<void> {
     if (runtime.stopping || this.#capture !== runtime) return;
     runtime.stopping = true;
+    runtime.meetingEnd.dispose();
     // The follower is gone, so nothing can observe a recording any more. Recall an in-
     // flight start sequence for the same reason a Stop press does.
     runtime.recorder?.requestStop();
@@ -2190,7 +2242,47 @@ export default class ShorthandPlugin extends Plugin {
       captureMode: this.#capture?.mode ?? this.#requestedCaptureMode,
       hasActiveNote: this.hasActiveNote(),
       hasCapture: this.#capture !== undefined,
+      meetingEnd: this.#capture?.meetingEnd.countdown,
     });
+  }
+
+  /** The panel's Cancel button and the Notice's both land here. */
+  cancelMeetingEnd(): void {
+    this.#capture?.meetingEnd.cancel();
+  }
+
+  #showMeetingEnd(countdown: MeetingEndCountdown | undefined): void {
+    if (countdown === undefined) {
+      this.#hideMeetingEndNotice();
+    } else if (this.#meetingEndNotice === undefined) {
+      let text: HTMLElement | undefined;
+      const fragment = createFragment((frag) => {
+        text = frag.createSpan({ text: meetingEndNoticeText(countdown.remainingSeconds) });
+        const cancel = frag.createEl("button", { text: "Cancel", attr: { type: "button" } });
+        cancel.onclick = () => { this.cancelMeetingEnd(); };
+      });
+      if (text !== undefined) this.#meetingEndNotice = { notice: new Notice(fragment, 0), text };
+    }
+    this.#render();
+  }
+
+  #tickMeetingEndNotice(): void {
+    const countdown = this.#capture?.meetingEnd.countdown;
+    if (countdown === undefined || this.#meetingEndNotice === undefined) return;
+    this.#meetingEndNotice.text.textContent = meetingEndNoticeText(countdown.remainingSeconds);
+  }
+
+  #hideMeetingEndNotice(): void {
+    this.#meetingEndNotice?.notice.hide();
+    this.#meetingEndNotice = undefined;
+  }
+
+  #meetingEndCancelled(cause: MeetingEndCancelCause): void {
+    new Notice(
+      cause === "speech"
+        ? "Shorthand: the conversation continued, so recording was not stopped."
+        : "Shorthand: automatic stop cancelled.",
+    );
   }
 
   runPanelAction(id: PanelButtonId): void {
@@ -2860,6 +2952,11 @@ class ShorthandSettingTab extends PluginSettingTab {
           control: { type: "toggle", key: "controlShorthandRecording" },
         },
         {
+          name: "Detect meeting end and stop recording",
+          desc: "Watches the transcript for signs the meeting has wrapped up, then stops after a 30-second countdown you can cancel.",
+          control: { type: "toggle", key: "detectMeetingEnd" },
+        },
+        {
           name: "Debug logging",
           desc: "Logs note-taking and enhancement activity to the developer console. Turn this on if note-taking does not start or stop as expected, or a note stops updating while you're taking notes.",
           control: { type: "toggle", key: "debugLogging" },
@@ -3171,6 +3268,11 @@ class ShorthandPanelView extends ItemView {
   #agentWarningEl!: HTMLElement;
   #agentNoteEl!: HTMLElement;
   #agentRefresh!: ExtraButtonComponent;
+  #meetingEndEl!: HTMLElement;
+  #meetingEndHeadlineEl!: HTMLElement;
+  #meetingEndCountdownEl!: HTMLElement;
+  #meetingEndReasonEl!: HTMLElement;
+  #meetingEndCancelEl!: HTMLButtonElement;
   #recoveryEl!: HTMLElement;
   /** What the recovery cards were last built from; they are rebuilt only when it changes. */
   #recoverySignature = "";
@@ -3253,6 +3355,22 @@ class ShorthandPanelView extends ItemView {
     pulse.createSpan();
     this.#activityLabelEl = this.#activityEl.createSpan();
     this.#detailEl = this.#statusEl.createEl("p", { cls: "shorthand-panel-detail" });
+
+    // Built once and patched in place: the countdown ticks every second, and rebuilding the
+    // Cancel button on that cadence would drop focus from it.
+    this.#meetingEndEl = container.createDiv({
+      cls: "shorthand-panel-meeting-end",
+      attr: { role: "group", "aria-label": "Meeting end detected" },
+    });
+    this.#meetingEndHeadlineEl = this.#meetingEndEl.createEl("h4", { cls: "shorthand-panel-meeting-end-headline" });
+    this.#meetingEndCountdownEl = this.#meetingEndEl.createEl("p", {
+      cls: "shorthand-panel-meeting-end-text",
+      attr: { "aria-live": "polite" },
+    });
+    this.#meetingEndReasonEl = this.#meetingEndEl.createEl("p", { cls: "shorthand-panel-meeting-end-text" });
+    this.#meetingEndCancelEl = this.#meetingEndEl.createEl("button", { cls: "mod-cta", attr: { type: "button" } });
+    this.#meetingEndCancelEl.onclick = () => { this.plugin.cancelMeetingEnd(); };
+    this.#meetingEndEl.hidden = true;
 
     // Above the agent section on purpose: a recovery card tells the user to fix the agent,
     // and the switcher and sign-in status it points at sit directly beneath it.
@@ -3390,6 +3508,15 @@ class ShorthandPanelView extends ItemView {
     this.#activityEl.hidden = model.activityLabel === undefined;
     this.#detailEl.textContent = model.detail ?? "";
     this.#detailEl.hidden = model.detail === undefined;
+    const meetingEnd = model.meetingEnd;
+    this.#meetingEndEl.hidden = meetingEnd === undefined;
+    if (meetingEnd !== undefined) {
+      this.#meetingEndHeadlineEl.textContent = meetingEnd.headline;
+      this.#meetingEndCountdownEl.textContent = meetingEnd.countdown;
+      this.#meetingEndReasonEl.textContent = meetingEnd.reason === undefined ? "" : `Reason: ${meetingEnd.reason}`;
+      this.#meetingEndReasonEl.hidden = meetingEnd.reason === undefined;
+      this.#meetingEndCancelEl.textContent = meetingEnd.cancelLabel;
+    }
     this.#patchRecoverySection(this.plugin.recoveryCards());
     this.#patchAgentSection(this.plugin.agentStatus());
     this.#actionsEl.hidden = !model.buttons.some(({ id, visible }) => id !== "stop" && visible);
