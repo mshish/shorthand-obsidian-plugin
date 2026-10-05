@@ -1,12 +1,11 @@
 import type { CatalogFailureReason } from "shorthand-core";
 import type { EnhancementBackend, ShorthandPluginSettings } from "./settings.js";
-import { catalogFetchFailedDescription, type AgentBackendLabel } from "./settings-display.js";
 
 /**
- * The panel's agent line: which backend and model are selected, and whether the CLI behind
- * them is signed in. Everything that decides what to show or say lives here rather than in
- * `main.ts` (which `bun test` cannot import), so the probe's state machine and every warning
- * string have tests.
+ * The check behind the panel's note-taker line: whether the program behind the selected backend
+ * is signed in and reachable. The state machine lives here rather than in `main.ts` (which
+ * `bun test` cannot import) so it has tests; what the panel says about each state is in
+ * `note-taker-view.ts`.
  *
  * The probe is core's catalog fetch (`listClaudeModels`, `listCodexModels`, `listAcpModels`),
  * the same one the settings tab runs. It spawns a subprocess and takes up to
@@ -14,12 +13,20 @@ import { catalogFetchFailedDescription, type AgentBackendLabel } from "./setting
  * render, and nothing in capture waits on it.
  */
 
+/**
+ * The choices as a person reads them, in the order they are offered. One list for the panel's
+ * menu and the settings tab's dropdown, so a new backend cannot reach one and not the other.
+ * Each name says what the user gets, not the protocol behind it: "Claude" is the Claude Code
+ * program signed in to a Claude account; "ChatGPT (Codex)" is the Codex program signed in to a
+ * ChatGPT account; "Another app (ACP)" is any program that speaks the Agent Client Protocol;
+ * "Your own API key" is a model provider reached with a key the user supplies.
+ */
 export const BACKEND_DISPLAY_NAMES: Record<EnhancementBackend, string> = {
-  "claude-agent-sdk": "Claude Code",
-  codex: "Codex",
-  cursor: "Cursor CLI",
-  acp: "Agent Client Protocol (ACP)",
-  llm: "LLM provider",
+  "claude-agent-sdk": "Claude",
+  codex: "ChatGPT (Codex)",
+  cursor: "Cursor",
+  acp: "Another app (ACP)",
+  llm: "Your own API key",
 };
 
 type ProbeSettings = Pick<
@@ -96,7 +103,7 @@ export function reduceProbeState(state: ProbeState, event: ProbeEvent): ProbeSta
 }
 
 /**
- * Whether the cached state already answers for these settings. A refresh control bypasses this;
+ * Whether the cached state already answers for these settings. "Check connection" bypasses this;
  * everything else (panel open, plugin load, a settings change) goes through it, so repeated
  * triggers for an unchanged selection do not respawn the CLI.
  */
@@ -110,8 +117,8 @@ export function needsProbe(state: ProbeState, settings: ProbeSettings): boolean 
  * Whether opening the panel should ask again. Everything `needsProbe` asks for, plus a cached
  * signed-out or failed answer for the current selection: the user fixes those outside the
  * plugin (`claude login`, a reinstall), so the cache only ever goes stale in the direction
- * that keeps showing the warning, and without this the panel would keep saying "Notes will
- * not be enhanced" until the user found the refresh button. A signed-in answer is not
+ * that keeps showing the warning, and without this the panel would keep saying the note taker
+ * cannot take notes until the user found "Check again". A signed-in answer is not
  * re-asked, so opening the panel stays free of a subprocess in the healthy case.
  */
 export function needsProbeOnOpen(state: ProbeState, settings: ProbeSettings): boolean {
@@ -129,124 +136,13 @@ export function shouldReprobeAtCaptureStart(state: ProbeState, settings: ProbeSe
   return key !== undefined && state.kind === "signed-out" && state.key === key;
 }
 
-function probeLabel(backend: EnhancementBackend): AgentBackendLabel | undefined {
-  switch (backend) {
-    case "claude-agent-sdk": return "Claude";
-    case "codex": return "Codex";
-    case "cursor": return "Cursor CLI";
-    case "acp": return "ACP";
-    case "llm": return undefined;
+/** The stored model id for the selected backend; empty when none is chosen. */
+export function selectedModelId(settings: ModelSettings): string {
+  switch (settings.backend) {
+    case "claude-agent-sdk": return settings.claudeModel;
+    case "codex": return settings.codexModel;
+    case "cursor": return settings.cursorModel;
+    case "acp": return settings.acpTransport === "network" ? "" : settings.acpModel;
+    case "llm": return settings.llmModel;
   }
-}
-
-function loginCommand(backend: EnhancementBackend): string | undefined {
-  if (backend === "claude-agent-sdk") return "claude login";
-  if (backend === "codex") return "codex login";
-  return undefined;
-}
-
-/** The stored model id, or the words the settings tab uses for "no override". */
-export function selectedModelLabel(settings: ModelSettings): string {
-  const stored = (() => {
-    switch (settings.backend) {
-      case "claude-agent-sdk": return settings.claudeModel;
-      case "codex": return settings.codexModel;
-      case "cursor": return settings.cursorModel;
-      case "acp": return settings.acpTransport === "network" ? "" : settings.acpModel;
-      case "llm": return settings.llmModel;
-    }
-  })();
-  return stored.length > 0 ? stored : "Provider default";
-}
-
-function signedOutText(backend: EnhancementBackend): string {
-  const name = BACKEND_DISPLAY_NAMES[backend];
-  const command = loginCommand(backend);
-  return command === undefined
-    ? `${name} is not signed in. Sign in with its own tool.`
-    : `${name} is not signed in. Run ${command} in a terminal, then refresh.`;
-}
-
-export type AgentStatusTone = "neutral" | "checking" | "ok" | "warning";
-
-export type AgentStatusModel = Readonly<{
-  backendValue: EnhancementBackend;
-  modelLabel: string;
-  /** One short line: "Checking…", "Signed in as …", or nothing when no probe applies. */
-  statusText: string | undefined;
-  tone: AgentStatusTone;
-  /** Names the problem and how to fix it. Absent while healthy, checking or not probed. */
-  warning: string | undefined;
-  /** Shown beside the switcher while a capture is running. */
-  switchNote: string | undefined;
-  /** Whether a refresh would do anything; false when no probe applies to this selection. */
-  canRefresh: boolean;
-}>;
-
-export type AgentStatusInput = Readonly<{
-  settings: ModelSettings & ProbeSettings;
-  probe: ProbeState;
-  captureInFlight: boolean;
-}>;
-
-export function describeAgentStatus(input: AgentStatusInput): AgentStatusModel {
-  const { settings, probe, captureInFlight } = input;
-  const backend = settings.backend;
-  const key = probeKey(settings);
-  // A cached answer for a different selection is not this selection's answer; treat it as
-  // not yet probed rather than show another agent's sign-in state under this one's name.
-  const current = key !== undefined && probe.kind !== "unprobed" && probe.key === key ? probe : undefined;
-
-  let statusText: string | undefined;
-  let tone: AgentStatusTone = "neutral";
-  let warning: string | undefined;
-  if (key === undefined) {
-    statusText = undefined;
-  } else if (current === undefined || current.kind === "checking") {
-    statusText = "Checking sign-in…";
-    tone = "checking";
-  } else if (current.kind === "signed-in") {
-    // Only Claude (accountInfo) and Codex (account/read) report a real account. For Cursor and
-    // ACP, core fills `account` with the agent's name (or the literal "Cursor CLI") and always
-    // reports signedIn, which only means the handshake succeeded, so naming it would be false.
-    const reportsAccount = backend === "claude-agent-sdk" || backend === "codex";
-    statusText = !reportsAccount ? "Agent responded"
-      : current.account === undefined ? "Signed in" : `Signed in as ${current.account}`;
-    tone = "ok";
-  } else if (current.kind === "signed-out") {
-    statusText = "Not signed in";
-    tone = "warning";
-    warning = `${signedOutText(backend)} Notes will not be enhanced until then.`;
-  } else {
-    statusText = "Sign-in check failed";
-    tone = "warning";
-    const label = probeLabel(backend);
-    const reason = label === undefined ? "" : catalogFetchFailedDescription(label, current.reason);
-    // The probe's own text names the cause; the fixed sentence names the class of failure.
-    const detail = current.message !== undefined && current.message.length > 0 ? ` ${current.message}` : "";
-    warning = `${reason}${detail}`.trim();
-  }
-
-  return {
-    backendValue: backend,
-    modelLabel: selectedModelLabel(settings),
-    statusText,
-    tone,
-    warning,
-    // A running capture built its enhancer from the settings at its start (`createEnhancer`
-    // reads them once), so a switch cannot reach it.
-    switchNote: captureInFlight ? "Applies to the next capture. The current one keeps its agent." : undefined,
-    canRefresh: key !== undefined,
-  };
-}
-
-/**
- * The Notice shown when a capture starts after the probe said signed out. Only a definite
- * signed-out answer warns: a failed or still-running probe says nothing about the account, and
- * a false alarm at every start would teach users to ignore it. Capture proceeds either way.
- */
-export function captureStartNotice(state: ProbeState, settings: ProbeSettings): string | undefined {
-  const key = probeKey(settings);
-  if (key === undefined || state.kind !== "signed-out" || state.key !== key) return undefined;
-  return `Shorthand: ${signedOutText(settings.backend)} Notes will not be enhanced.`;
 }

@@ -2,6 +2,7 @@ import {
   FileSystemAdapter,
   ItemView,
   MarkdownView,
+  Menu,
   Modal,
   Notice,
   Plugin,
@@ -11,7 +12,6 @@ import {
   type App,
   type ButtonComponent,
   type DropdownComponent,
-  type ExtraButtonComponent,
   type TFile,
   normalizePath,
   type Editor,
@@ -87,7 +87,6 @@ import {
   storedPromptFieldValue,
   validatePromptSettings,
   type EnhancementBackend,
-  isEnhancementBackend,
   type ShorthandPluginSettings,
 } from "./src/settings.js";
 import {
@@ -149,21 +148,26 @@ import { describeStatus } from "./src/status-text.js";
 import { describePanel, SHORTHAND_PANEL_VIEW, type PanelButtonId, type PanelModel } from "./src/panel-model.js";
 import {
   BACKEND_DISPLAY_NAMES,
-  captureStartNotice,
-  describeAgentStatus,
   INITIAL_PROBE_STATE,
   needsProbe,
   needsProbeOnOpen,
   probeKey,
   shouldReprobeAtCaptureStart,
   reduceProbeState,
-  type AgentStatusModel,
   type ProbeEvent,
   type ProbeState,
 } from "./src/agent-status.js";
 import {
+  captureStartNotice,
+  describeNoteTaker,
+  SIGN_IN_COMMANDS,
+  sentenceSubject,
+  type NoteTakerView,
+} from "./src/note-taker-view.js";
+import {
   CaptureRecord,
   describeRecoveryCards,
+  RECOVERY_NOTICES,
   RecoveryStore,
   reprocessResult,
   type ReprocessResult,
@@ -477,6 +481,12 @@ export default class ShorthandPlugin extends Plugin {
    * the start, so the panel must not tell the user it waits for the next capture.
    */
   #startEnhancerChosen = false;
+  /**
+   * The backend the latest start's enhancer was built for. Meaningful only while
+   * `#startEnhancerChosen` or `#capture` says a start is under way or running; `noteTaker()`
+   * reads it nowhere else.
+   */
+  #captureBackend: EnhancementBackend | undefined = undefined;
   /** Makes the selected mode visible during setup, before a runtime exists to own it. */
   #requestedCaptureMode: CaptureMode | undefined = undefined;
   /**
@@ -726,25 +736,25 @@ export default class ShorthandPlugin extends Plugin {
     this.ensureAgentProbe();
   }
 
-  /** What the panel's agent section shows. Reads the cached probe; never starts one. */
-  agentStatus(): AgentStatusModel {
-    return describeAgentStatus({
+  /** What the panel's note-taker section shows. Reads the cached probe; never starts one. */
+  noteTaker(): NoteTakerView {
+    return describeNoteTaker({
       settings: this.settings,
       probe: this.#agentProbe,
       // A start counts once it has snapshotted the settings for `createEnhancer`; a switch made
       // before that still applies to it, and one made after misses it as it would mid-capture.
-      captureInFlight: this.#capture !== undefined || this.#startEnhancerChosen,
+      captureBackend: this.#capture !== undefined || this.#startEnhancerChosen ? this.#captureBackend : undefined,
     });
   }
 
-  /** The panel's switcher. A running capture keeps the enhancer it built at start. */
+  /** The panel's menu. A running capture keeps the enhancer it built at start. */
   async switchAgent(backend: EnhancementBackend): Promise<void> {
     if (backend === this.settings.backend) return;
     await this.saveSettings({ ...this.settings, backend });
     this.#renderPanel();
   }
 
-  /** The panel's refresh control: re-asks even when the cached answer would still apply. */
+  /** The panel's "Check connection" and "Check again": re-asks even when the cached answer would still apply. */
   refreshAgentProbe(): void {
     this.#runAgentProbe();
   }
@@ -834,7 +844,7 @@ export default class ShorthandPlugin extends Plugin {
         // A reprocess writes this note's AI block, as would the capture; two writers on one
         // block is the race the standalone commands already refuse for a live capture.
         if (this.#recovery.isBusy(file)) {
-          new Notice("Shorthand is reprocessing this note's transcript. Wait for it to finish before taking new notes on it.");
+          new Notice(RECOVERY_NOTICES.busyOnStart);
           return;
         }
         // Claimed in the same synchronous run as the check above, so `reprocessTranscript`
@@ -890,7 +900,7 @@ export default class ShorthandPlugin extends Plugin {
           });
         }
         const transcript = new TranscriptStore();
-        const captureRecord = new CaptureRecord(mode);
+        const captureRecord = new CaptureRecord(mode, sentenceSubject(this.settings.backend));
         // A new capture clears any Notice a previous one left, even though every finish path
         // already disposes its own watch: a Notice that outlived its capture would carry a
         // Cancel button that cancels nothing.
@@ -927,6 +937,7 @@ export default class ShorthandPlugin extends Plugin {
         // while setup was awaiting.
         const enhancerSettings = this.settings;
         this.#startEnhancerChosen = true;
+        this.#captureBackend = enhancerSettings.backend;
         try {
           enhancer = await this.createEnhancer(
             noteSink,
@@ -940,7 +951,7 @@ export default class ShorthandPlugin extends Plugin {
           unownedEnhancer = enhancer;
         } catch (error) {
           enhancementUnavailable = `${errorMessage(error)} Note-taking will continue with transcript only.`;
-          captureRecord.noteFailure(enhancementUnavailable);
+          captureRecord.noteStartFailure(enhancementUnavailable);
         }
         const command = this.shorthandCommand();
         // Adopted, not replaced, when attaching. The app replays a session only while it is
@@ -1025,7 +1036,7 @@ export default class ShorthandPlugin extends Plugin {
         // Shown only once the start can no longer bail out, so it never warns about a capture
         // that did not begin. Advisory: capture proceeds, because a stale or wrong "signed out"
         // must never cost a user their recording.
-        const signedOutNotice = captureStartNotice(this.#agentProbe, enhancerSettings);
+        const signedOutNotice = captureStartNotice(this.#agentProbe, enhancerSettings, mode);
         if (signedOutNotice !== undefined) new Notice(signedOutNotice, 10_000);
         // The user may have signed in since that answer; ask again without waiting, so the panel
         // and the next start are right. Never awaited: capture does not depend on it.
@@ -1564,11 +1575,11 @@ export default class ShorthandPlugin extends Plugin {
       return;
     }
     if (this.#capture?.noteFile === file || this.#startingNote === file) {
-      new Notice("Shorthand is taking notes on this note. Stop taking notes before reprocessing its transcript.");
+      new Notice(RECOVERY_NOTICES.captureRunning);
       return;
     }
     if (this.#recovery.beginReprocess(file) !== "started") {
-      new Notice("Shorthand is already reprocessing this transcript.");
+      new Notice(RECOVERY_NOTICES.alreadyRunning);
       return;
     }
     this.#render();
@@ -1605,10 +1616,10 @@ export default class ShorthandPlugin extends Plugin {
     this.#recovery.finishReprocess(file, result);
     if (result.ok) {
       new Notice(result.written
-        ? `Shorthand reprocessed the transcript into ${file.basename}.`
-        : `${file.basename} was already up to date.`);
+        ? RECOVERY_NOTICES.success(file.basename)
+        : RECOVERY_NOTICES.alreadyCurrent(file.basename));
     } else {
-      new Notice(`Shorthand: reprocessing failed. ${result.error} The transcript is still held; you can retry.`, 10_000);
+      new Notice(RECOVERY_NOTICES.failed(result.error), 10_000);
     }
     this.#render();
   }
@@ -1627,9 +1638,9 @@ export default class ShorthandPlugin extends Plugin {
     if (entry === undefined) return;
     try {
       await navigator.clipboard.writeText(entry.transcript);
-      new Notice(`The note ${file.basename} no longer exists. Its transcript was copied to the clipboard.`, 10_000);
+      new Notice(RECOVERY_NOTICES.copied(file.basename), 10_000);
     } catch (error) {
-      new Notice(`Shorthand: could not copy the transcript. ${errorMessage(error)}`, 10_000);
+      new Notice(RECOVERY_NOTICES.copyFailed(errorMessage(error)), 10_000);
     }
   }
 
@@ -1851,12 +1862,12 @@ export default class ShorthandPlugin extends Plugin {
       const cursorExecutable = detectCursorExecutable(configuredCursor.length === 0 ? undefined : configuredCursor);
       if (cursorExecutable === undefined) {
         throw new Error(
-          'Cursor CLI was not found. Install the Cursor CLI from https://cursor.com/cli, or enter its full path in "Cursor CLI executable" under Shorthand settings.',
+          'Cursor CLI was not found. Install the Cursor CLI from https://cursor.com/cli, or enter its full path in "Cursor executable" under Shorthand settings.',
         );
       }
       if (!existsSync(cursorExecutable)) {
         throw new Error(
-          `Cursor CLI was not found at "${cursorExecutable}". Update "Cursor CLI executable" in Shorthand settings, or clear it to find Cursor CLI automatically.`,
+          `Cursor CLI was not found at "${cursorExecutable}". Update "Cursor executable" in Shorthand settings, or clear it to find Cursor CLI automatically.`,
         );
       }
       agent = new AcpAgentClient({
@@ -1871,14 +1882,14 @@ export default class ShorthandPlugin extends Plugin {
       if (this.settings.acpTransport === "network") {
         const url = this.settings.acpNetworkUrl.trim();
         if (url.length === 0) {
-          throw new Error("ACP network URL is required when using network transport. Configure the URL in Shorthand settings.");
+          throw new Error("Another app network URL is required when using network transport. Configure the URL in Shorthand settings.");
         }
         // The agent's own token, if any, lives in the app's keyring under this slot — see
         // acpSlot's doc comment. Core never sees it: the app attaches it on its side of the
         // fetch/WebSocket shims below.
         const slot = acpSlot(this.vaultId(), url);
         if (slot === undefined) {
-          throw new Error(`"${url}" is not a valid ACP network URL. Update it in Shorthand settings.`);
+          throw new Error(`"${url}" is not a valid Another app network URL. Update it in Shorthand settings.`);
         }
         const client = await this.connectToApp();
         agent = new AcpAgentClient({
@@ -1893,10 +1904,10 @@ export default class ShorthandPlugin extends Plugin {
       } else {
         const configuredAcp = this.settings.acpExecutable.trim();
         if (configuredAcp.length === 0) {
-          throw new Error('ACP executable is required when using standard I/O transport. Configure "ACP executable" in Shorthand settings.');
+          throw new Error('Another app executable is required when using standard I/O transport. Configure "Another app executable" in Shorthand settings.');
         }
         if (!existsSync(configuredAcp)) {
-          throw new Error(`ACP executable was not found at "${configuredAcp}". Update "ACP executable" in Shorthand settings.`);
+          throw new Error(`Another app executable was not found at "${configuredAcp}". Update "Another app executable" in Shorthand settings.`);
         }
         const args = this.settings.acpArgs.trim().length > 0
           ? this.settings.acpArgs.trim().split(/\s+/)
@@ -2024,10 +2035,7 @@ export default class ShorthandPlugin extends Plugin {
     } finally {
       // Before `capture-stopped`, so the repaint it triggers already shows the card.
       if (this.#recovery.keep(runtime.noteFile, runtime.record) !== undefined) {
-        new Notice(
-          "Shorthand: some of this meeting may be missing from the note. Open the Shorthand panel to reprocess the transcript.",
-          10_000,
-        );
+        new Notice(RECOVERY_NOTICES.missing(runtime.record.mode), 10_000);
       }
       if (this.#capture === runtime) this.#capture = undefined;
       this.dispatch({ type: "capture-stopped" });
@@ -2566,8 +2574,8 @@ class ShorthandSettingTab extends PluginSettingTab {
   private basicDefinitions(): SettingDefinitionItem<SettingsKey>[] {
     return [
       {
-        name: "Enhancement backend",
-        desc: "Only Claude Code can look things up elsewhere in your vault.",
+        name: "AI note taker",
+        desc: "Only Claude can look things up elsewhere in your vault.",
         control: {
           type: "dropdown",
           key: "backend",
@@ -2693,7 +2701,7 @@ class ShorthandSettingTab extends PluginSettingTab {
    */
   private agentCatalogItem(backend: "claude" | "codex"): SettingDefinitionItem<SettingsKey> {
     const backendLabel: AgentBackendLabel = backend === "claude" ? "Claude" : "Codex";
-    const loginCommand = backend === "claude" ? "claude login" : "codex login";
+    const loginCommand = SIGN_IN_COMMANDS[backend];
     const modelKey = backend === "claude" ? "claudeModel" : "codexModel";
     const effortKey = backend === "claude" ? "claudeEffort" : "codexEffort";
     const ownsBackend: EnhancementBackend = backend === "claude" ? "claude-agent-sdk" : "codex";
@@ -2826,7 +2834,7 @@ class ShorthandSettingTab extends PluginSettingTab {
       visible: () => this.plugin.settings.backend === "cursor",
       items: [
         {
-          name: "Cursor CLI model",
+          name: "Cursor model",
           desc: catalogLoadingDescription(),
           render: (modelRow) => {
             let disposed = false;
@@ -2868,7 +2876,7 @@ class ShorthandSettingTab extends PluginSettingTab {
             };
           },
         },
-        textControlItem("Cursor CLI executable", cursorExecutableDescription, "cursorExecutable", this.plugin.settings.cursorExecutable),
+        textControlItem("Cursor executable", cursorExecutableDescription, "cursorExecutable", this.plugin.settings.cursorExecutable),
       ],
     };
   }
@@ -2879,7 +2887,7 @@ class ShorthandSettingTab extends PluginSettingTab {
       visible: () => this.plugin.settings.backend === "acp",
       items: [
         {
-          name: "ACP model",
+          name: "Another app model",
           desc: catalogLoadingDescription(),
           render: (modelRow) => {
             let disposed = false;
@@ -2907,7 +2915,7 @@ class ShorthandSettingTab extends PluginSettingTab {
 
             const configuredExecutable = this.plugin.settings.acpExecutable.trim();
             if (configuredExecutable.length === 0) {
-              modelRow.setDesc("Enter the ACP executable path below to load available models.").setDisabled(true);
+              modelRow.setDesc("Enter the other app executable path below to load available models.").setDisabled(true);
               return () => {
                 disposed = true;
                 this.#agentCatalogs.delete("acp");
@@ -2939,7 +2947,7 @@ class ShorthandSettingTab extends PluginSettingTab {
           },
         },
         {
-          name: "ACP transport",
+          name: "Another app transport",
           desc: "Connect to a local agent process (stdio) or a remote agent endpoint (network).",
           control: {
             type: "dropdown",
@@ -2951,17 +2959,17 @@ class ShorthandSettingTab extends PluginSettingTab {
           },
         },
         {
-          ...textControlItem("ACP executable", acpExecutableDescription, "acpExecutable", this.plugin.settings.acpExecutable),
+          ...textControlItem("Another app executable", acpExecutableDescription, "acpExecutable", this.plugin.settings.acpExecutable),
           visible: () => this.plugin.settings.acpTransport === "stdio",
         },
         {
-          name: "ACP arguments",
-          desc: "Optional arguments passed to the ACP executable.",
+          name: "Another app arguments",
+          desc: "Optional arguments passed to the app.",
           control: { type: "text", key: "acpArgs" },
           visible: () => this.plugin.settings.acpTransport === "stdio",
         },
         {
-          name: "ACP network URL",
+          name: "Another app network URL",
           desc: "WebSocket (ws://, wss://) or HTTP (http://, https://) endpoint for the remote agent.",
           control: { type: "text", key: "acpNetworkUrl" },
           visible: () => this.plugin.settings.acpTransport === "network",
@@ -3130,7 +3138,7 @@ class ShorthandSettingTab extends PluginSettingTab {
    * ollama-only branch and nothing else, since an ACP token is not an LLM key.
    *
    * `shouldFetch` mirrors the check every other imperative row in this file makes for itself
-   * (see the "ACP model" row above): `render` runs for a group's declared items even while the
+   * (see the "Another app model" row above): `render` runs for a group's declared items even while the
    * group's own `visible` is false — visibility is CSS applied afterwards — so without this
    * gate, editing an unrelated backend's settings would still open a connection to the app and
    * read a slot's credential status for a row nobody can see.
@@ -3360,12 +3368,13 @@ class ShorthandPanelView extends ItemView {
   #activityEl!: HTMLElement;
   #activityLabelEl!: HTMLElement;
   #detailEl!: HTMLElement;
-  #agentDropdown!: DropdownComponent;
-  #agentModelEl!: HTMLElement;
-  #agentStatusEl!: HTMLElement;
-  #agentWarningEl!: HTMLElement;
-  #agentNoteEl!: HTMLElement;
-  #agentRefresh!: ExtraButtonComponent;
+  #noteTakerLineEl!: HTMLButtonElement;
+  #noteTakerDotEl!: HTMLElement;
+  #noteTakerTextEl!: HTMLElement;
+  #noteTakerProblemEl!: HTMLElement;
+  /** What the problem callout was last built from; it is rebuilt only when it changes. */
+  #noteTakerProblemSignature = "";
+  #noteTakerSwitchEl!: HTMLElement;
   #meetingEndEl!: HTMLElement;
   #meetingEndHeadlineEl!: HTMLElement;
   #meetingEndCountdownEl!: HTMLElement;
@@ -3472,10 +3481,7 @@ class ShorthandPanelView extends ItemView {
     this.#meetingEndCancelEl.onclick = () => { this.plugin.cancelMeetingEnd(); };
     this.#meetingEndEl.hidden = true;
 
-    // Above the agent section on purpose: a recovery card tells the user to fix the agent,
-    // and the switcher and sign-in status it points at sit directly beneath it.
     this.#recoveryEl = container.createDiv({ cls: "shorthand-panel-recovery-list" });
-    this.#buildAgentSection(container);
 
     this.#actionsEl = container.createDiv({ cls: "shorthand-panel-actions" });
     this.#actionsEl.createEl("p", { cls: "shorthand-panel-actions-label", text: "Choose a mode" });
@@ -3500,27 +3506,64 @@ class ShorthandPanelView extends ItemView {
       buttonEls.set(button.id, { button: element, label, hint });
     }
     this.#buttonEls = buttonEls;
+    // Last, so it sits below the mode cards, and below the capture controls while capturing.
+    this.#buildNoteTakerSection(container);
   }
 
-  /** Built once, like the rest of the panel; `#patchAgentSection` only changes text and state. */
-  #buildAgentSection(container: HTMLElement): void {
-    const section = container.createDiv({ cls: "shorthand-panel-agent" });
-    const row = new Setting(section).setName("Agent");
-    row.addDropdown((dropdown) => {
-      for (const [value, label] of Object.entries(BACKEND_DISPLAY_NAMES)) dropdown.addOption(value, label);
-      dropdown.onChange((value) => {
-        if (isEnhancementBackend(value)) void this.plugin.switchAgent(value);
-      });
-      this.#agentDropdown = dropdown;
+  /** Built once, like the rest of the panel; `#patchNoteTaker` only changes text and state. */
+  #buildNoteTakerSection(container: HTMLElement): void {
+    const section = container.createDiv({ cls: "shorthand-panel-note-taker" });
+    // A button, so the keyboard reaches it and Enter or Space opens the menu.
+    const line = section.createEl("button", {
+      cls: "shorthand-panel-note-taker-line",
+      attr: { type: "button", "aria-haspopup": "menu" },
     });
-    row.addExtraButton((button) => {
-      button.setIcon("refresh-cw").setTooltip("Check sign-in again").onClick(() => { this.plugin.refreshAgentProbe(); });
-      this.#agentRefresh = button;
+    setIcon(line.createSpan({ cls: "shorthand-panel-note-taker-icon", attr: { "aria-hidden": "true" } }), "pencil");
+    this.#noteTakerDotEl = line.createSpan({ cls: "shorthand-panel-note-taker-dot", attr: { "aria-hidden": "true" } });
+    this.#noteTakerTextEl = line.createSpan({ cls: "shorthand-panel-note-taker-text" });
+    setIcon(line.createSpan({ cls: "shorthand-panel-note-taker-chevron", attr: { "aria-hidden": "true" } }), "chevron-down");
+    line.onclick = (event) => { this.#openNoteTakerMenu(event, line); };
+    this.#noteTakerLineEl = line;
+
+    this.#noteTakerProblemEl = section.createDiv({
+      cls: "shorthand-panel-callout shorthand-panel-note-taker-problem",
+      attr: { role: "group" },
     });
-    this.#agentModelEl = section.createEl("p", { cls: "shorthand-panel-agent-line" });
-    this.#agentStatusEl = section.createEl("p", { cls: "shorthand-panel-agent-line", attr: { "aria-live": "polite" } });
-    this.#agentWarningEl = section.createEl("p", { cls: "shorthand-panel-agent-warning", attr: { role: "alert" } });
-    this.#agentNoteEl = section.createEl("p", { cls: "shorthand-panel-agent-line" });
+    this.#noteTakerProblemEl.hidden = true;
+    this.#noteTakerSwitchEl = section.createEl("p", { cls: "shorthand-panel-note-taker-switch" });
+    this.#noteTakerSwitchEl.hidden = true;
+  }
+
+  /**
+   * Built from the model at the moment of the click, not when the panel was drawn, so the
+   * check mark is on the current choice even if it changed since.
+   */
+  #openNoteTakerMenu(event: MouseEvent, anchor: HTMLElement): void {
+    const { menu: model } = this.plugin.noteTaker();
+    const menu = new Menu();
+    menu.addItem((item) => item.setTitle(model.heading).setIsLabel(true));
+    for (const choice of model.choices) {
+      menu.addItem((item) => item
+        .setTitle(choice.label)
+        .setChecked(choice.checked)
+        .onClick(() => {
+          void this.plugin.switchAgent(choice.backend).catch((error: unknown) => {
+            new Notice(`Shorthand: ${errorMessage(error)}`, 10_000);
+          });
+        }));
+    }
+    menu.addSeparator();
+    menu.addItem((item) => item
+      .setTitle(model.checkLabel)
+      .setDisabled(!model.canCheck)
+      .onClick(() => { this.plugin.refreshAgentProbe(); }));
+    // A keyboard-triggered click carries no pointer position, so anchor to the button instead.
+    if (event.detail === 0) {
+      const rect = anchor.getBoundingClientRect();
+      menu.showAtPosition({ x: rect.left, y: rect.bottom });
+    } else {
+      menu.showAtMouseEvent(event);
+    }
   }
 
   /**
@@ -3536,17 +3579,14 @@ class ShorthandPanelView extends ItemView {
     this.#recoveryEl.empty();
     for (const { card, file } of cards) {
       const el = this.#recoveryEl.createDiv({
-        cls: "shorthand-panel-recovery",
+        cls: "shorthand-panel-callout shorthand-panel-recovery",
         attr: { role: "group", "aria-label": card.headline },
       });
-      el.createEl("h4", { cls: "shorthand-panel-recovery-headline", text: card.headline });
-      el.createEl("p", { cls: "shorthand-panel-recovery-note", text: `Note: ${card.noteName}` });
-      el.createEl("p", { cls: "shorthand-panel-recovery-error", text: card.error, attr: { role: "alert" } });
-      if (card.guidance !== undefined) el.createEl("p", { cls: "shorthand-panel-recovery-text", text: card.guidance });
-      if (card.progress !== undefined) {
-        el.createEl("p", { cls: "shorthand-panel-recovery-text", text: card.progress, attr: { "aria-live": "polite" } });
-      }
-      const buttons = el.createDiv({ cls: "shorthand-panel-recovery-buttons" });
+      el.createEl("p", { cls: "shorthand-panel-callout-headline", text: card.headline });
+      el.createEl("p", { cls: "shorthand-panel-callout-text", text: card.reason, attr: { role: "alert" } });
+      el.createEl("p", { cls: "shorthand-panel-callout-text", text: `Note: ${card.noteName}` });
+      this.#buildDetails(el, card.details);
+      const buttons = el.createDiv({ cls: "shorthand-panel-callout-buttons" });
       const action = buttons.createEl("button", {
         cls: "mod-cta",
         text: card.action.label,
@@ -3559,28 +3599,79 @@ class ShorthandPanelView extends ItemView {
           : this.plugin.reprocessTranscript(file);
         void run.catch((error: unknown) => new Notice(`Shorthand: ${errorMessage(error)}`, 10_000));
       };
-      const dismiss = buttons.createEl("button", { text: card.dismissLabel, attr: { type: "button" } });
+      const dismiss = buttons.createEl("button", {
+        cls: "shorthand-panel-text-button",
+        text: card.dismissLabel,
+        attr: { type: "button" },
+      });
       dismiss.disabled = !card.dismissEnabled;
       dismiss.onclick = () => { this.plugin.dismissRecovery(file); };
-      el.createEl("p", { cls: "shorthand-panel-recovery-disk", text: card.diskNote });
+      el.createEl("p", { cls: "shorthand-panel-callout-hint", text: card.hint });
     }
   }
 
-  #patchAgentSection(agent: AgentStatusModel): void {
-    // Only when different: this runs once a second, and rewriting an open dropdown's value
-    // would close it under the user's pointer.
-    if (this.#agentDropdown.getValue() !== agent.backendValue) this.#agentDropdown.setValue(agent.backendValue);
-    this.#agentModelEl.textContent = `Model: ${agent.modelLabel}`;
-    this.#agentStatusEl.textContent = agent.statusText ?? "";
-    for (const tone of ["neutral", "checking", "ok", "warning"] as const) {
-      this.#agentStatusEl.classList.toggle(`is-${tone}`, agent.tone === tone);
+  /** The raw error, collapsed: it is for someone reporting a problem, not for everyone. */
+  #buildDetails(parent: HTMLElement, text: string | undefined): void {
+    if (text === undefined) return;
+    const details = parent.createEl("details", { cls: "shorthand-panel-callout-details" });
+    details.createEl("summary", { text: "Details" });
+    details.createEl("p", { cls: "shorthand-panel-callout-raw", text });
+  }
+
+  #patchNoteTaker(view: NoteTakerView): void {
+    if (this.#noteTakerTextEl.textContent !== view.line) this.#noteTakerTextEl.textContent = view.line;
+    for (const tone of ["ready", "checking", "problem", "unknown"] as const) {
+      this.#noteTakerDotEl.classList.toggle(`is-${tone}`, view.tone === tone);
     }
-    this.#agentStatusEl.hidden = agent.statusText === undefined;
-    this.#agentWarningEl.textContent = agent.warning ?? "";
-    this.#agentWarningEl.hidden = agent.warning === undefined;
-    this.#agentNoteEl.textContent = agent.switchNote ?? "";
-    this.#agentNoteEl.hidden = agent.switchNote === undefined;
-    this.#agentRefresh.setDisabled(!agent.canRefresh);
+    // The accessible name keeps the visible line in it; the hover tooltip is a separate thing.
+    if (this.#noteTakerLineEl.getAttribute("aria-label") !== view.accessibleLabel) {
+      this.#noteTakerLineEl.setAttribute("aria-label", view.accessibleLabel);
+    }
+    if (view.tooltip === undefined) {
+      this.#noteTakerLineEl.removeAttribute("title");
+    } else if (this.#noteTakerLineEl.getAttribute("title") !== view.tooltip) {
+      this.#noteTakerLineEl.setAttribute("title", view.tooltip);
+    }
+
+    // Rebuilt only on a change, for the reason `render()` gives: this runs once a second.
+    const problem = view.problem;
+    const signature = JSON.stringify(problem ?? null);
+    if (signature !== this.#noteTakerProblemSignature) {
+      this.#noteTakerProblemSignature = signature;
+      this.#noteTakerProblemEl.empty();
+      this.#noteTakerProblemEl.hidden = problem === undefined;
+      this.#noteTakerProblemEl.removeAttribute("aria-label");
+      if (problem !== undefined) {
+        this.#noteTakerProblemEl.setAttribute("aria-label", problem.headline);
+        this.#noteTakerProblemEl.createEl("p", {
+          cls: "shorthand-panel-callout-headline",
+          text: problem.headline,
+          attr: { role: "alert" },
+        });
+        this.#noteTakerProblemEl.createEl("p", { cls: "shorthand-panel-callout-text", text: problem.body });
+        this.#buildDetails(this.#noteTakerProblemEl, problem.details);
+        const buttons = this.#noteTakerProblemEl.createDiv({ cls: "shorthand-panel-callout-buttons" });
+        const again = buttons.createEl("button", {
+          cls: "shorthand-panel-text-button",
+          text: problem.checkAgainLabel,
+          attr: { type: "button" },
+        });
+        again.onclick = () => {
+          this.plugin.refreshAgentProbe();
+          // The callout is rebuilt while the check runs, which destroys this button and would
+          // drop focus to the document; the line button is the stable place to land.
+          this.#noteTakerLineEl.focus();
+        };
+        const choose = buttons.createEl("button", {
+          cls: "shorthand-panel-text-button",
+          text: problem.chooseAnotherLabel,
+          attr: { type: "button" },
+        });
+        choose.onclick = (event) => { this.#openNoteTakerMenu(event, choose); };
+      }
+    }
+    this.#noteTakerSwitchEl.textContent = view.switchNote ?? "";
+    this.#noteTakerSwitchEl.hidden = view.switchNote === undefined;
   }
 
   /**
@@ -3621,7 +3712,7 @@ class ShorthandPanelView extends ItemView {
       this.#meetingEndCancelEl.textContent = meetingEnd.cancelLabel;
     }
     this.#patchRecoverySection(this.plugin.recoveryCards());
-    this.#patchAgentSection(this.plugin.agentStatus());
+    this.#patchNoteTaker(this.plugin.noteTaker());
     this.#actionsEl.hidden = !model.buttons.some(({ id, visible }) => id !== "stop" && visible);
 
     for (const button of model.buttons) {

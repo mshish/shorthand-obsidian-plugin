@@ -1,14 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
-  captureStartNotice,
-  describeAgentStatus,
+  BACKEND_DISPLAY_NAMES,
   INITIAL_PROBE_STATE,
   needsProbe,
   needsProbeOnOpen,
   shouldReprobeAtCaptureStart,
   probeKey,
   reduceProbeState,
-  selectedModelLabel,
+  selectedModelId,
   type ProbeState,
 } from "../src/agent-status.js";
 import { DEFAULT_PLUGIN_SETTINGS } from "../src/settings.js";
@@ -108,84 +107,23 @@ describe("shouldReprobeAtCaptureStart", () => {
   });
 });
 
-describe("describeAgentStatus", () => {
-  const describeWith = (probe: ProbeState, settings = claude, captureInFlight = false) =>
-    describeAgentStatus({ settings, probe, captureInFlight });
-
-  test("shows checking before any answer, and for another selection's answer", () => {
-    expect(describeWith(INITIAL_PROBE_STATE).statusText).toBe("Checking sign-in…");
-    expect(describeWith(checking(1, claudeKey)).tone).toBe("checking");
-    const codexAnswer: ProbeState = { kind: "signed-out", key: codexKey };
-    const model = describeWith(codexAnswer);
-    expect(model.tone).toBe("checking");
-    expect(model.warning).toBeUndefined();
-  });
-
-  test("names the account when signed in", () => {
-    const model = describeWith({ kind: "signed-in", key: claudeKey, account: "me@example.com" });
-    expect(model.statusText).toBe("Signed in as me@example.com");
-    expect(model.tone).toBe("ok");
-    expect(model.warning).toBeUndefined();
-  });
-
-  test("does not present an ACP or Cursor agent name as the signed-in account", () => {
-    const cursor = { ...claude, backend: "cursor" as const };
-    const model = describeWith({ kind: "signed-in", key: probeKey(cursor) ?? "", account: "Cursor CLI" }, cursor);
-    expect(model.statusText).toBe("Agent responded");
-    expect(model.statusText).not.toContain("Signed in as");
-  });
-
-  test("tells a signed-out Claude user the command to run", () => {
-    const model = describeWith({ kind: "signed-out", key: claudeKey });
-    expect(model.tone).toBe("warning");
-    expect(model.warning).toContain("claude login");
-    expect(model.warning).toContain("not be enhanced");
-  });
-
-  test("tells a signed-out Codex user the command to run", () => {
-    const model = describeWith({ kind: "signed-out", key: codexKey }, codex);
-    expect(model.warning).toContain("codex login");
-  });
-
-  test("a failed probe carries the probe's own message", () => {
-    const model = describeWith({ kind: "failed", key: claudeKey, reason: "executable-not-found", message: "spawn claude ENOENT" });
-    expect(model.warning).toContain("could not find Claude");
-    expect(model.warning).toContain("spawn claude ENOENT");
-  });
-
-  test("a failed probe without a message still names the problem", () => {
-    const model = describeWith({ kind: "failed", key: claudeKey, reason: "timeout", message: undefined });
-    expect(model.warning).toBe("Shorthand did not hear back from Claude in time.");
-  });
-
-  test("the LLM backend has no probe, no status line and cannot refresh", () => {
-    const model = describeWith(INITIAL_PROBE_STATE, llm);
-    expect(model.statusText).toBeUndefined();
-    expect(model.canRefresh).toBe(false);
-  });
-
-  test("says a switch applies to the next capture only while one is running", () => {
-    expect(describeWith(INITIAL_PROBE_STATE, claude, false).switchNote).toBeUndefined();
-    expect(describeWith(INITIAL_PROBE_STATE, claude, true).switchNote).toContain("next capture");
+describe("selectedModelId", () => {
+  test("is the stored id for the selected backend, or empty when none is set", () => {
+    expect(selectedModelId(claude)).toBe("");
+    expect(selectedModelId({ ...claude, claudeModel: "opus" })).toBe("opus");
+    expect(selectedModelId({ ...codex, codexModel: "gpt-5.4" })).toBe("gpt-5.4");
+    expect(selectedModelId({ ...claude, backend: "acp", acpTransport: "network", acpModel: "x" })).toBe("");
   });
 });
 
-describe("selectedModelLabel", () => {
-  test("shows the stored model, or the default wording when none is set", () => {
-    expect(selectedModelLabel(claude)).toBe("Provider default");
-    expect(selectedModelLabel({ ...claude, claudeModel: "opus" })).toBe("opus");
-    expect(selectedModelLabel({ ...codex, codexModel: "gpt-5.4" })).toBe("gpt-5.4");
-    expect(selectedModelLabel({ ...claude, backend: "acp", acpTransport: "network", acpModel: "x" })).toBe("Provider default");
-  });
-});
-
-describe("captureStartNotice", () => {
-  test("warns only on a definite signed-out answer for the current selection", () => {
-    expect(captureStartNotice({ kind: "signed-out", key: claudeKey }, claude)).toContain("claude login");
-    expect(captureStartNotice({ kind: "signed-out", key: claudeKey }, claude)).toContain("will not be enhanced");
-    expect(captureStartNotice({ kind: "signed-out", key: claudeKey }, codex)).toBeUndefined();
-    expect(captureStartNotice(checking(1, claudeKey), claude)).toBeUndefined();
-    expect(captureStartNotice({ kind: "failed", key: claudeKey, reason: "timeout", message: undefined }, claude)).toBeUndefined();
-    expect(captureStartNotice({ kind: "signed-in", key: claudeKey, account: undefined }, claude)).toBeUndefined();
+describe("BACKEND_DISPLAY_NAMES", () => {
+  test("names every choice as a person would, one list for the panel and the settings tab", () => {
+    expect(BACKEND_DISPLAY_NAMES).toEqual({
+      "claude-agent-sdk": "Claude",
+      codex: "ChatGPT (Codex)",
+      cursor: "Cursor",
+      acp: "Another app (ACP)",
+      llm: "Your own API key",
+    });
   });
 });

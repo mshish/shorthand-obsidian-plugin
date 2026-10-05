@@ -361,34 +361,82 @@ button.shorthand-panel-button.is-stop .shorthand-panel-button-copy {
   text-underline-offset: var(--size-2-1);
 }
 
-.shorthand-panel-agent {
-  border-top: 1px solid var(--background-modifier-border);
-  margin-top: var(--size-4-3);
-  padding-top: var(--size-4-2);
+/* Note taker ------------------------------------------------------------------
+   One quiet line below the mode cards. The colour is a small dot only: the words carry the
+   state, so nothing here is coloured text. */
+.shorthand-panel-note-taker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-2-2);
 }
 
-.shorthand-panel-agent-line {
+button.shorthand-panel-note-taker-line {
+  align-items: center;
+  align-self: flex-start;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
   color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
   font-size: var(--font-ui-small);
-  margin: 0 0 var(--size-2-1);
+  gap: var(--size-4-2);
+  height: auto;
+  max-width: 100%;
+  padding: var(--size-2-2) var(--size-4-2) var(--size-2-2) var(--size-2-2);
+}
+
+button.shorthand-panel-note-taker-line:hover {
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-normal);
+}
+
+button.shorthand-panel-note-taker-line:focus-visible {
+  box-shadow: 0 0 0 var(--size-2-1) var(--background-modifier-border-focus);
+}
+
+.shorthand-panel-note-taker-icon,
+.shorthand-panel-note-taker-chevron {
+  align-items: center;
+  display: inline-flex;
+  flex: none;
+}
+
+.shorthand-panel-note-taker-icon svg,
+.shorthand-panel-note-taker-chevron svg {
+  height: var(--icon-s, 14px);
+  width: var(--icon-s, 14px);
+}
+
+.shorthand-panel-note-taker-dot {
+  background-color: var(--text-faint);
+  border-radius: 50%;
+  flex: none;
+  height: var(--size-4-2);
+  width: var(--size-4-2);
+}
+
+.shorthand-panel-note-taker-dot.is-ready {
+  background-color: color-mix(in srgb, var(--color-green) 60%, var(--background-primary));
+}
+
+.shorthand-panel-note-taker-dot.is-problem {
+  background-color: var(--color-orange);
+}
+
+.shorthand-panel-note-taker-text {
+  min-width: 0;
   overflow-wrap: anywhere;
+  text-align: left;
 }
 
-.shorthand-panel-agent-line.is-ok {
-  color: var(--text-success);
-}
-
-.shorthand-panel-agent-line.is-warning {
-  color: var(--text-warning);
-}
-
-/* Text, not colour alone, carries the problem; the colour only reinforces it. */
-.shorthand-panel-agent-warning {
-  color: var(--text-warning);
-  font-size: var(--font-ui-small);
+.shorthand-panel-note-taker-switch {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
   line-height: var(--line-height-normal);
-  margin: var(--size-2-1) 0;
-  overflow-wrap: anywhere;
+  margin: 0;
+  padding-left: var(--size-2-2);
 }
 
 /* Meeting-end countdown ------------------------------------------------------ */
@@ -418,23 +466,31 @@ button.shorthand-panel-button.is-stop .shorthand-panel-button-copy {
   overflow-wrap: anywhere;
 }
 
-/* Recovery card -------------------------------------------------------------- */
+/* Callout --------------------------------------------------------------------
+   The note taker's problem and the recovery card share one quiet look, in the manner of
+   Obsidian's warning callout: a soft tint and a left rule, no box. */
+.shorthand-panel-callout {
+  background-color: color-mix(in srgb, var(--color-orange) 8%, var(--background-primary));
+  border-left: var(--size-2-1) solid color-mix(in srgb, var(--color-orange) 55%, var(--background-modifier-border));
+  border-radius: var(--radius-s);
+  padding: var(--size-4-2) var(--size-4-3);
+}
+
 .shorthand-panel-recovery {
-  background-color: color-mix(in srgb, var(--shorthand-panel-orange) 10%, var(--background-primary));
-  border: 1px solid color-mix(in srgb, var(--shorthand-panel-orange) 30%, var(--background-modifier-border));
-  border-radius: var(--radius-m);
   margin-top: var(--size-4-3);
-  padding: var(--size-4-3);
 }
 
-.shorthand-panel-recovery-headline {
-  font-size: var(--font-ui-medium);
+.shorthand-panel-callout-headline {
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold);
+  line-height: var(--line-height-normal);
   margin: 0 0 var(--size-2-1);
+  overflow-wrap: anywhere;
 }
 
-.shorthand-panel-recovery-note,
-.shorthand-panel-recovery-text,
-.shorthand-panel-recovery-disk {
+.shorthand-panel-callout-text,
+.shorthand-panel-callout-hint {
   color: var(--text-muted);
   font-size: var(--font-ui-small);
   line-height: var(--line-height-normal);
@@ -442,18 +498,61 @@ button.shorthand-panel-button.is-stop .shorthand-panel-button-copy {
   overflow-wrap: anywhere;
 }
 
-/* Text, not colour alone, carries the problem; the colour only reinforces it. */
-.shorthand-panel-recovery-error {
-  color: var(--text-warning);
-  font-size: var(--font-ui-small);
-  line-height: var(--line-height-normal);
-  margin: 0 0 var(--size-2-3);
-  overflow-wrap: anywhere;
+.shorthand-panel-callout-hint {
+  font-size: var(--font-ui-smaller);
+  margin: var(--size-2-2) 0 0;
 }
 
-.shorthand-panel-recovery-buttons {
+.shorthand-panel-callout-details {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  margin: 0 0 var(--size-2-3);
+}
+
+.shorthand-panel-callout-details summary {
+  cursor: pointer;
+}
+
+.shorthand-panel-callout-raw {
+  font-family: var(--font-monospace);
+  line-height: var(--line-height-normal);
+  margin: var(--size-2-2) 0 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.shorthand-panel-callout-buttons {
+  align-items: center;
   display: flex;
   flex-wrap: wrap;
-  gap: var(--size-4-2);
-  margin-bottom: var(--size-2-3);
+  gap: var(--size-2-2) var(--size-4-2);
+}
+
+/* A small text button: quiet beside the callout's own words, and still a real button. */
+button.shorthand-panel-text-button {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: var(--font-ui-smaller);
+  height: auto;
+  padding: var(--size-2-1) var(--size-2-2);
+  text-decoration: underline;
+  text-underline-offset: var(--size-2-1);
+}
+
+button.shorthand-panel-text-button:hover:not(:disabled) {
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-normal);
+}
+
+button.shorthand-panel-text-button:focus-visible {
+  box-shadow: 0 0 0 var(--size-2-1) var(--background-modifier-border-focus);
+}
+
+button.shorthand-panel-text-button:disabled {
+  cursor: default;
+  opacity: var(--disabled-opacity, 0.5);
 }

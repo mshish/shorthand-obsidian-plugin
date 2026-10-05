@@ -29,21 +29,21 @@ describe("the settings tab", () => {
 
   test("declares ACP backend options and controls", () => {
     const source = readFileSync(resolve(process.cwd(), "main.ts"), "utf8");
-    expect(BACKEND_DISPLAY_NAMES.acp).toBe("Agent Client Protocol (ACP)");
-    expect(source).toContain('"ACP model"');
-    expect(source).toContain('"ACP transport"');
-    expect(source).toContain('"ACP executable"');
-    expect(source).toContain('"ACP arguments"');
-    expect(source).toContain('"ACP network URL"');
+    expect(BACKEND_DISPLAY_NAMES.acp).toBe("Another app (ACP)");
+    expect(source).toContain('"Another app model"');
+    expect(source).toContain('"Another app transport"');
+    expect(source).toContain('"Another app executable"');
+    expect(source).toContain('"Another app arguments"');
+    expect(source).toContain('"Another app network URL"');
     expect(source).toContain('"acpTransport"');
     expect(source).toContain('"acpExecutable"');
   });
 
   test("declares Cursor CLI backend options and controls", () => {
     const source = readFileSync(resolve(process.cwd(), "main.ts"), "utf8");
-    expect(BACKEND_DISPLAY_NAMES.cursor).toBe("Cursor CLI");
-    expect(source).toContain('"Cursor CLI model"');
-    expect(source).toContain('"Cursor CLI executable"');
+    expect(BACKEND_DISPLAY_NAMES.cursor).toBe("Cursor");
+    expect(source).toContain('"Cursor model"');
+    expect(source).toContain('"Cursor executable"');
     expect(source).toContain('"cursorExecutable"');
   });
 

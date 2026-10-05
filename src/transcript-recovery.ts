@@ -28,12 +28,16 @@ import type { CaptureMode } from "./follow-policy.js";
  */
 export class CaptureRecord {
   readonly mode: CaptureMode;
+  /** Who was taking the notes, as the card names them; absent when the caller has no name. */
+  readonly noteTaker: string | undefined;
   #chunks: string[] = [];
   #failed = false;
+  #unavailableAtStart = false;
   #lastError: string | undefined = undefined;
 
-  constructor(mode: CaptureMode) {
+  constructor(mode: CaptureMode, noteTaker?: string) {
     this.mode = mode;
+    this.noteTaker = noteTaker;
   }
 
   /** Same joining as core's runner (`\n` between deltas), so a replay reads like the original. */
@@ -47,6 +51,11 @@ export class CaptureRecord {
 
   get hasTranscript(): boolean {
     return this.#chunks.length > 0;
+  }
+
+  /** True when the note taker never started, as opposed to failing partway through. */
+  get unavailableAtStart(): boolean {
+    return this.#unavailableAtStart;
   }
 
   get failed(): boolean {
@@ -127,10 +136,18 @@ export class CaptureRecord {
   }
 
   /**
-   * A failure that arrives as an exception rather than a status: `createEnhancer` throwing at
-   * start (capture goes on with transcript only), or the closing pass rejecting.
+   * A failure that arrives as an exception rather than a status: the closing pass rejecting.
    */
   noteFailure(message: string): void {
+    this.#fail(message);
+  }
+
+  /**
+   * `createEnhancer` threw at start, so capture goes on with transcript only. Recorded apart
+   * from `noteFailure` because the card says "couldn't start", not "ran into a problem partway".
+   */
+  noteStartFailure(message: string): void {
+    this.#unavailableAtStart = true;
     this.#fail(message);
   }
 
@@ -183,6 +200,10 @@ export type RecoveryEntry<F> = Readonly<{
   /** The vault file, held by identity: Obsidian keeps one `TFile` across a rename. */
   file: F;
   mode: CaptureMode;
+  /** Who was taking the notes when this capture failed. */
+  noteTaker: string | undefined;
+  /** The note taker never started, so the card says it couldn't start rather than "partway through". */
+  unavailableAtStart: boolean;
   transcript: string;
   error: string;
   /** A reprocess is running; a second would write the same note twice. */
@@ -224,6 +245,8 @@ export class RecoveryStore<F extends object> {
     const entry: MutableEntry<F> = {
       file,
       mode: record.mode,
+      noteTaker: record.noteTaker,
+      unavailableAtStart: record.unavailableAtStart,
       transcript: record.transcript(),
       error: record.lastError ?? "Enhancement did not complete.",
       busy: false,
@@ -300,18 +323,18 @@ export type RecoveryCardModel = Readonly<{
   key: string;
   noteName: string;
   notePath: string | undefined;
+  /** Shown bold. */
   headline: string;
-  /** What went wrong, verbatim from the failure that stopped the notes. */
-  error: string;
-  /** What to do about it; absent while an attempt is running. */
-  guidance: string | undefined;
-  /** Why the copy in memory is the only one, and the setting that changes that. */
-  diskNote: string;
-  progress: string | undefined;
+  /** One plain sentence on why. */
+  reason: string;
+  /** The raw error, for the collapsed "Details". */
+  details: string;
+  /** Why the copy in memory is the only one, that Obsidian closing loses it, and the setting that changes that. */
+  hint: string;
   action: Readonly<{ id: RecoveryCardAction; label: string; enabled: boolean }>;
   dismissLabel: string;
   /**
-   * False while a reprocess runs. Dismissing then would release the slot under the attempt, and
+   * False while an attempt runs. Dismissing then would release the slot under the attempt, and
    * a failure would be reported as "the transcript is still held" when it is gone.
    */
   dismissEnabled: boolean;
@@ -324,7 +347,27 @@ export type RecoveryNoteInfo = Readonly<{
   exists: boolean;
 }>;
 
-const DISK_NOTE = "This copy is held in memory and is lost if Obsidian closes. Turn on Transcript notes in settings to keep a copy on disk.";
+const HINT = "This copy is lost if Obsidian closes. Turn on Transcript notes to keep one on disk.";
+
+/**
+ * Notices about recovery, in the panel's vocabulary. "Take notes again" is the card's own
+ * button label and the palette command's wording, so the three read as one feature.
+ */
+export const RECOVERY_NOTICES = {
+  /** Shown when a capture ends with notes missing; worded like the card's headline. */
+  missing: (mode: CaptureMode): string =>
+    `Shorthand: ${mode === "assisted-notes" ? "some of what you said" : "some of this meeting"} didn't make it into your notes. Open the Shorthand panel to take notes again.`,
+  success: (noteName: string): string => `Shorthand took notes again in ${noteName}.`,
+  alreadyCurrent: (noteName: string): string => `${noteName} was already up to date.`,
+  failed: (error: string): string => `Shorthand: that didn't work either. ${error} Your transcript is still held, so you can try again.`,
+  /** A start on a note whose card is mid-attempt. */
+  busyOnStart: "Shorthand is taking notes again on this note. Wait for it to finish before taking new notes on it.",
+  /** Taking notes again on a note a capture is writing to. */
+  captureRunning: "Shorthand is taking notes on this note. Stop taking notes before taking them again.",
+  alreadyRunning: "Shorthand is already taking notes again from this transcript.",
+  copied: (noteName: string): string => `The note ${noteName} no longer exists. Its transcript was copied to the clipboard.`,
+  copyFailed: (error: string): string => `Shorthand: could not copy the transcript. ${error}`,
+} as const;
 
 /** The recovery cards for the panel. Empty when there is nothing to recover. */
 export function describeRecoveryCards<F extends object>(
@@ -334,17 +377,18 @@ export function describeRecoveryCards<F extends object>(
   return entries.map((entry) => {
     const note = noteInfo(entry.file);
     const key = `${note.path}\0${entry.seq}`;
-    const error = entry.retried ? `Reprocessing failed: ${entry.error}` : entry.error;
+    const headline = entry.mode === "assisted-notes"
+      ? "Some of what you said didn't make it into your notes."
+      : "Some of this meeting didn't make it into your notes.";
     if (!note.exists) {
       return {
         key,
         noteName: note.basename,
         notePath: undefined,
-        headline: "The note was deleted",
-        error,
-        guidance: `"${note.basename}" no longer exists, so there is nowhere to write the notes. Copy the transcript to keep it.`,
-        diskNote: DISK_NOTE,
-        progress: undefined,
+        headline,
+        reason: `"${note.basename}" was deleted, so there is nowhere to put them. Copy the transcript to keep it.`,
+        details: entry.error,
+        hint: HINT,
         action: { id: "copy", label: "Copy transcript", enabled: true },
         dismissLabel: "Dismiss",
         dismissEnabled: true,
@@ -354,14 +398,15 @@ export function describeRecoveryCards<F extends object>(
       key,
       noteName: note.basename,
       notePath: note.path,
-      headline: "Notes may be incomplete",
-      error,
-      guidance: entry.busy
-        ? undefined
-        : "Check the agent and its sign-in below, switch agent if needed, then reprocess the transcript.",
-      diskNote: DISK_NOTE,
-      progress: entry.busy ? "Reprocessing transcript…" : undefined,
-      action: { id: "reprocess", label: entry.busy ? "Reprocessing…" : "Reprocess transcript", enabled: !entry.busy },
+      headline,
+      reason: entry.retried
+        ? "That didn't work either."
+        : entry.unavailableAtStart
+          ? `${entry.noteTaker ?? "The AI note taker"} couldn't start taking notes.`
+          : `${entry.noteTaker ?? "The AI note taker"} ran into a problem partway through.`,
+      details: entry.error,
+      hint: HINT,
+      action: { id: "reprocess", label: entry.busy ? "Taking notes again…" : "Take notes again", enabled: !entry.busy },
       dismissLabel: "Dismiss",
       dismissEnabled: !entry.busy,
     };

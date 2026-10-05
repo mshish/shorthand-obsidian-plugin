@@ -18,7 +18,7 @@ Obsidian adds the “Shorthand:” prefix in the command palette.
 - **Stop taking notes**
 - **Enhance now**
 - **Clean up this note**
-- **Reprocess transcript** (listed only while a transcript is held for recovery)
+- **Take notes again from the last meeting** (listed only while a transcript is held for recovery)
 - **Toggle Shorthand meeting recording**
 - **Toggle Shorthand assisted notes recording**
 - **Cancel Shorthand recording**
@@ -28,7 +28,7 @@ Obsidian adds the “Shorthand:” prefix in the command palette.
 
 ## Recovering a transcript
 
-If enhancement fails during a capture, for example because the agent's sign-in expired, Shorthand keeps that capture's transcript in memory. When you stop, the panel shows a card with the error and a **Reprocess transcript** button. Fix the agent or switch to another one in the panel, then reprocess; the **Reprocess transcript** command does the same. A successful reprocess clears the card, and a failed one keeps the transcript and shows the new error.
+If enhancement fails during a capture, for example because the AI note taker's sign-in expired, Shorthand keeps that capture's transcript in memory. When you stop, the panel shows a card saying some of the meeting didn't make it into your notes, with the raw error under **Details** and a **Take notes again** button. Fix your note taker or choose another one from the line below the mode cards, then press the button; the **Take notes again from the last meeting** command does the same. A successful attempt clears the card, and a failed one keeps the transcript and shows the new error.
 
 One transcript is held per note. Starting a new capture on the same note, dismissing the card, or closing Obsidian discards it. Turn on **Transcript notes** to keep a copy on disk. If the note was deleted, the card offers to copy the transcript to the clipboard instead.
 

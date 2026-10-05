@@ -35,12 +35,44 @@
       --icon-size: 16px;
       --input-height: 36px;
       --disabled-opacity: .45;
+      --color-green: #08b94e;
+      --color-orange: #ec7500;
+      --text-faint: #ababab;
+      --background-modifier-hover: rgba(0, 0, 0, .06);
+      --background-modifier-border-focus: #7aa2e8;
+      --interactive-normal: #f2f1ee;
+      --interactive-accent: #536f9e;
+      --text-on-accent: #ffffff;
+      --font-monospace: ui-monospace, Menlo, Consolas, monospace;
+      --icon-s: 14px;
+      --page-background: #eeece8;
+    }
+
+    /* Obsidian-like dark values for every variable the panel's CSS reads. Applied by the
+       toggle on body and, on the states grid, by a second column that carries the class
+       itself, so both themes can be screenshotted from one load. */
+    .theme-dark {
+      --background-primary: #1e1e1e;
+      --background-modifier-border: #3a3a3a;
+      --text-normal: #dadada;
+      --text-muted: #a8a8a8;
+      --text-accent: #7f9fd4;
+      --text-faint: #6b6b6b;
+      --color-green: #44cf6e;
+      --color-orange: #e9973f;
+      --background-modifier-hover: rgba(255, 255, 255, .07);
+      --background-modifier-border-focus: #4f78c9;
+      --interactive-normal: #2b2b2b;
+      --interactive-accent: #6d8fd4;
+      --text-on-accent: #ffffff;
+      --page-background: #141414;
+      color: var(--text-normal);
     }
 
     * { box-sizing: border-box; }
 
     body {
-      background: #eeece8;
+      background: var(--page-background);
       color: var(--text-normal);
       font-family: Inter, system-ui, sans-serif;
       margin: 0;
@@ -76,6 +108,84 @@
       font-size: 16px;
       line-height: 16px;
     }
+
+    .preview-toolbar {
+      align-items: center;
+      color: var(--text-muted);
+      display: flex;
+      font-size: 13px;
+      gap: 12px;
+      margin: 0 0 24px;
+    }
+
+    .states-heading {
+      color: var(--text-muted);
+      font-size: 13px;
+      margin: 40px 0 16px;
+      text-transform: uppercase;
+    }
+
+    .theme-columns {
+      display: grid;
+      gap: 32px;
+      grid-template-columns: repeat(auto-fit, minmax(660px, 1fr));
+    }
+
+    .theme-column {
+      background: var(--page-background);
+      border-radius: 20px;
+      color: var(--text-normal);
+      padding: 20px;
+    }
+
+    .theme-column .states-heading { margin-top: 0; }
+
+    .states-grid {
+      display: grid;
+      gap: 20px;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 320px));
+      align-items: start;
+    }
+
+    .states-grid .preview { min-height: 0; }
+
+    /* Stand-ins for Obsidian's own button, which the panel's CSS builds on. They are scoped to
+       the callouts so the sections above keep rendering exactly as they did. */
+    .shorthand-panel-callout button:not(.shorthand-panel-text-button) {
+      background: var(--interactive-normal);
+      border: 0;
+      border-radius: var(--radius-s);
+      color: var(--text-normal);
+      font: inherit;
+      font-size: var(--font-ui-small);
+      height: 30px;
+      padding: 0 var(--size-4-3);
+    }
+
+    .shorthand-panel-callout button.mod-cta {
+      background: var(--interactive-accent);
+      color: var(--text-on-accent);
+    }
+
+    .shorthand-panel-callout button:disabled { opacity: var(--disabled-opacity); }
+
+    /* Obsidian's own summary marker is retained; the panel only styles the text. */
+    .fake-menu {
+      background: var(--background-primary);
+      border: 1px solid var(--background-modifier-border);
+      border-radius: var(--radius-m);
+      box-shadow: 0 8px 24px #00000030;
+      color: var(--text-normal);
+      font-size: 13px;
+      margin-top: 4px;
+      padding: 6px;
+      width: 220px;
+    }
+
+    .fake-menu div { padding: 4px 8px; }
+    .fake-menu .is-label { color: var(--text-muted); font-size: 11px; text-transform: none; }
+    .fake-menu .is-disabled { opacity: 0.5; }
+    .fake-menu hr { border: 0; border-top: 1px solid var(--background-modifier-border); margin: 4px 0; }
   </style>
 </head>
 <body>
@@ -213,5 +323,343 @@
       </div>
     </section>
   </main>
+
+  <p class="states-heading">Note taker states: light and dark, same markup</p>
+  <div class="preview-toolbar">
+    <button type="button" id="theme-toggle">Switch the whole page to dark</button>
+    <span>The second column below is always dark.</span>
+  </div>
+  <div class="theme-columns">
+    <div class="theme-column" id="light-states">
+      <p class="states-heading">Light theme</p>
+      <div class="states-grid">
+
+        <section class="preview">
+          <p class="caption">Idle panel, healthy note taker</p>
+          <div class="shorthand-panel">
+            <div class="shorthand-panel-status is-idle">
+              <div class="shorthand-panel-status-top">
+                <div class="shorthand-panel-mode">
+                  <span class="shorthand-panel-mode-icon fake-icon">✓</span>
+                  <span class="shorthand-panel-mode-label">Ready</span>
+                </div>
+              </div>
+              <h3 class="shorthand-panel-headline">Ready to take notes</h3>
+              <a class="shorthand-panel-note internal-link" href="#">
+                <span class="shorthand-panel-note-icon fake-icon">▤</span>
+                <span class="shorthand-panel-note-name">Weekly sync</span>
+              </a>
+            </div>
+            <div class="shorthand-panel-actions">
+              <p class="shorthand-panel-actions-label">Choose a mode</p>
+              <div class="shorthand-panel-buttons">
+                <button class="shorthand-panel-button is-start-meeting">
+                  <span class="shorthand-panel-button-icon fake-icon">♟</span>
+                  <span class="shorthand-panel-button-copy">
+                    <span class="shorthand-panel-button-label">Meeting</span>
+                    <span class="shorthand-panel-button-hint">Conversation</span>
+                  </span>
+                </button>
+                <button class="shorthand-panel-button is-start-assisted-notes">
+                  <span class="shorthand-panel-button-icon fake-icon">✦</span>
+                  <span class="shorthand-panel-button-copy">
+                    <span class="shorthand-panel-button-label">Assisted notes</span>
+                    <span class="shorthand-panel-button-hint">Solo thinking</span>
+                  </span>
+                </button>
+              </div>
+            </div>
+            <div class="shorthand-panel-note-taker">
+              <button class="shorthand-panel-note-taker-line" type="button" aria-haspopup="menu" aria-label="AI note taker: Claude · Opus. Using you@example.com" title="Using you@example.com">
+                <span class="shorthand-panel-note-taker-icon fake-icon" aria-hidden="true">✎</span>
+                <span class="shorthand-panel-note-taker-dot is-ready" aria-hidden="true"></span>
+                <span class="shorthand-panel-note-taker-text">AI note taker: Claude · Opus</span>
+                <span class="shorthand-panel-note-taker-chevron fake-icon" aria-hidden="true">⌄</span>
+              </button>
+              <div class="shorthand-panel-callout shorthand-panel-note-taker-problem" role="group" hidden></div>
+              <p class="shorthand-panel-note-taker-switch" hidden></p>
+            </div>
+          </div>
+        </section>
+
+        <section class="preview">
+          <p class="caption">Menu, opened from the line</p>
+          <div class="shorthand-panel">
+            <div class="shorthand-panel-note-taker">
+              <button class="shorthand-panel-note-taker-line" type="button" aria-haspopup="menu" aria-label="AI note taker: Claude · Opus. Using you@example.com" title="Using you@example.com">
+                <span class="shorthand-panel-note-taker-icon fake-icon" aria-hidden="true">✎</span>
+                <span class="shorthand-panel-note-taker-dot is-ready" aria-hidden="true"></span>
+                <span class="shorthand-panel-note-taker-text">AI note taker: Claude · Opus</span>
+                <span class="shorthand-panel-note-taker-chevron fake-icon" aria-hidden="true">⌄</span>
+              </button>
+            </div>
+            <div class="fake-menu" role="menu">
+              <div class="is-label">AI note taker</div>
+              <div>✓ Claude</div>
+              <div>&nbsp;&nbsp;&nbsp;ChatGPT (Codex)</div>
+              <div>&nbsp;&nbsp;&nbsp;Cursor</div>
+              <div>&nbsp;&nbsp;&nbsp;Another app (ACP)</div>
+              <div>&nbsp;&nbsp;&nbsp;Your own API key</div>
+              <hr>
+              <div>Check connection</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="preview">
+          <p class="caption">Checking</p>
+          <div class="shorthand-panel">
+            <div class="shorthand-panel-note-taker">
+              <button class="shorthand-panel-note-taker-line" type="button" aria-haspopup="menu" aria-label="Checking the AI note taker…">
+                <span class="shorthand-panel-note-taker-icon fake-icon" aria-hidden="true">✎</span>
+                <span class="shorthand-panel-note-taker-dot is-checking" aria-hidden="true"></span>
+                <span class="shorthand-panel-note-taker-text">Checking the AI note taker…</span>
+                <span class="shorthand-panel-note-taker-chevron fake-icon" aria-hidden="true">⌄</span>
+              </button>
+              <div class="shorthand-panel-callout shorthand-panel-note-taker-problem" role="group" hidden></div>
+              <p class="shorthand-panel-note-taker-switch" hidden></p>
+            </div>
+          </div>
+        </section>
+
+        <section class="preview">
+          <p class="caption">Signed out (Claude)</p>
+          <div class="shorthand-panel">
+            <div class="shorthand-panel-note-taker">
+              <button class="shorthand-panel-note-taker-line" type="button" aria-haspopup="menu" aria-label="AI note taker: Claude · Opus">
+                <span class="shorthand-panel-note-taker-icon fake-icon" aria-hidden="true">✎</span>
+                <span class="shorthand-panel-note-taker-dot is-problem" aria-hidden="true"></span>
+                <span class="shorthand-panel-note-taker-text">AI note taker: Claude · Opus</span>
+                <span class="shorthand-panel-note-taker-chevron fake-icon" aria-hidden="true">⌄</span>
+              </button>
+              <div class="shorthand-panel-callout shorthand-panel-note-taker-problem" role="group" aria-label="Claude can't take notes for you yet.">
+                <p class="shorthand-panel-callout-headline" role="alert">Claude can't take notes for you yet.</p>
+                <p class="shorthand-panel-callout-text">Sign in to Claude Code: open a terminal and run claude auth login.</p>
+                <div class="shorthand-panel-callout-buttons">
+                  <button class="shorthand-panel-text-button" type="button">Check again</button>
+                  <button class="shorthand-panel-text-button" type="button">Choose a different AI note taker</button>
+                </div>
+              </div>
+              <p class="shorthand-panel-note-taker-switch" hidden></p>
+            </div>
+          </div>
+        </section>
+
+        <section class="preview">
+          <p class="caption">Check failed, Details expanded</p>
+          <div class="shorthand-panel">
+            <div class="shorthand-panel-note-taker">
+              <button class="shorthand-panel-note-taker-line" type="button" aria-haspopup="menu" aria-label="AI note taker: Claude · Opus">
+                <span class="shorthand-panel-note-taker-icon fake-icon" aria-hidden="true">✎</span>
+                <span class="shorthand-panel-note-taker-dot is-problem" aria-hidden="true"></span>
+                <span class="shorthand-panel-note-taker-text">AI note taker: Claude · Opus</span>
+                <span class="shorthand-panel-note-taker-chevron fake-icon" aria-hidden="true">⌄</span>
+              </button>
+              <div class="shorthand-panel-callout shorthand-panel-note-taker-problem" role="group" aria-label="Shorthand couldn't reach Claude.">
+                <p class="shorthand-panel-callout-headline" role="alert">Shorthand couldn't reach Claude.</p>
+                <p class="shorthand-panel-callout-text">Claude Code isn't installed, or Shorthand can't find it. Install it, or set where it lives in Shorthand's settings.</p>
+                <details class="shorthand-panel-callout-details" open>
+                  <summary>Details</summary>
+                  <p class="shorthand-panel-callout-raw">spawn claude ENOENT</p>
+                </details>
+                <div class="shorthand-panel-callout-buttons">
+                  <button class="shorthand-panel-text-button" type="button">Check again</button>
+                  <button class="shorthand-panel-text-button" type="button">Choose a different AI note taker</button>
+                </div>
+              </div>
+              <p class="shorthand-panel-note-taker-switch" hidden></p>
+            </div>
+          </div>
+        </section>
+
+        <section class="preview">
+          <p class="caption">Switched during a meeting</p>
+          <div class="shorthand-panel">
+            <div class="shorthand-panel-status is-meeting">
+              <div class="shorthand-panel-status-top">
+                <div class="shorthand-panel-mode">
+                  <span class="shorthand-panel-mode-icon fake-icon">♟</span>
+                  <span class="shorthand-panel-mode-label">Meeting</span>
+                </div>
+                <time class="shorthand-panel-elapsed">12:34</time>
+              </div>
+              <h3 class="shorthand-panel-headline">Taking notes</h3>
+              <a class="shorthand-panel-note internal-link" href="#">
+                <span class="shorthand-panel-note-icon fake-icon">▤</span>
+                <span class="shorthand-panel-note-name">Weekly sync</span>
+              </a>
+              <button class="shorthand-panel-button is-stop">
+                <span class="shorthand-panel-button-icon fake-icon">■</span>
+                <span class="shorthand-panel-button-copy">
+                  <span class="shorthand-panel-button-label">Stop meeting</span>
+                </span>
+              </button>
+            </div>
+            <div class="shorthand-panel-note-taker">
+              <button class="shorthand-panel-note-taker-line" type="button" aria-haspopup="menu" aria-label="AI note taker: ChatGPT (Codex) · GPT-5.4. Using you@example.com" title="Using you@example.com">
+                <span class="shorthand-panel-note-taker-icon fake-icon" aria-hidden="true">✎</span>
+                <span class="shorthand-panel-note-taker-dot is-ready" aria-hidden="true"></span>
+                <span class="shorthand-panel-note-taker-text">AI note taker: ChatGPT (Codex) · GPT-5.4</span>
+                <span class="shorthand-panel-note-taker-chevron fake-icon" aria-hidden="true">⌄</span>
+              </button>
+              <div class="shorthand-panel-callout shorthand-panel-note-taker-problem" role="group" hidden></div>
+              <p class="shorthand-panel-note-taker-switch">Applies starting with the next meeting.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="preview">
+          <p class="caption">Recovery card</p>
+          <div class="shorthand-panel">
+            <div class="shorthand-panel-recovery-list">
+              <div class="shorthand-panel-callout shorthand-panel-recovery" role="group" aria-label="Some of this meeting didn't make it into your notes.">
+                <p class="shorthand-panel-callout-headline">Some of this meeting didn't make it into your notes.</p>
+                <p class="shorthand-panel-callout-text" role="alert">Claude ran into a problem partway through.</p>
+                <p class="shorthand-panel-callout-text">Note: Weekly sync</p>
+                <details class="shorthand-panel-callout-details">
+                  <summary>Details</summary>
+                  <p class="shorthand-panel-callout-raw">Claude Code is not signed in. Run claude auth login.</p>
+                </details>
+                <div class="shorthand-panel-callout-buttons">
+                  <button class="mod-cta" type="button">Take notes again</button>
+                  <button class="shorthand-panel-text-button" type="button">Dismiss</button>
+                </div>
+                <p class="shorthand-panel-callout-hint">This copy is lost if Obsidian closes. Turn on Transcript notes to keep one on disk.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="preview">
+          <p class="caption">Recovery card, running</p>
+          <div class="shorthand-panel">
+            <div class="shorthand-panel-recovery-list">
+              <div class="shorthand-panel-callout shorthand-panel-recovery" role="group" aria-label="Some of this meeting didn't make it into your notes.">
+                <p class="shorthand-panel-callout-headline">Some of this meeting didn't make it into your notes.</p>
+                <p class="shorthand-panel-callout-text" role="alert">Claude ran into a problem partway through.</p>
+                <p class="shorthand-panel-callout-text">Note: Weekly sync</p>
+                <details class="shorthand-panel-callout-details">
+                  <summary>Details</summary>
+                  <p class="shorthand-panel-callout-raw">Claude Code is not signed in. Run claude auth login.</p>
+                </details>
+                <div class="shorthand-panel-callout-buttons">
+                  <button class="mod-cta" type="button" disabled>Taking notes again…</button>
+                  <button class="shorthand-panel-text-button" type="button" disabled>Dismiss</button>
+                </div>
+                <p class="shorthand-panel-callout-hint">This copy is lost if Obsidian closes. Turn on Transcript notes to keep one on disk.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="preview">
+          <p class="caption">Recovery card, failed again</p>
+          <div class="shorthand-panel">
+            <div class="shorthand-panel-recovery-list">
+              <div class="shorthand-panel-callout shorthand-panel-recovery" role="group" aria-label="Some of this meeting didn't make it into your notes.">
+                <p class="shorthand-panel-callout-headline">Some of this meeting didn't make it into your notes.</p>
+                <p class="shorthand-panel-callout-text" role="alert">That didn't work either.</p>
+                <p class="shorthand-panel-callout-text">Note: Weekly sync</p>
+                <details class="shorthand-panel-callout-details" open>
+                  <summary>Details</summary>
+                  <p class="shorthand-panel-callout-raw">Shorthand did not hear back from Claude in time.</p>
+                </details>
+                <div class="shorthand-panel-callout-buttons">
+                  <button class="mod-cta" type="button">Take notes again</button>
+                  <button class="shorthand-panel-text-button" type="button">Dismiss</button>
+                </div>
+                <p class="shorthand-panel-callout-hint">This copy is lost if Obsidian closes. Turn on Transcript notes to keep one on disk.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="preview">
+          <p class="caption">Unknown (Your own API key)</p>
+          <div class="shorthand-panel">
+            <div class="shorthand-panel-note-taker">
+              <button class="shorthand-panel-note-taker-line" type="button" aria-haspopup="menu" aria-label="AI note taker: Your own API key">
+                <span class="shorthand-panel-note-taker-icon fake-icon" aria-hidden="true">✎</span>
+                <span class="shorthand-panel-note-taker-dot is-unknown" aria-hidden="true"></span>
+                <span class="shorthand-panel-note-taker-text">AI note taker: Your own API key</span>
+                <span class="shorthand-panel-note-taker-chevron fake-icon" aria-hidden="true">⌄</span>
+              </button>
+              <div class="shorthand-panel-callout shorthand-panel-note-taker-problem" role="group" hidden></div>
+              <p class="shorthand-panel-note-taker-switch" hidden></p>
+            </div>
+            <div class="fake-menu" role="menu">
+              <div class="is-label">AI note taker</div>
+              <div>&nbsp;&nbsp;&nbsp;Claude</div>
+              <div>&nbsp;&nbsp;&nbsp;ChatGPT (Codex)</div>
+              <div>&nbsp;&nbsp;&nbsp;Cursor</div>
+              <div>&nbsp;&nbsp;&nbsp;Another app (ACP)</div>
+              <div>✓ Your own API key</div>
+              <hr>
+              <div class="is-disabled" aria-disabled="true">Check connection</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="preview">
+          <p class="caption">Recovery card, note deleted</p>
+          <div class="shorthand-panel">
+            <div class="shorthand-panel-recovery-list">
+              <div class="shorthand-panel-callout shorthand-panel-recovery" role="group" aria-label="Some of this meeting didn't make it into your notes.">
+                <p class="shorthand-panel-callout-headline">Some of this meeting didn't make it into your notes.</p>
+                <p class="shorthand-panel-callout-text" role="alert">"Weekly sync" was deleted, so there is nowhere to put them. Copy the transcript to keep it.</p>
+                <p class="shorthand-panel-callout-text">Note: Weekly sync</p>
+                <details class="shorthand-panel-callout-details">
+                  <summary>Details</summary>
+                  <p class="shorthand-panel-callout-raw">Claude Code is not signed in. Run claude auth login.</p>
+                </details>
+                <div class="shorthand-panel-callout-buttons">
+                  <button class="mod-cta" type="button">Copy transcript</button>
+                  <button class="shorthand-panel-text-button" type="button">Dismiss</button>
+                </div>
+                <p class="shorthand-panel-callout-hint">This copy is lost if Obsidian closes. Turn on Transcript notes to keep one on disk.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="preview">
+          <p class="caption">Recovery card, assisted notes</p>
+          <div class="shorthand-panel">
+            <div class="shorthand-panel-recovery-list">
+              <div class="shorthand-panel-callout shorthand-panel-recovery" role="group" aria-label="Some of what you said didn't make it into your notes.">
+                <p class="shorthand-panel-callout-headline">Some of what you said didn't make it into your notes.</p>
+                <p class="shorthand-panel-callout-text" role="alert">Claude couldn't start taking notes.</p>
+                <p class="shorthand-panel-callout-text">Note: Weekly sync</p>
+                <details class="shorthand-panel-callout-details">
+                  <summary>Details</summary>
+                  <p class="shorthand-panel-callout-raw">claude.exe was not found. Note-taking will continue with transcript only.</p>
+                </details>
+                <div class="shorthand-panel-callout-buttons">
+                  <button class="mod-cta" type="button">Take notes again</button>
+                  <button class="shorthand-panel-text-button" type="button">Dismiss</button>
+                </div>
+                <p class="shorthand-panel-callout-hint">This copy is lost if Obsidian closes. Turn on Transcript notes to keep one on disk.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </div>
+    <div class="theme-column theme-dark" id="dark-states"></div>
+  </div>
+
+  <script>
+    // The dark column is a copy of the light one, so the two can never drift apart.
+    (function () {
+      var light = document.getElementById("light-states");
+      var dark = document.getElementById("dark-states");
+      dark.innerHTML = light.innerHTML;
+      dark.querySelector(".states-heading").textContent = "Dark theme";
+      document.getElementById("theme-toggle").addEventListener("click", function () {
+        document.body.classList.toggle("theme-dark");
+      });
+    })();
+  </script>
 </body>
 </html>

@@ -23,7 +23,7 @@ By default, Shorthand deletes recordings, transcripts, and AI agent sessions whe
 
 1. Install **Shorthand** from **Settings → Community plugins** in desktop Obsidian.
 2. Install and run the [Shorthand desktop app](https://shorthand.ing).
-3. In Shorthand's plugin settings, choose an AI backend: Claude Code, Codex, Cursor CLI, an ACP agent, or an LLM provider.
+3. In Shorthand's plugin settings, choose the AI note taker: Claude, ChatGPT (Codex), Cursor, another app (ACP), or your own API key.
 4. Open the note you want to update, then open **Shorthand panel** from the command palette or microphone ribbon icon.
 5. Choose **Meeting** for a conversation or **Assisted notes** for solo thinking. Stop from the panel or status bar when you are done.
 
@@ -33,11 +33,11 @@ The first start adds Shorthand's note section automatically. Turn off **Automati
 
 ## What you get
 
-- A right-sidebar panel that always shows the current state, elapsed time, and the note being updated. It also shows the selected agent, model and sign-in status, lets you switch agent for the next capture, and warns at capture start if the agent is signed out.
+- A right-sidebar panel that always shows the current state, elapsed time, and the note being updated. Below the mode cards, one quiet line names the AI note taker (for example "AI note taker: Claude · Opus"). Click it to choose a different one for the next meeting or to check the connection. If your note taker is signed out or unreachable, the panel says what to do, and a notice at the start of a capture warns you.
 - Live meeting notes that improve as new transcript arrives.
 - A linked transcript note when you turn on **Transcript notes**.
 - **Enhance now** for a saved transcript, or **Clean up this note** for writing with no transcript.
-- If enhancement fails during a capture, the transcript is kept in memory and the panel offers **Reprocess transcript** once you have fixed the agent.
+- If enhancement fails during a capture, the transcript is kept in memory and the panel offers **Take notes again** once you have fixed your note taker.
 - In Meeting mode, a 30-second countdown you can cancel before Shorthand stops recording when the transcript suggests the meeting has ended. This applies even if **Control Shorthand transcription** is off or the recording began with Shorthand's hotkey. Turn it off with **Detect meeting end and stop recording**.
 
 ## Note writing

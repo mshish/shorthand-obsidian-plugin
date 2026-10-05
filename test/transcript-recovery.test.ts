@@ -4,6 +4,7 @@ import {
   CaptureRecord,
   describeRecoveryCards,
   RecoveryStore,
+  RECOVERY_NOTICES,
   reprocessResult,
 } from "../src/transcript-recovery.js";
 
@@ -270,28 +271,57 @@ describe("describeRecoveryCards", () => {
     expect(describeRecoveryCards([], info(true))).toEqual([]);
   });
 
-  test("names the error, the retry action and the disk-copy setting", () => {
+  test("names why, keeps the raw error under details, and offers Take notes again", () => {
     const store = new RecoveryStore<object>();
     store.keep(file, failedRecord("Not signed in"));
     const [card] = describeRecoveryCards(store.entries(), info(true));
-    expect(card?.error).toBe("Not signed in");
-    expect(card?.action).toEqual({ id: "reprocess", label: "Reprocess transcript", enabled: true });
-    expect(card?.guidance).toContain("sign-in");
-    expect(card?.diskNote).toContain("Transcript notes");
+    expect(card?.headline).toBe("Some of this meeting didn't make it into your notes.");
+    expect(card?.reason).toBe("The AI note taker ran into a problem partway through.");
+    expect(card?.details).toBe("Not signed in");
+    expect(card?.action).toEqual({ id: "reprocess", label: "Take notes again", enabled: true });
+    expect(card?.dismissLabel).toBe("Dismiss");
+    expect(card?.hint).toBe("This copy is lost if Obsidian closes. Turn on Transcript notes to keep one on disk.");
     expect(card?.notePath).toBe("Meetings/Sync.md");
   });
 
-  test("disables the action and shows progress while reprocessing", () => {
+  test("says the note taker couldn't start when it was unavailable from the start", () => {
+    const store = new RecoveryStore<object>();
+    const record = new CaptureRecord("meeting", "Claude");
+    record.appendDelta("hello");
+    record.noteStartFailure("claude.exe was not found.");
+    store.keep(file, record);
+    const [card] = describeRecoveryCards(store.entries(), info(true));
+    expect(card?.reason).toBe("Claude couldn't start taking notes.");
+  });
+
+  test("names who was taking the notes when the capture knew", () => {
+    const store = new RecoveryStore<object>();
+    const record = new CaptureRecord("meeting", "Claude");
+    record.appendDelta("hello");
+    record.noteFailure("boom");
+    store.keep(file, record);
+    expect(describeRecoveryCards(store.entries(), info(true))[0]?.reason).toBe("Claude ran into a problem partway through.");
+  });
+
+  test("an assisted-notes capture talks about what you said, not a meeting", () => {
+    const store = new RecoveryStore<object>();
+    const record = new CaptureRecord("assisted-notes");
+    record.appendDelta("hello");
+    record.noteFailure("boom");
+    store.keep(file, record);
+    expect(describeRecoveryCards(store.entries(), info(true))[0]?.headline)
+      .toBe("Some of what you said didn't make it into your notes.");
+  });
+
+  test("disables the action and says it is running while taking notes again", () => {
     const store = new RecoveryStore<object>();
     store.keep(file, failedRecord());
     store.beginReprocess(file);
     const [card] = describeRecoveryCards(store.entries(), info(true));
-    expect(card?.progress).toBe("Reprocessing transcript…");
-    expect(card?.action.enabled).toBe(false);
-    expect(card?.guidance).toBeUndefined();
+    expect(card?.action).toEqual({ id: "reprocess", label: "Taking notes again…", enabled: false });
   });
 
-  test("disables Dismiss only while a reprocess runs", () => {
+  test("disables Dismiss only while an attempt runs", () => {
     const store = new RecoveryStore<object>();
     store.keep(file, failedRecord());
     expect(describeRecoveryCards(store.entries(), info(true))[0]?.dismissEnabled).toBe(true);
@@ -302,21 +332,22 @@ describe("describeRecoveryCards", () => {
     expect(describeRecoveryCards(store.entries(), info(false))[0]?.dismissEnabled).toBe(true);
   });
 
-  test("a failed retry shows the new error as such", () => {
+  test("a failed retry says so and shows the new error under details", () => {
     const store = new RecoveryStore<object>();
     store.keep(file, failedRecord("old"));
     store.beginReprocess(file);
     store.finishReprocess(file, { ok: false, error: "still out" });
     const [card] = describeRecoveryCards(store.entries(), info(true));
-    expect(card?.error).toBe("Reprocessing failed: still out");
-    expect(card?.action.enabled).toBe(true);
+    expect(card?.reason).toBe("That didn't work either.");
+    expect(card?.details).toBe("still out");
+    expect(card?.action).toEqual({ id: "reprocess", label: "Take notes again", enabled: true });
   });
 
   test("a deleted note offers a clipboard copy instead", () => {
     const store = new RecoveryStore<object>();
     store.keep(file, failedRecord());
     const [card] = describeRecoveryCards(store.entries(), info(false));
-    expect(card?.headline).toBe("The note was deleted");
+    expect(card?.reason).toContain("was deleted");
     expect(card?.action).toEqual({ id: "copy", label: "Copy transcript", enabled: true });
     expect(card?.notePath).toBeUndefined();
   });
@@ -328,5 +359,26 @@ describe("describeRecoveryCards", () => {
     expect(describeRecoveryCards(store.entries(), info(true))[0]?.key).toBe(first);
     store.keep(file, failedRecord("again"));
     expect(describeRecoveryCards(store.entries(), info(true))[0]?.key).not.toBe(first);
+  });
+});
+
+describe("RECOVERY_NOTICES", () => {
+  test("speaks of taking notes again, never of reprocessing", () => {
+    const texts = [
+      RECOVERY_NOTICES.missing("meeting"),
+      RECOVERY_NOTICES.missing("assisted-notes"),
+      RECOVERY_NOTICES.success("Sync"),
+      RECOVERY_NOTICES.alreadyCurrent("Sync"),
+      RECOVERY_NOTICES.failed("boom"),
+      RECOVERY_NOTICES.busyOnStart,
+      RECOVERY_NOTICES.captureRunning,
+      RECOVERY_NOTICES.alreadyRunning,
+    ];
+    for (const text of texts) expect(text.toLowerCase()).not.toContain("reprocess");
+    expect(RECOVERY_NOTICES.missing("meeting")).toContain("take notes again");
+    expect(RECOVERY_NOTICES.missing("meeting")).toContain("this meeting");
+    expect(RECOVERY_NOTICES.missing("assisted-notes")).toContain("what you said");
+    expect(RECOVERY_NOTICES.missing("assisted-notes")).not.toContain("meeting");
+    expect(RECOVERY_NOTICES.failed("boom")).toContain("boom");
   });
 });
