@@ -474,6 +474,12 @@ export default class ShorthandPlugin extends Plugin {
    * capture and two writers raced on one AI block.
    */
   #startingNote: TFile | undefined = undefined;
+  /**
+   * True from the moment a start snapshots the settings for its enhancer until that start
+   * ends. Before that point (scaffold, sidecar, note read) an agent switch still applies to
+   * the start, so the panel must not tell the user it waits for the next capture.
+   */
+  #startEnhancerChosen = false;
   /** Makes the selected mode visible during setup, before a runtime exists to own it. */
   #requestedCaptureMode: CaptureMode | undefined = undefined;
   /**
@@ -736,9 +742,9 @@ export default class ShorthandPlugin extends Plugin {
     return describeAgentStatus({
       settings: this.settings,
       probe: this.#agentProbe,
-      // A start still being set up counts: its `createEnhancer` has read or is about to read the
-      // settings, so a switch made now misses it just as one made during the capture does.
-      captureInFlight: this.#capture !== undefined || this.#state.starting,
+      // A start counts once it has snapshotted the settings for `createEnhancer`; a switch made
+      // before that still applies to it, and one made after misses it as it would mid-capture.
+      captureInFlight: this.#capture !== undefined || this.#startEnhancerChosen,
     });
   }
 
@@ -931,6 +937,7 @@ export default class ShorthandPlugin extends Plugin {
         // start Notice below is about this agent, not whichever one a panel switch selected
         // while setup was awaiting.
         const enhancerSettings = this.settings;
+        this.#startEnhancerChosen = true;
         try {
           enhancer = await this.createEnhancer(
             noteSink,
@@ -1246,6 +1253,7 @@ export default class ShorthandPlugin extends Plugin {
       this.#requestedCaptureMode = undefined;
       // From here `#capture` (or nothing, after a failed start) answers for the note.
       this.#startingNote = undefined;
+      this.#startEnhancerChosen = false;
       // Any path that left without handing ownership to a live runtime has to release
       // `starting`, or the plugin refuses every later start with "already taking notes".
       // `capture-start-failed` returns to idle only from `starting`, so a setup error
@@ -1291,6 +1299,8 @@ export default class ShorthandPlugin extends Plugin {
     // Shorthand quitting mid-capture can beat `captureSettled` to the user's Stop press, and a
     // toggle spawned with no Shorthand to forward to would *become* Shorthand starting up.
     const sender = meetingEndStopSender({ ...runtime.adoption, meetingEnd: options.meetingEnd === true });
+    // `runtime.recorder` and `sender` agree by construction: the recorder was built from the same
+    // adoption that `meetingEndStopSender` reads, so a recorder present means sender "recorder".
     const outcome = await (runtime.recorder?.stop({
       abandoned: runtime.settled,
       shorthandDown: runtime.shorthandDown,
@@ -3039,7 +3049,7 @@ class ShorthandSettingTab extends PluginSettingTab {
           desc: createFragment((desc) => {
             desc.appendText(
               "Automatically start and stop transcription in the Shorthand app when note-taking begins and ends. "
-              + "When turned off, start transcription manually in Shorthand; stop it there too, unless meeting-end detection is on, which stops it when the meeting ends. ",
+              + "When turned off, start and stop transcription in Shorthand yourself; in Meeting mode, meeting-end detection can stop it for you. ",
             );
             desc.createEl("a", {
               text: "Read how recorder control works",

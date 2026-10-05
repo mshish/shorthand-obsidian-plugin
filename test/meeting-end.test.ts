@@ -391,15 +391,13 @@ describe("runMeetingEndStop", () => {
   });
 
   test("does nothing for the skip plan", async () => {
-    for (const plan of ["skip"] as const) {
-      let called = false;
-      await runMeetingEndStop({
-        plan,
-        send: async () => { called = true; return sentOutcome; },
-        report: () => { called = true; },
-        warn: () => { called = true; },
-      });
-      expect(called).toBe(false);
-    }
+    let called = false;
+    await runMeetingEndStop({
+      plan: "skip",
+      send: async () => { called = true; return sentOutcome; },
+      report: () => { called = true; },
+      warn: () => { called = true; },
+    });
+    expect(called).toBe(false);
   });
 });
