@@ -175,10 +175,13 @@ import {
 import {
   MeetingEndWatch,
   meetingEndNoticeText,
+  captureHasRecorder,
+  meetingEndStopSender,
   planMeetingEndStop,
   runMeetingEndStop,
   sendMeetingEndStop,
   SpeechMeter,
+  type CaptureAdoption,
   type MeetingEndCancelCause,
   type MeetingEndCountdown,
 } from "./src/meeting-end.js";
@@ -308,6 +311,8 @@ type CaptureRuntime = {
    * belongs to.
    */
   meetingEnd: MeetingEndWatch;
+  /** What the recorder decision was made from, so a stop can ask who sends the signal. */
+  adoption: CaptureAdoption;
   settled: Promise<ExitDiagnosis>;
   stopping: boolean;
   /**
@@ -981,7 +986,11 @@ export default class ShorthandPlugin extends Plugin {
         // Shorthand's recording either, so the user stops it the way they started it — see
         // README, "Following Shorthand's recordings". The one exception is meeting-end
         // detection, which sends the mode's stop itself when it expires (`stopCapture({ meetingEnd: true })`).
-        const recorder = this.settings.controlShorthandRecording && options.attachToSession === undefined
+        const adoption: CaptureAdoption = {
+          controlShorthandRecording: this.settings.controlShorthandRecording,
+          attachToSession: options.attachToSession,
+        };
+        const recorder = captureHasRecorder(adoption)
           ? new ShorthandRecorder({
             control,
             signals,
@@ -999,6 +1008,7 @@ export default class ShorthandPlugin extends Plugin {
           client,
           control,
           recorder,
+          adoption,
           shorthandDown: false,
           helloEver: false,
           sidecar,
@@ -1280,10 +1290,11 @@ export default class ShorthandPlugin extends Plugin {
     // its own start sequence before this returns, it just must not send the finalize toggle.
     // Shorthand quitting mid-capture can beat `captureSettled` to the user's Stop press, and a
     // toggle spawned with no Shorthand to forward to would *become* Shorthand starting up.
+    const sender = meetingEndStopSender({ ...runtime.adoption, meetingEnd: options.meetingEnd === true });
     const outcome = await (runtime.recorder?.stop({
       abandoned: runtime.settled,
       shorthandDown: runtime.shorthandDown,
-    }) ?? this.#stopWithoutRecorder(runtime, options.meetingEnd === true));
+    }) ?? this.#stopWithoutRecorder(runtime, sender === "plugin"));
     this.debugCapture(describeStop(outcome));
     if (outcome === "timed-out") {
       this.fail("Shorthand did not deliver the final transcript in time; the transcript keeps whatever Shorthand had already sent.");
@@ -1314,10 +1325,10 @@ export default class ShorthandPlugin extends Plugin {
    * in flight, and before `stopAfterDrain`, so the drain waits for the terminal record the
    * signal produces, as it does after a recorder's finalize.
    */
-  async #stopWithoutRecorder(runtime: CaptureRuntime, meetingEnd: boolean): Promise<"no-session"> {
-    if (meetingEnd) {
+  async #stopWithoutRecorder(runtime: CaptureRuntime, pluginSendsStop: boolean): Promise<"no-session"> {
+    if (pluginSendsStop) {
       await runMeetingEndStop({
-        plan: planMeetingEndStop({ hasRecorder: false, shorthandDown: runtime.shorthandDown }),
+        plan: planMeetingEndStop({ shorthandDown: runtime.shorthandDown }),
         send: () => sendMeetingEndStop(runtime.control, captureSignals(runtime.mode).stop),
         report: (outcome) => this.debugCapture(`meeting-end stop ${outcome.sent ? "sent" : `failed: ${outcome.message}`}`),
         warn: (text) => new Notice(text, 15_000),

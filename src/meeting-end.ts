@@ -228,23 +228,47 @@ export class MeetingEndWatch {
 }
 
 /**
- * What the countdown's expiry does about Shorthand's own recording, decided without regard to
- * how the capture began. "Detect meeting end" is independent of "Control Shorthand
- * transcription": a capture adopted from Shorthand's hotkey, or one with control switched off,
- * has no recorder, and without this its expiry would finish the capture in Obsidian and leave
- * the microphone recording.
- *
- * - `recorder`: the capture's recorder sends the stop itself as part of the normal stop path,
- *   and sending it here too would race the recorder's wait for the terminal record.
- * - `send`: no recorder, so the stop signal must be sent here.
- * - `skip`: Shorthand is known not to be running, so there is nothing to stop, and a control
- *   spawn with no Shorthand to forward to would start the app instead.
+ * How a capture relates to Shorthand's recording, fixed when the capture starts. A recorder
+ * exists only when "Control Shorthand transcription" is on and the capture is not attaching to
+ * a recording Shorthand already started: the recorder sends the start signal, and starting a
+ * recording that is already running is not what an attach is for.
  */
-export type MeetingEndStopPlan = "recorder" | "send" | "skip";
+export type CaptureAdoption = Readonly<{
+  controlShorthandRecording: boolean;
+  attachToSession: number | undefined;
+}>;
 
-export function planMeetingEndStop(capture: Readonly<{ hasRecorder: boolean; shorthandDown: boolean }>): MeetingEndStopPlan {
-  if (capture.shorthandDown) return "skip";
-  return capture.hasRecorder ? "recorder" : "send";
+export function captureHasRecorder(adoption: CaptureAdoption): boolean {
+  return adoption.controlShorthandRecording && adoption.attachToSession === undefined;
+}
+
+/**
+ * Who sends the stop signal to Shorthand when a capture stops.
+ *
+ * - `recorder`: the capture's recorder, as part of its normal stop path. Sending the signal
+ *   from the plugin too would race the recorder's wait for the terminal record.
+ * - `plugin`: a meeting-end stop on a capture with no recorder (adopted from Shorthand's
+ *   hotkey, or control off). "Detect meeting end" is independent of "Control Shorthand
+ *   transcription"; without this the expiry would finish the capture in Obsidian and leave the
+ *   microphone recording.
+ * - `nobody`: a manual stop on a capture with no recorder; the user stops Shorthand themselves.
+ */
+export type MeetingEndStopSender = "recorder" | "plugin" | "nobody";
+
+export function meetingEndStopSender(capture: CaptureAdoption & Readonly<{ meetingEnd: boolean }>): MeetingEndStopSender {
+  if (captureHasRecorder(capture)) return "recorder";
+  return capture.meetingEnd ? "plugin" : "nobody";
+}
+
+/**
+ * Whether the plugin's own meeting-end stop is worth sending. `skip` when Shorthand is known
+ * not to be running: there is nothing to stop, and a control spawn with no Shorthand to forward
+ * to would start the app instead.
+ */
+export type MeetingEndStopPlan = "send" | "skip";
+
+export function planMeetingEndStop(capture: Readonly<{ shorthandDown: boolean }>): MeetingEndStopPlan {
+  return capture.shorthandDown ? "skip" : "send";
 }
 
 export type MeetingEndStopOutcome = Readonly<{ sent: true } | { sent: false; message: string }>;
@@ -277,7 +301,7 @@ export function meetingEndStopFailedText(message: string): string {
 }
 
 /**
- * The send step of a meeting-end stop for a capture with no recorder. The caller runs it after
+ * The send step of a meeting-end stop for a capture whose stop sender is the plugin. The caller runs it after
  * marking the capture stopping and before asking the follower to drain, so the drain waits for
  * the terminal record the signal produces. A failed send is reported and then returned from
  * normally: the capture must still finish whether or not Shorthand heard the signal.
