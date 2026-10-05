@@ -1,4 +1,4 @@
-import type { EnhanceStatus } from "shorthand-core";
+import { enhancementDelta, type EnhanceStatus, type TranscriptUpdate } from "shorthand-core";
 import type { CaptureMode } from "./follow-policy.js";
 
 /**
@@ -58,6 +58,17 @@ export function cleanReason(reason: string): string {
   return `${flat.slice(0, MAX_REASON_LENGTH - 1).trimEnd()}…`;
 }
 
+/**
+ * Characters of genuinely new speech in a transcript update. `rewrite-tail` and
+ * `replace-session` re-decode speech that was already heard, so counting them would let a
+ * recognizer revising the farewell cancel the countdown with "the conversation continued"
+ * and would satisfy the rearm rule with no one speaking. Measured the way core's own gate
+ * measures an append, speaker label included.
+ */
+export function speechCharacters(update: TranscriptUpdate): number {
+  return update.action === "append" ? enhancementDelta(update).length : 0;
+}
+
 export function meetingEndNoticeText(seconds: number): string {
   return `Meeting looks like it has ended — stopping in ${seconds}s`;
 }
@@ -71,7 +82,6 @@ export class MeetingEndWatch {
   #deadline = 0;
   #reason = "";
   #speechInCountdown = 0;
-  #countdownStartSeq = 0;
   /** Counts speech deltas; a pass is judged by the speech that existed when it started. */
   #speechSeq = 0;
   /**
@@ -80,6 +90,12 @@ export class MeetingEndWatch {
    * transcript the user just overruled, and the countdown restarts at once.
    */
   #rearmAfterSeq = -1;
+  /**
+   * Speech count when core reported the pass `started`. Core emits that after reading the
+   * note, but fixes the pass's transcript earlier, so speech arriving during that read is
+   * counted as "before the pass" although the pass never saw it. The window is narrow and
+   * closing it needs core to report acceptance or expose the transcript cutoff.
+   */
   #passStartSeq: number | undefined = undefined;
 
   constructor(options: MeetingEndWatchOptions) {
@@ -100,6 +116,16 @@ export class MeetingEndWatch {
     if (this.#timer === undefined) return;
     this.#speechInCountdown += characters;
     if (this.#speechInCountdown >= this.#options.minSpeechCharacters) this.#cancel("speech");
+  }
+
+  /**
+   * Called on the plugin's one-second tick. The setting can be switched off mid-countdown;
+   * "off" means the signal has no effect, so the countdown is dropped at once rather than
+   * left showing a stop that will not happen.
+   */
+  refresh(): void {
+    if (this.#disposed || this.#timer === undefined || this.#options.enabled()) return;
+    this.#cancel("user", false);
   }
 
   /** Every enhancement status of the capture; only pass start and finish matter here. */
@@ -136,7 +162,6 @@ export class MeetingEndWatch {
   #start(reason: string): void {
     this.#reason = reason;
     this.#speechInCountdown = 0;
-    this.#countdownStartSeq = this.#speechSeq;
     this.#deadline = this.#options.now() + this.#countdownMs;
     this.#timer = this.#options.timers.setTimeout(() => this.#expire(), this.#countdownMs);
     this.#options.onChange(this.countdown);
@@ -157,9 +182,11 @@ export class MeetingEndWatch {
   }
 
   #cancel(cause: MeetingEndCancelCause, notify = true): void {
-    // Speech inside the countdown already counts as new speech, so a speech cancel re-arms
-    // from where the countdown began; a user cancel needs speech after the click.
-    this.#rearmAfterSeq = cause === "speech" ? this.#countdownStartSeq : this.#speechSeq;
+    // A pass already running judges a transcript the cancel (a click, or speech that arrived
+    // after the pass began) has just overruled, and would otherwise restart the countdown at
+    // once. A user cancel needs speech after the click. A speech cancel's own delta is new
+    // speech, so a pass that started after it may restart; one that started before it may not.
+    this.#rearmAfterSeq = cause === "speech" ? this.#speechSeq - 1 : this.#speechSeq;
     this.#clear();
     this.#options.onChange(undefined);
     if (notify) this.#options.onCancel(cause);

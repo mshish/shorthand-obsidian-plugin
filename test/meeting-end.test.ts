@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import type { EnhanceStatus } from "shorthand-core";
+import type { EnhanceStatus, TranscriptUpdate } from "shorthand-core";
 import {
   cleanReason,
   MEETING_END_COUNTDOWN_MS,
   MeetingEndWatch,
   meetingEndNoticeText,
+  speechCharacters,
   type MeetingEndCancelCause,
   type MeetingEndCountdown,
 } from "../src/meeting-end.js";
@@ -176,6 +177,30 @@ describe("MeetingEndWatch", () => {
     expect(h.watch.countdown).toBeUndefined();
   });
 
+  test("a pass that started before the cancelling speech cannot restart the countdown", () => {
+    const h = harness();
+    h.pass(true);
+    h.watch.noteSpeech(20);
+    h.watch.noteStatus(started);
+    h.watch.noteSpeech(100);
+    expect(h.log).toEqual(["cancel:speech"]);
+    h.watch.noteStatus(finished(true));
+    expect(h.watch.countdown).toBeUndefined();
+    h.watch.noteSpeech(5);
+    h.pass(true);
+    expect(h.watch.countdown).toBeDefined();
+  });
+
+  test("switching the setting off drops a running countdown quietly", () => {
+    const h = harness();
+    h.pass(true);
+    h.state.enabled = false;
+    h.watch.refresh();
+    expect(h.watch.countdown).toBeUndefined();
+    expect(h.log).toEqual([]);
+    expect(h.changes.at(-1)).toBeUndefined();
+  });
+
   test("never in Assisted Notes", () => {
     const h = harness({ mode: "assisted-notes" });
     h.pass(true);
@@ -234,5 +259,22 @@ describe("cleanReason", () => {
 describe("meetingEndNoticeText", () => {
   test("is worded as a detection", () => {
     expect(meetingEndNoticeText(30)).toBe("Meeting looks like it has ended — stopping in 30s");
+  });
+});
+
+describe("speechCharacters", () => {
+  const update = (action: string, extra: object = {}) =>
+    ({ action, speaker: "Alice", delta: "hello there", ...extra }) as unknown as TranscriptUpdate;
+
+  test("counts an append, speaker label included", () => {
+    expect(speechCharacters(update("append"))).toBe("Alice: hello there".length);
+  });
+
+  test("a rewrite-tail revision is not new speech", () => {
+    expect(speechCharacters(update("rewrite-tail"))).toBe(0);
+  });
+
+  test("a replace-session correction is not new speech", () => {
+    expect(speechCharacters(update("replace-session", { snapshot: { session: "s", commits: [], final: { text: "x".repeat(200) } } }))).toBe(0);
   });
 });

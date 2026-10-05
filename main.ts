@@ -173,6 +173,7 @@ import {
 import {
   MeetingEndWatch,
   meetingEndNoticeText,
+  speechCharacters,
   type MeetingEndCancelCause,
   type MeetingEndCountdown,
 } from "./src/meeting-end.js";
@@ -541,7 +542,7 @@ export default class ShorthandPlugin extends Plugin {
     // The elapsed-time display is otherwise only refreshed from a transcript-delta handler
     // and from dispatch(), so between utterances it would visibly freeze. A ticking interval
     // keeps it advancing during silence; registerInterval auto-clears it on unload.
-    this.registerInterval(window.setInterval(() => { this.#render(); this.#tickMeetingEndNotice(); }, 1_000));
+    this.registerInterval(window.setInterval(() => { this.#render(); this.#capture?.meetingEnd.refresh(); this.#tickMeetingEndNotice(); }, 1_000));
     this.addSettingTab(new ShorthandSettingTab(this.app, this));
 
     this.registerView(SHORTHAND_PANEL_VIEW, (leaf) => new ShorthandPanelView(leaf, this));
@@ -1034,7 +1035,7 @@ export default class ShorthandPlugin extends Plugin {
           // Before the runner, and regardless of whether it exists or its passes succeed:
           // this copy is what a later reprocess replays.
           captureRecord.appendDelta(delta);
-          meetingEnd.noteSpeech(delta.length);
+          meetingEnd.noteSpeech(speechCharacters(update));
           enhancer?.appendTranscript(delta);
           if (enhancer !== undefined && this.settings.enableLiveEnhancement) {
             enhancer.requestTick();
@@ -2261,14 +2262,28 @@ export default class ShorthandPlugin extends Plugin {
         const cancel = frag.createEl("button", { text: "Cancel", attr: { type: "button" } });
         cancel.onclick = () => { this.cancelMeetingEnd(); };
       });
-      if (text !== undefined) this.#meetingEndNotice = { notice: new Notice(fragment, 0), text };
+      if (text !== undefined) {
+        const notice = new Notice(fragment, 0);
+        this.#meetingEndNotice = { notice, text };
+        // Obsidian dismisses a Notice on any click. A click on the text would hide it while
+        // the countdown keeps running, so recreate it on the next tick instead of letting
+        // the countdown run unseen behind a possibly closed panel.
+        notice.messageEl.addEventListener("click", (event) => {
+          if (event.target instanceof HTMLButtonElement) return;
+          if (this.#meetingEndNotice?.notice === notice) this.#meetingEndNotice = undefined;
+        });
+      }
     }
     this.#render();
   }
 
   #tickMeetingEndNotice(): void {
     const countdown = this.#capture?.meetingEnd.countdown;
-    if (countdown === undefined || this.#meetingEndNotice === undefined) return;
+    if (countdown === undefined) return;
+    if (this.#meetingEndNotice === undefined) {
+      this.#showMeetingEnd(countdown);
+      return;
+    }
     this.#meetingEndNotice.text.textContent = meetingEndNoticeText(countdown.remainingSeconds);
   }
 
