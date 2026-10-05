@@ -98,6 +98,7 @@ describe("plugin settings normalization", () => {
       minIntervalMs: 10_900.9,
       enableLiveEnhancement: false,
       controlShorthandRecording: false,
+      detectMeetingEnd: false,
       writeTranscriptNote: true,
       autoScaffold: false,
       debugLogging: true,
@@ -133,6 +134,7 @@ describe("plugin settings normalization", () => {
       minIntervalMs: 10_900,
       enableLiveEnhancement: false,
       controlShorthandRecording: false,
+      detectMeetingEnd: false,
       writeTranscriptNote: true,
       autoScaffold: false,
       debugLogging: true,
@@ -224,6 +226,14 @@ describe("plugin settings normalization", () => {
     for (const garbage of ["", "claude", "openai-codex", 42, null, undefined, {}, ["codex"]]) {
       expect(isEnhancementBackend(garbage)).toBe(false);
     }
+  });
+
+  test("meeting-end detection defaults on and falls back for anything but a boolean", () => {
+    expect(DEFAULT_PLUGIN_SETTINGS.detectMeetingEnd).toBe(true);
+    expect(normalizePluginSettings({}).detectMeetingEnd).toBe(true);
+    expect(normalizePluginSettings({ detectMeetingEnd: false }).detectMeetingEnd).toBe(false);
+    expect(normalizePluginSettings({ detectMeetingEnd: "no" }).detectMeetingEnd).toBe(true);
+    expect(normalizePluginSettings({ detectMeetingEnd: 0 }).detectMeetingEnd).toBe(true);
   });
 
   test("defaults the Shorthand control toggle", () => {

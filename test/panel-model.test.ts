@@ -19,6 +19,7 @@ const base = {
   // Defaults to "nothing to stop"; tests for a live runtime override this explicitly so the
   // scenario reads plainly, rather than a shared default doing invisible work for them.
   hasCapture: false,
+  meetingEnd: undefined,
 } as const;
 
 const enabled = (model: ReturnType<typeof describePanel>): string[] =>
@@ -182,6 +183,34 @@ describe("describePanel", () => {
     });
     expect(model.noteName).toBe("Weekly sync");
     expect(model.notePath).toBe("Meetings/Weekly sync.md");
+  });
+
+  test("shows the meeting-end countdown with its reason while capturing", () => {
+    const model = describePanel({
+      ...base,
+      state: capturing,
+      hasCapture: true,
+      meetingEnd: { reason: "Everyone said goodbye.", remainingSeconds: 22 },
+    });
+    expect(model.meetingEnd).toEqual({
+      headline: "Meeting looks like it has ended",
+      countdown: "Stopping in 22s",
+      reason: "Everyone said goodbye.",
+      cancelLabel: "Cancel",
+    });
+  });
+
+  test("shows no meeting-end card without a countdown, once stopping, or with no capture", () => {
+    expect(describePanel({ ...base, state: capturing, hasCapture: true }).meetingEnd).toBeUndefined();
+    const countdown = { reason: "x", remainingSeconds: 5 };
+    const stopping = reducePluginState(capturing, { type: "capture-stopping" });
+    expect(describePanel({ ...base, state: stopping, hasCapture: true, meetingEnd: countdown }).meetingEnd).toBeUndefined();
+    expect(describePanel({ ...base, state: capturing, hasCapture: false, meetingEnd: countdown }).meetingEnd).toBeUndefined();
+  });
+
+  test("omits an empty reason", () => {
+    const model = describePanel({ ...base, state: capturing, hasCapture: true, meetingEnd: { reason: "", remainingSeconds: 5 } });
+    expect(model.meetingEnd?.reason).toBeUndefined();
   });
 
   test("names the view type Obsidian registers", () => {

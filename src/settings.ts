@@ -98,6 +98,12 @@ export type ShorthandPluginSettings = Readonly<{
   enableLiveEnhancement: boolean;
   controlShorthandRecording: boolean;
   /**
+   * Whether an enhancement pass's "the meeting looks over" report may start the stop
+   * countdown. Off means the report is ignored entirely. On by default because the countdown
+   * is cancellable and speech cancels it, so a false positive costs a few seconds of attention.
+   */
+  detectMeetingEnd: boolean;
+  /**
    * Whether capture creates and maintains a linked transcript sidecar note holding the raw
    * transcript on disk. Off by default, so a fresh install writes nothing to the vault beyond
    * the meeting note itself.
@@ -178,6 +184,7 @@ export const DEFAULT_PLUGIN_SETTINGS: ShorthandPluginSettings = Object.freeze({
   minIntervalMs: DEFAULT_CONFIG.thresholds.enhancementIntervalMs,
   enableLiveEnhancement: true,
   controlShorthandRecording: true,
+  detectMeetingEnd: true,
   writeTranscriptNote: false,
   autoScaffold: true,
   debugLogging: false,
@@ -232,6 +239,9 @@ export function normalizePluginSettings(input: unknown): ShorthandPluginSettings
     controlShorthandRecording: typeof value.controlShorthandRecording === "boolean"
       ? value.controlShorthandRecording
       : DEFAULT_PLUGIN_SETTINGS.controlShorthandRecording,
+    detectMeetingEnd: typeof value.detectMeetingEnd === "boolean"
+      ? value.detectMeetingEnd
+      : DEFAULT_PLUGIN_SETTINGS.detectMeetingEnd,
     writeTranscriptNote: typeof value.writeTranscriptNote === "boolean"
       ? value.writeTranscriptNote
       : DEFAULT_PLUGIN_SETTINGS.writeTranscriptNote,
