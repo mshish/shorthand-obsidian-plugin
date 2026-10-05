@@ -266,11 +266,30 @@ export async function sendMeetingEndStop(
   if (result.status === "sent") return { sent: true };
   return {
     sent: false,
-    message: result.status === "not-running" ? "Shorthand is not running." : result.message,
+    message: result.status === "not-running" ? "Shorthand did not answer within 5 seconds" : result.message,
   };
 }
 
 /** Plain wording for a stop that did not reach Shorthand: it may still be recording. */
 export function meetingEndStopFailedText(message: string): string {
-  return `Shorthand: the meeting looked like it had ended, but Shorthand did not confirm the stop (${message}). Shorthand may still be recording, so check it and stop it there if so.`;
+  const reason = message.trim().replace(/[.\s]+$/u, "");
+  return `Shorthand: the meeting looked like it had ended, but Shorthand did not confirm the stop (${reason}). Shorthand may still be recording, so check it and stop it there if so.`;
+}
+
+/**
+ * The send step of a meeting-end stop for a capture with no recorder. The caller runs it after
+ * marking the capture stopping and before asking the follower to drain, so the drain waits for
+ * the terminal record the signal produces. A failed send is reported and then returned from
+ * normally: the capture must still finish whether or not Shorthand heard the signal.
+ */
+export async function runMeetingEndStop(steps: Readonly<{
+  plan: MeetingEndStopPlan;
+  send: () => Promise<MeetingEndStopOutcome>;
+  report: (outcome: MeetingEndStopOutcome) => void;
+  warn: (text: string) => void;
+}>): Promise<void> {
+  if (steps.plan !== "send") return;
+  const outcome = await steps.send();
+  steps.report(outcome);
+  if (!outcome.sent) steps.warn(meetingEndStopFailedText(outcome.message));
 }

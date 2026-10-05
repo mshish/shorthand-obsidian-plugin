@@ -173,8 +173,8 @@ import {
 import {
   MeetingEndWatch,
   meetingEndNoticeText,
-  meetingEndStopFailedText,
   planMeetingEndStop,
+  runMeetingEndStop,
   sendMeetingEndStop,
   SpeechMeter,
   type MeetingEndCancelCause,
@@ -889,11 +889,13 @@ export default class ShorthandPlugin extends Plugin {
           onChange: (countdown) => this.#showMeetingEnd(countdown),
           onCancel: (cause) => this.#meetingEndCancelled(cause),
           onExpire: () => {
-            // The same stop a manual press makes, so the closing pass, the recorder's
-            // idempotent stop and the transcript-recovery cards all behave identically.
+            // Goes through stopCapture({ meetingEnd: true }): for a capture with no recorder it also sends the
+            // mode's stop signal, which a manual press does not, and then makes the same stop a
+            // manual press makes, so the closing pass and the transcript-recovery cards behave
+            // identically.
             if (ownRuntime === undefined || this.#capture !== ownRuntime || ownRuntime.stopping) return;
             new Notice("Shorthand: stopping, the meeting looked like it had ended.");
-            void this.stopForMeetingEnd(ownRuntime).catch((error: unknown) => this.fail(errorMessage(error)));
+            void this.stopCapture({ meetingEnd: true }).catch((error: unknown) => this.fail(errorMessage(error)));
           },
         });
         let enhancer: EnhanceRunner | undefined;
@@ -951,7 +953,8 @@ export default class ShorthandPlugin extends Plugin {
         // exists to send the start signal, and starting a recording that is already running
         // is not what an attach is for. The cost is that this capture cannot finalize
         // Shorthand's recording either, so the user stops it the way they started it — see
-        // README, "Following Shorthand's recordings".
+        // README, "Following Shorthand's recordings". The one exception is meeting-end
+        // detection, which sends the mode's stop itself when it expires (`stopCapture({ meetingEnd: true })`).
         const recorder = this.settings.controlShorthandRecording && options.attachToSession === undefined
           ? new ShorthandRecorder({
             control,
@@ -1028,7 +1031,8 @@ export default class ShorthandPlugin extends Plugin {
           // Obsidian capture running until the user stops it by hand. A no-op for a capture
           // that started its own recording: `endsSession` is always false when there is no
           // `attachToSession` to match against.
-          if (endsSession(record, options.attachToSession)) {
+          // The terminal record a stop already in flight is waiting for is not a request to stop again.
+          if (endsSession(record, options.attachToSession) && !runtime.stopping) {
             void this.stopCapture().catch((error: unknown) => this.fail(errorMessage(error)));
           }
           const update = transcript.ingest(generation, record);
@@ -1212,7 +1216,7 @@ export default class ShorthandPlugin extends Plugin {
     }
   }
 
-  async stopCapture(): Promise<void> {
+  async stopCapture(options: Readonly<{ meetingEnd?: boolean }> = {}): Promise<void> {
     const runtime = this.#capture;
     if (runtime === undefined) {
       new Notice("Shorthand is not taking notes.");
@@ -1248,7 +1252,7 @@ export default class ShorthandPlugin extends Plugin {
     const outcome = await (runtime.recorder?.stop({
       abandoned: runtime.settled,
       shorthandDown: runtime.shorthandDown,
-    }) ?? Promise.resolve("no-session" as const));
+    }) ?? this.#stopWithoutRecorder(runtime, options.meetingEnd === true));
     this.debugCapture(describeStop(outcome));
     if (outcome === "timed-out") {
       this.fail("Shorthand did not deliver the final transcript in time; the transcript keeps whatever Shorthand had already sent.");
@@ -1268,22 +1272,27 @@ export default class ShorthandPlugin extends Plugin {
   }
 
   /**
-   * The countdown's expiry. Unlike a manual stop, this always asks Shorthand to stop
-   * recording, including for a capture with no recorder (adopted from Shorthand's hotkey, or
-   * "Control Shorthand transcription" off): the setting is independent of recorder control,
-   * and finishing only the Obsidian side would leave the microphone live.
+   * The countdown's expiry stops through `stopCapture({ meetingEnd: true })`. Unlike a manual
+   * stop, that always asks Shorthand to stop recording, including for a capture with no
+   * recorder (adopted from Shorthand's hotkey, or "Control Shorthand transcription" off): the
+   * setting is independent of recorder control, and finishing only the Obsidian side would
+   * leave the microphone live.
+   *
+   * This is the stop step for a capture with no recorder. Runs after `stopCapture` has marked the
+   * capture stopping, so the panel and live passes already reflect the stop while the send is
+   * in flight, and before `stopAfterDrain`, so the drain waits for the terminal record the
+   * signal produces, as it does after a recorder's finalize.
    */
-  private async stopForMeetingEnd(runtime: CaptureRuntime): Promise<void> {
-    const plan = planMeetingEndStop({ hasRecorder: runtime.recorder !== undefined, shorthandDown: runtime.shorthandDown });
-    if (plan === "send") {
-      // Before stopCapture so the follower's drain waits for the terminal record this stop
-      // produces, as it does after a recorder's finalize. The signal is idempotent.
-      const outcome = await sendMeetingEndStop(runtime.control, captureSignals(runtime.mode).stop);
-      this.debugCapture(`meeting-end stop ${outcome.sent ? "sent" : `failed: ${outcome.message}`}`);
-      if (!outcome.sent) new Notice(meetingEndStopFailedText(outcome.message), 15_000);
-      if (this.#capture !== runtime || runtime.stopping) return;
+  async #stopWithoutRecorder(runtime: CaptureRuntime, meetingEnd: boolean): Promise<"no-session"> {
+    if (meetingEnd) {
+      await runMeetingEndStop({
+        plan: planMeetingEndStop({ hasRecorder: false, shorthandDown: runtime.shorthandDown }),
+        send: () => sendMeetingEndStop(runtime.control, captureSignals(runtime.mode).stop),
+        report: (outcome) => this.debugCapture(`meeting-end stop ${outcome.sent ? "sent" : `failed: ${outcome.message}`}`),
+        warn: (text) => new Notice(text, 15_000),
+      });
     }
-    await this.stopCapture();
+    return "no-session";
   }
 
   forceStopCapture(): void {

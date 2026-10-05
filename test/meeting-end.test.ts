@@ -7,6 +7,7 @@ import {
   meetingEndNoticeText,
   meetingEndStopFailedText,
   planMeetingEndStop,
+  runMeetingEndStop,
   sendMeetingEndStop,
   SpeechMeter,
   type MeetingEndCancelCause,
@@ -300,7 +301,7 @@ describe("SpeechMeter", () => {
 });
 
 describe("meeting-end stop decision", () => {
-  test("requests the stop regardless of control mode or adoption", () => {
+  test("plans a send without a recorder and leaves it to the recorder with one", () => {
     // Adopted from Shorthand's hotkey, or control off: no recorder, so the plugin must send.
     expect(planMeetingEndStop({ hasRecorder: false, shorthandDown: false })).toBe("send");
     // Control on: the recorder's own stop path sends it.
@@ -324,7 +325,7 @@ describe("meeting-end stop decision", () => {
 
   test("reports a refused, errored or thrown stop instead of throwing", async () => {
     const notRunning = await sendMeetingEndStop({ send: async () => ({ status: "not-running" }) }, "stop-transcription");
-    expect(notRunning).toEqual({ sent: false, message: "Shorthand is not running." });
+    expect(notRunning).toEqual({ sent: false, message: "Shorthand did not answer within 5 seconds" });
     const errored = await sendMeetingEndStop({ send: async () => ({ status: "error", message: "boom" }) }, "stop-transcription");
     expect(errored).toEqual({ sent: false, message: "boom" });
     const thrown = await sendMeetingEndStop({ send: async () => { throw new Error("spawn failed"); } }, "stop-transcription");
@@ -333,5 +334,52 @@ describe("meeting-end stop decision", () => {
 
   test("failure text says Shorthand may still be recording", () => {
     expect(meetingEndStopFailedText("boom")).toContain("may still be recording");
+  });
+
+  test("failure text for not-running has no doubled punctuation", () => {
+    const text = meetingEndStopFailedText("Shorthand did not answer within 5 seconds");
+    expect(text).toContain("(Shorthand did not answer within 5 seconds).");
+    expect(meetingEndStopFailedText("boom.")).toContain("(boom).");
+  });
+});
+
+describe("runMeetingEndStop", () => {
+  const sentOutcome = { sent: true } as const;
+
+  test("sends, then reports, in that order", async () => {
+    const log: string[] = [];
+    await runMeetingEndStop({
+      plan: "send",
+      send: async () => { log.push("send"); return sentOutcome; },
+      report: () => log.push("report"),
+      warn: () => log.push("warn"),
+    });
+    expect(log).toEqual(["send", "report"]);
+  });
+
+  test("returns normally and warns when the send fails", async () => {
+    const warned: string[] = [];
+    await runMeetingEndStop({
+      plan: "send",
+      send: async () => ({ sent: false, message: "boom" }),
+      report: () => {},
+      warn: (text) => warned.push(text),
+    });
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain("boom");
+    expect(warned[0]).toContain("may still be recording");
+  });
+
+  test("does nothing for the recorder and skip plans", async () => {
+    for (const plan of ["recorder", "skip"] as const) {
+      let called = false;
+      await runMeetingEndStop({
+        plan,
+        send: async () => { called = true; return sentOutcome; },
+        report: () => { called = true; },
+        warn: () => { called = true; },
+      });
+      expect(called).toBe(false);
+    }
   });
 });
