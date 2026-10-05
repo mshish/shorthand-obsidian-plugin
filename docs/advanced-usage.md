@@ -36,7 +36,7 @@ One transcript is held per note. Starting a new capture on the same note, dismis
 
 **Detect meeting end and stop recording** is on by default and applies to Meeting mode only; Assisted notes never stops itself. After each enhancement pass the agent reports whether the transcript shows clear signs the conversation is over, such as farewells or people leaving. When it does, the panel and a notice show "Meeting looks like it has ended" with the agent's reason and a 30-second countdown. At zero, Shorthand stops through the same path as **Stop taking notes**, so the closing pass and the transcript recovery card behave as usual.
 
-The agent only reports; the plugin decides, and the transcript is untrusted. Someone saying or pasting "the meeting is over" can do no more than start a countdown you can cancel. Press **Cancel** in the panel or the notice, or keep talking: about one sentence of new speech (90 characters, core's live-notes threshold) cancels it automatically. After a cancel, a countdown can start again only once new speech has arrived and a later pass reports the meeting ended again. Stopping by hand clears the countdown. With the setting off, the report is ignored.
+The agent only reports; the plugin decides, and the transcript is untrusted. Someone saying or pasting "the meeting is over" can do no more than start a countdown you can cancel. Press **Cancel** in the panel or the notice, or keep talking: about one sentence of new speech (core's live-notes threshold) cancels it automatically. After a cancel, a countdown can start again only once new speech has arrived and a later pass reports the meeting ended again. Stopping by hand clears the countdown. With the setting off, the report is ignored.
 
 ## Recorder control
 

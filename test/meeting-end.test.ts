@@ -5,7 +5,7 @@ import {
   MEETING_END_COUNTDOWN_MS,
   MeetingEndWatch,
   meetingEndNoticeText,
-  speechCharacters,
+  SpeechMeter,
   type MeetingEndCancelCause,
   type MeetingEndCountdown,
 } from "../src/meeting-end.js";
@@ -262,19 +262,36 @@ describe("meetingEndNoticeText", () => {
   });
 });
 
-describe("speechCharacters", () => {
+describe("SpeechMeter", () => {
   const update = (action: string, extra: object = {}) =>
-    ({ action, speaker: "Alice", delta: "hello there", ...extra }) as unknown as TranscriptUpdate;
+    ({ action, speaker: "Alice", delta: "hello there", snapshot: { session: "s", commits: [] }, ...extra }) as unknown as TranscriptUpdate;
 
   test("counts an append, speaker label included", () => {
-    expect(speechCharacters(update("append"))).toBe("Alice: hello there".length);
+    expect(new SpeechMeter().measure(update("append"))).toBe("Alice: hello there".length);
   });
 
-  test("a rewrite-tail revision is not new speech", () => {
-    expect(speechCharacters(update("rewrite-tail"))).toBe(0);
+  test("a rewrite-tail that only revises the tail is not new speech", () => {
+    const meter = new SpeechMeter();
+    meter.measure(update("append", { delta: "see you tomorrow" }));
+    // "tomorrow" (8) replaced by "tomorrew" (8): same length, preserved prefix is 8 characters.
+    expect(meter.measure(update("rewrite-tail", { delta: "tomorrew", preservedPrefixLength: 8 }))).toBe(0);
+  });
+
+  test("a rewrite-tail that also adds speech counts only its net growth", () => {
+    const meter = new SpeechMeter();
+    meter.measure(update("append", { delta: "see you tomorrow" }));
+    const added = "x".repeat(100);
+    expect(meter.measure(update("rewrite-tail", { delta: `tomorrew${added}`, preservedPrefixLength: 8 }))).toBe(100);
+  });
+
+  test("a rewrite-tail that shortens the tail counts nothing and lowers the baseline", () => {
+    const meter = new SpeechMeter();
+    meter.measure(update("append", { delta: "see you tomorrow" }));
+    expect(meter.measure(update("rewrite-tail", { delta: "", preservedPrefixLength: 4 }))).toBe(0);
+    expect(meter.measure(update("append", { delta: "abcdef" }))).toBe("Alice: abcdef".length);
   });
 
   test("a replace-session correction is not new speech", () => {
-    expect(speechCharacters(update("replace-session", { snapshot: { session: "s", commits: [], final: { text: "x".repeat(200) } } }))).toBe(0);
+    expect(new SpeechMeter().measure(update("replace-session", { snapshot: { session: "s", commits: [], final: { text: "x".repeat(200) } } }))).toBe(0);
   });
 });

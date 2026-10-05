@@ -173,7 +173,7 @@ import {
 import {
   MeetingEndWatch,
   meetingEndNoticeText,
-  speechCharacters,
+  SpeechMeter,
   type MeetingEndCancelCause,
   type MeetingEndCountdown,
 } from "./src/meeting-end.js";
@@ -542,7 +542,7 @@ export default class ShorthandPlugin extends Plugin {
     // The elapsed-time display is otherwise only refreshed from a transcript-delta handler
     // and from dispatch(), so between utterances it would visibly freeze. A ticking interval
     // keeps it advancing during silence; registerInterval auto-clears it on unload.
-    this.registerInterval(window.setInterval(() => { this.#render(); this.#capture?.meetingEnd.refresh(); this.#tickMeetingEndNotice(); }, 1_000));
+    this.registerInterval(window.setInterval(() => { this.#onSecondTick(); }, 1_000));
     this.addSettingTab(new ShorthandSettingTab(this.app, this));
 
     this.registerView(SHORTHAND_PANEL_VIEW, (leaf) => new ShorthandPanelView(leaf, this));
@@ -871,6 +871,7 @@ export default class ShorthandPlugin extends Plugin {
         // Cancel button that cancels nothing.
         this.#hideMeetingEndNotice();
         let ownRuntime: CaptureRuntime | undefined;
+        const speechMeter = new SpeechMeter();
         const meetingEnd = new MeetingEndWatch({
           mode,
           enabled: () => this.settings.detectMeetingEnd,
@@ -1035,7 +1036,7 @@ export default class ShorthandPlugin extends Plugin {
           // Before the runner, and regardless of whether it exists or its passes succeed:
           // this copy is what a later reprocess replays.
           captureRecord.appendDelta(delta);
-          meetingEnd.noteSpeech(speechCharacters(update));
+          meetingEnd.noteSpeech(speechMeter.measure(update));
           enhancer?.appendTranscript(delta);
           if (enhancer !== undefined && this.settings.enableLiveEnhancement) {
             enhancer.requestTick();
@@ -2277,9 +2278,21 @@ export default class ShorthandPlugin extends Plugin {
     this.#render();
   }
 
+  #onSecondTick(): void {
+    this.#render();
+    this.#capture?.meetingEnd.refresh();
+    this.#tickMeetingEndNotice();
+  }
+
   #tickMeetingEndNotice(): void {
     const countdown = this.#capture?.meetingEnd.countdown;
     if (countdown === undefined) return;
+    // Obsidian wraps messageEl in containerEl, and a click on the container's padding hides
+    // the Notice without reaching a listener on messageEl. Checking the element itself does
+    // not depend on how the Notice was dismissed.
+    if (this.#meetingEndNotice !== undefined && !this.#meetingEndNotice.notice.containerEl.isConnected) {
+      this.#meetingEndNotice = undefined;
+    }
     if (this.#meetingEndNotice === undefined) {
       this.#showMeetingEnd(countdown);
       return;
@@ -3377,11 +3390,13 @@ class ShorthandPanelView extends ItemView {
       cls: "shorthand-panel-meeting-end",
       attr: { role: "group", "aria-label": "Meeting end detected" },
     });
-    this.#meetingEndHeadlineEl = this.#meetingEndEl.createEl("h4", { cls: "shorthand-panel-meeting-end-headline" });
-    this.#meetingEndCountdownEl = this.#meetingEndEl.createEl("p", {
-      cls: "shorthand-panel-meeting-end-text",
+    // Live on the headline only: the countdown line changes every second, and a live region
+    // there makes a screen reader announce "Stopping in Ns" about thirty times.
+    this.#meetingEndHeadlineEl = this.#meetingEndEl.createEl("h4", {
+      cls: "shorthand-panel-meeting-end-headline",
       attr: { "aria-live": "polite" },
     });
+    this.#meetingEndCountdownEl = this.#meetingEndEl.createEl("p", { cls: "shorthand-panel-meeting-end-text" });
     this.#meetingEndReasonEl = this.#meetingEndEl.createEl("p", { cls: "shorthand-panel-meeting-end-text" });
     this.#meetingEndCancelEl = this.#meetingEndEl.createEl("button", { cls: "mod-cta", attr: { type: "button" } });
     this.#meetingEndCancelEl.onclick = () => { this.plugin.cancelMeetingEnd(); };
@@ -3526,7 +3541,9 @@ class ShorthandPanelView extends ItemView {
     const meetingEnd = model.meetingEnd;
     this.#meetingEndEl.hidden = meetingEnd === undefined;
     if (meetingEnd !== undefined) {
-      this.#meetingEndHeadlineEl.textContent = meetingEnd.headline;
+      // Skip an unchanged value: assigning textContent replaces the node, which a live region
+      // can re-announce on every render.
+      if (this.#meetingEndHeadlineEl.textContent !== meetingEnd.headline) this.#meetingEndHeadlineEl.textContent = meetingEnd.headline;
       this.#meetingEndCountdownEl.textContent = meetingEnd.countdown;
       this.#meetingEndReasonEl.textContent = meetingEnd.reason === undefined ? "" : `Reason: ${meetingEnd.reason}`;
       this.#meetingEndReasonEl.hidden = meetingEnd.reason === undefined;
