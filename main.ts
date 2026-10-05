@@ -3371,6 +3371,7 @@ class ShorthandPanelView extends ItemView {
   #noteTakerLineEl!: HTMLButtonElement;
   #noteTakerDotEl!: HTMLElement;
   #noteTakerTextEl!: HTMLElement;
+  #noteTakerDetailEl!: HTMLElement;
   #noteTakerProblemEl!: HTMLElement;
   /** What the problem callout was last built from; it is rebuilt only when it changes. */
   #noteTakerProblemSignature = "";
@@ -3520,7 +3521,9 @@ class ShorthandPanelView extends ItemView {
     });
     setIcon(line.createSpan({ cls: "shorthand-panel-note-taker-icon", attr: { "aria-hidden": "true" } }), "pencil");
     this.#noteTakerDotEl = line.createSpan({ cls: "shorthand-panel-note-taker-dot", attr: { "aria-hidden": "true" } });
-    this.#noteTakerTextEl = line.createSpan({ cls: "shorthand-panel-note-taker-text" });
+    const text = line.createSpan({ cls: "shorthand-panel-note-taker-text" });
+    this.#noteTakerTextEl = text.createSpan({ cls: "shorthand-panel-note-taker-name" });
+    this.#noteTakerDetailEl = text.createSpan({ cls: "shorthand-panel-note-taker-detail" });
     setIcon(line.createSpan({ cls: "shorthand-panel-note-taker-chevron", attr: { "aria-hidden": "true" } }), "chevron-down");
     line.onclick = (event) => { this.#openNoteTakerMenu(event, line); };
     this.#noteTakerLineEl = line;
@@ -3620,6 +3623,9 @@ class ShorthandPanelView extends ItemView {
 
   #patchNoteTaker(view: NoteTakerView): void {
     if (this.#noteTakerTextEl.textContent !== view.line) this.#noteTakerTextEl.textContent = view.line;
+    const detail = view.detail ?? "";
+    if (this.#noteTakerDetailEl.textContent !== detail) this.#noteTakerDetailEl.textContent = detail;
+    this.#noteTakerDetailEl.toggleClass("is-hidden", view.detail === undefined);
     for (const tone of ["ready", "checking", "problem", "unknown"] as const) {
       this.#noteTakerDotEl.classList.toggle(`is-${tone}`, view.tone === tone);
     }

@@ -370,20 +370,28 @@ button.shorthand-panel-button.is-stop .shorthand-panel-button-copy {
   gap: var(--size-2-2);
 }
 
+/* Icon, dot and chevron all sit on the first line, so the model below reads as a caption.
+   Obsidian's base button rule sets a fixed height, nowrap and centring, which is what let a
+   long name run under the chevron; each is overridden here. */
 button.shorthand-panel-note-taker-line {
-  align-items: center;
+  --note-taker-line-height: calc(var(--font-ui-small) * var(--line-height-tight));
+  align-items: flex-start;
   align-self: flex-start;
   background: transparent;
   border: 0;
   box-shadow: none;
   color: var(--text-muted);
   cursor: pointer;
-  display: inline-flex;
+  display: flex;
+  max-width: 100%;
   font-size: var(--font-ui-small);
   gap: var(--size-4-2);
   height: auto;
-  max-width: 100%;
-  padding: var(--size-2-2) var(--size-4-2) var(--size-2-2) var(--size-2-2);
+  justify-content: flex-start;
+  line-height: var(--line-height-tight);
+  padding: var(--size-2-2) var(--size-2-2);
+  text-align: left;
+  white-space: normal;
 }
 
 button.shorthand-panel-note-taker-line:hover {
@@ -401,6 +409,7 @@ button.shorthand-panel-note-taker-line:focus-visible {
   align-items: center;
   display: inline-flex;
   flex: none;
+  height: var(--note-taker-line-height);
 }
 
 .shorthand-panel-note-taker-icon svg,
@@ -414,6 +423,8 @@ button.shorthand-panel-note-taker-line:focus-visible {
   border-radius: 50%;
   flex: none;
   height: var(--size-4-2);
+  /* Centres the dot on the first line rather than on the two-line block. */
+  margin-top: calc((var(--note-taker-line-height) - var(--size-4-2)) / 2);
   width: var(--size-4-2);
 }
 
@@ -426,9 +437,28 @@ button.shorthand-panel-note-taker-line:focus-visible {
 }
 
 .shorthand-panel-note-taker-text {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  gap: var(--size-2-1);
   min-width: 0;
-  overflow-wrap: anywhere;
-  text-align: left;
+}
+
+/* The name wraps rather than truncating: "Note taker: Chat…" hides the one thing the line is
+   for. The model is a caption, so it may be cut. */
+.shorthand-panel-note-taker-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shorthand-panel-note-taker-detail {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+
+.shorthand-panel-note-taker-detail.is-hidden {
+  display: none;
 }
 
 .shorthand-panel-note-taker-switch {

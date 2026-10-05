@@ -88,8 +88,14 @@ export type NoteTakerProblem = Readonly<{
 }>;
 
 export type NoteTakerView = Readonly<{
-  /** The one quiet line: "Note taker: Claude · Opus", or the checking text. */
+  /** The first line: "Note taker: Claude", or the checking text. */
   line: string;
+  /**
+   * The second, smaller line: the friendly model name. Its own line because a narrow sidebar
+   * cannot fit "Note taker: ChatGPT (Codex) · GPT-5.4" beside the chevron. Absent while
+   * checking and when no model is chosen.
+   */
+  detail: string | undefined;
   tone: NoteTakerTone;
   /** Hover text: whose account is in use. Absent when nothing is known about it. */
   tooltip: string | undefined;
@@ -169,9 +175,8 @@ export function describeNoteTaker(input: NoteTakerInput): NoteTakerView {
   const current = key !== undefined && probe.kind !== "unprobed" && probe.key === key ? probe : undefined;
 
   const model = friendlyModelName(selectedModelId(settings));
-  const summary = `Note taker: ${BACKEND_DISPLAY_NAMES[backend]}${model === undefined ? "" : ` · ${model}`}`;
-
-  let line = summary;
+  let line = `Note taker: ${BACKEND_DISPLAY_NAMES[backend]}`;
+  let detail = model;
   let tone: NoteTakerTone = "unknown";
   let tooltip: string | undefined;
   let problem: NoteTakerProblem | undefined;
@@ -180,6 +185,7 @@ export function describeNoteTaker(input: NoteTakerInput): NoteTakerView {
     tone = "unknown";
   } else if (current === undefined || current.kind === "checking") {
     line = NOTE_TAKER_CHECKING_TEXT;
+    detail = undefined;
     tone = "checking";
   } else if (current.kind === "signed-in") {
     tone = "ready";
@@ -211,11 +217,13 @@ export function describeNoteTaker(input: NoteTakerInput): NoteTakerView {
     };
   }
 
+  const visible = detail === undefined ? line : `${line}, ${detail}`;
   return {
     line,
+    detail,
     tone,
     tooltip,
-    accessibleLabel: tooltip === undefined ? line : `${line}. ${tooltip}`,
+    accessibleLabel: tooltip === undefined ? visible : `${visible}. ${tooltip}`,
     problem,
     // A running capture built its enhancer from the settings at its start, so a switch cannot
     // reach it.

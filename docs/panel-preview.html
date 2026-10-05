@@ -71,6 +71,21 @@
 
     * { box-sizing: border-box; }
 
+    /* Obsidian 1.14's own base button rule (app.css), so a layout that only survives the
+       browser's default button styling shows its failure here too. A long note-taker name
+       once ran under the chevron in Obsidian while this page looked fine. */
+    button {
+      align-items: center;
+      border: 0;
+      display: inline-flex;
+      font-family: inherit;
+      font-size: var(--font-ui-small);
+      height: var(--input-height);
+      justify-content: center;
+      padding: var(--size-4-1) var(--size-4-3);
+      white-space: nowrap;
+    }
+
     body {
       background: var(--page-background);
       color: var(--text-normal);
@@ -225,6 +240,14 @@
             </button>
           </div>
         </div>
+        <div class="shorthand-panel-note-taker">
+          <button class="shorthand-panel-note-taker-line" type="button" aria-haspopup="menu" aria-label="Note taker: ChatGPT (Codex), GPT-5.4. Using you@example.com" title="Using you@example.com">
+            <span class="shorthand-panel-note-taker-icon fake-icon" aria-hidden="true">✎</span>
+            <span class="shorthand-panel-note-taker-dot is-ready" aria-hidden="true"></span>
+            <span class="shorthand-panel-note-taker-text"><span class="shorthand-panel-note-taker-name">Note taker: ChatGPT (Codex)</span><span class="shorthand-panel-note-taker-detail">GPT-5.4</span></span>
+            <span class="shorthand-panel-note-taker-chevron fake-icon" aria-hidden="true">⌄</span>
+          </button>
+        </div>
       </div>
     </section>
 
@@ -370,10 +393,10 @@
               </div>
             </div>
             <div class="shorthand-panel-note-taker">
-              <button class="shorthand-panel-note-taker-line" type="button" aria-haspopup="menu" aria-label="Note taker: Claude · Opus. Using you@example.com" title="Using you@example.com">
+              <button class="shorthand-panel-note-taker-line" type="button" aria-haspopup="menu" aria-label="Note taker: Claude, Opus. Using you@example.com" title="Using you@example.com">
                 <span class="shorthand-panel-note-taker-icon fake-icon" aria-hidden="true">✎</span>
                 <span class="shorthand-panel-note-taker-dot is-ready" aria-hidden="true"></span>
-                <span class="shorthand-panel-note-taker-text">Note taker: Claude · Opus</span>
+                <span class="shorthand-panel-note-taker-text"><span class="shorthand-panel-note-taker-name">Note taker: Claude</span><span class="shorthand-panel-note-taker-detail">Opus</span></span>
                 <span class="shorthand-panel-note-taker-chevron fake-icon" aria-hidden="true">⌄</span>
               </button>
               <div class="shorthand-panel-callout shorthand-panel-note-taker-problem" role="group" hidden></div>
@@ -386,10 +409,10 @@
           <p class="caption">Menu, opened from the line</p>
           <div class="shorthand-panel">
             <div class="shorthand-panel-note-taker">
-              <button class="shorthand-panel-note-taker-line" type="button" aria-haspopup="menu" aria-label="Note taker: Claude · Opus. Using you@example.com" title="Using you@example.com">
+              <button class="shorthand-panel-note-taker-line" type="button" aria-haspopup="menu" aria-label="Note taker: Claude, Opus. Using you@example.com" title="Using you@example.com">
                 <span class="shorthand-panel-note-taker-icon fake-icon" aria-hidden="true">✎</span>
                 <span class="shorthand-panel-note-taker-dot is-ready" aria-hidden="true"></span>
-                <span class="shorthand-panel-note-taker-text">Note taker: Claude · Opus</span>
+                <span class="shorthand-panel-note-taker-text"><span class="shorthand-panel-note-taker-name">Note taker: Claude</span><span class="shorthand-panel-note-taker-detail">Opus</span></span>
                 <span class="shorthand-panel-note-taker-chevron fake-icon" aria-hidden="true">⌄</span>
               </button>
             </div>
@@ -413,7 +436,7 @@
               <button class="shorthand-panel-note-taker-line" type="button" aria-haspopup="menu" aria-label="Checking the note taker…">
                 <span class="shorthand-panel-note-taker-icon fake-icon" aria-hidden="true">✎</span>
                 <span class="shorthand-panel-note-taker-dot is-checking" aria-hidden="true"></span>
-                <span class="shorthand-panel-note-taker-text">Checking the note taker…</span>
+                <span class="shorthand-panel-note-taker-text"><span class="shorthand-panel-note-taker-name">Checking the note taker…</span><span class="shorthand-panel-note-taker-detail is-hidden"></span></span>
                 <span class="shorthand-panel-note-taker-chevron fake-icon" aria-hidden="true">⌄</span>
               </button>
               <div class="shorthand-panel-callout shorthand-panel-note-taker-problem" role="group" hidden></div>
@@ -426,10 +449,10 @@
           <p class="caption">Signed out (Claude)</p>
           <div class="shorthand-panel">
             <div class="shorthand-panel-note-taker">
-              <button class="shorthand-panel-note-taker-line" type="button" aria-haspopup="menu" aria-label="Note taker: Claude · Opus">
+              <button class="shorthand-panel-note-taker-line" type="button" aria-haspopup="menu" aria-label="Note taker: Claude, Opus">
                 <span class="shorthand-panel-note-taker-icon fake-icon" aria-hidden="true">✎</span>
                 <span class="shorthand-panel-note-taker-dot is-problem" aria-hidden="true"></span>
-                <span class="shorthand-panel-note-taker-text">Note taker: Claude · Opus</span>
+                <span class="shorthand-panel-note-taker-text"><span class="shorthand-panel-note-taker-name">Note taker: Claude</span><span class="shorthand-panel-note-taker-detail">Opus</span></span>
                 <span class="shorthand-panel-note-taker-chevron fake-icon" aria-hidden="true">⌄</span>
               </button>
               <div class="shorthand-panel-callout shorthand-panel-note-taker-problem" role="group" aria-label="Claude can't take notes for you yet.">
@@ -449,10 +472,10 @@
           <p class="caption">Check failed, Details expanded</p>
           <div class="shorthand-panel">
             <div class="shorthand-panel-note-taker">
-              <button class="shorthand-panel-note-taker-line" type="button" aria-haspopup="menu" aria-label="Note taker: Claude · Opus">
+              <button class="shorthand-panel-note-taker-line" type="button" aria-haspopup="menu" aria-label="Note taker: Claude, Opus">
                 <span class="shorthand-panel-note-taker-icon fake-icon" aria-hidden="true">✎</span>
                 <span class="shorthand-panel-note-taker-dot is-problem" aria-hidden="true"></span>
-                <span class="shorthand-panel-note-taker-text">Note taker: Claude · Opus</span>
+                <span class="shorthand-panel-note-taker-text"><span class="shorthand-panel-note-taker-name">Note taker: Claude</span><span class="shorthand-panel-note-taker-detail">Opus</span></span>
                 <span class="shorthand-panel-note-taker-chevron fake-icon" aria-hidden="true">⌄</span>
               </button>
               <div class="shorthand-panel-callout shorthand-panel-note-taker-problem" role="group" aria-label="Shorthand couldn't reach Claude.">
@@ -496,10 +519,10 @@
               </button>
             </div>
             <div class="shorthand-panel-note-taker">
-              <button class="shorthand-panel-note-taker-line" type="button" aria-haspopup="menu" aria-label="Note taker: ChatGPT (Codex) · GPT-5.4. Using you@example.com" title="Using you@example.com">
+              <button class="shorthand-panel-note-taker-line" type="button" aria-haspopup="menu" aria-label="Note taker: ChatGPT (Codex), GPT-5.4. Using you@example.com" title="Using you@example.com">
                 <span class="shorthand-panel-note-taker-icon fake-icon" aria-hidden="true">✎</span>
                 <span class="shorthand-panel-note-taker-dot is-ready" aria-hidden="true"></span>
-                <span class="shorthand-panel-note-taker-text">Note taker: ChatGPT (Codex) · GPT-5.4</span>
+                <span class="shorthand-panel-note-taker-text"><span class="shorthand-panel-note-taker-name">Note taker: ChatGPT (Codex)</span><span class="shorthand-panel-note-taker-detail">GPT-5.4</span></span>
                 <span class="shorthand-panel-note-taker-chevron fake-icon" aria-hidden="true">⌄</span>
               </button>
               <div class="shorthand-panel-callout shorthand-panel-note-taker-problem" role="group" hidden></div>
@@ -581,7 +604,7 @@
               <button class="shorthand-panel-note-taker-line" type="button" aria-haspopup="menu" aria-label="Note taker: Your own API key">
                 <span class="shorthand-panel-note-taker-icon fake-icon" aria-hidden="true">✎</span>
                 <span class="shorthand-panel-note-taker-dot is-unknown" aria-hidden="true"></span>
-                <span class="shorthand-panel-note-taker-text">Note taker: Your own API key</span>
+                <span class="shorthand-panel-note-taker-text"><span class="shorthand-panel-note-taker-name">Note taker: Your own API key</span><span class="shorthand-panel-note-taker-detail is-hidden"></span></span>
                 <span class="shorthand-panel-note-taker-chevron fake-icon" aria-hidden="true">⌄</span>
               </button>
               <div class="shorthand-panel-callout shorthand-panel-note-taker-problem" role="group" hidden></div>
