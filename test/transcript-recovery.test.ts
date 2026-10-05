@@ -31,14 +31,14 @@ describe("CaptureRecord", () => {
   test("a capture with no failure reports none", () => {
     const record = new CaptureRecord("meeting");
     record.appendDelta("me: hi");
-    for (const kind of ["started", "finished", "requeued", "timed-out", "declined"]) {
+    for (const kind of ["started", "finished", "declined"]) {
       record.noteStatus(status(kind));
     }
     expect(record.failed).toBe(false);
     expect(record.lastError).toBeUndefined();
   });
 
-  test.each(["error", "skipped", "disabled-for-read-failures", "expired"])(
+  test.each(["error", "skipped", "requeued", "timed-out", "disabled-for-read-failures", "expired"])(
     "%s is a failure and keeps its message",
     (kind) => {
       const record = new CaptureRecord("meeting");
@@ -47,6 +47,21 @@ describe("CaptureRecord", () => {
       expect(record.lastError).toBe(`msg-${kind}`);
     },
   );
+
+  test("a re-queue or timeout stays a failure after a later pass finishes", () => {
+    // Core truncates re-queued input beyond maxRequeuedCharacters to a tail without a status,
+    // so a later "finished" cannot show that nothing was dropped.
+    for (const kind of ["requeued", "timed-out"]) {
+      const record = new CaptureRecord("meeting");
+      record.appendDelta("me: hi");
+      record.noteStatus(status(kind, `msg-${kind}`));
+      record.noteStatus(status("finished"));
+      expect(record.failed).toBe(true);
+      expect(record.lastError).toBe(`msg-${kind}`);
+      const store = new RecoveryStore<object>();
+      expect(store.keep({}, record)).toBeDefined();
+    }
+  });
 
   test("keeps the most recent error", () => {
     const record = new CaptureRecord("meeting");
@@ -274,6 +289,17 @@ describe("describeRecoveryCards", () => {
     expect(card?.progress).toBe("Reprocessing transcript…");
     expect(card?.action.enabled).toBe(false);
     expect(card?.guidance).toBeUndefined();
+  });
+
+  test("disables Dismiss only while a reprocess runs", () => {
+    const store = new RecoveryStore<object>();
+    store.keep(file, failedRecord());
+    expect(describeRecoveryCards(store.entries(), info(true))[0]?.dismissEnabled).toBe(true);
+    store.beginReprocess(file);
+    expect(describeRecoveryCards(store.entries(), info(true))[0]?.dismissEnabled).toBe(false);
+    store.finishReprocess(file, { ok: false, error: "x" });
+    expect(describeRecoveryCards(store.entries(), info(true))[0]?.dismissEnabled).toBe(true);
+    expect(describeRecoveryCards(store.entries(), info(false))[0]?.dismissEnabled).toBe(true);
   });
 
   test("a failed retry shows the new error as such", () => {
