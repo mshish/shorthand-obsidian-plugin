@@ -3039,7 +3039,7 @@ class ShorthandSettingTab extends PluginSettingTab {
           desc: createFragment((desc) => {
             desc.appendText(
               "Automatically start and stop transcription in the Shorthand app when note-taking begins and ends. "
-              + "When turned off, start and stop transcription manually in Shorthand. ",
+              + "When turned off, start transcription manually in Shorthand; stop it there too, unless meeting-end detection is on, which stops it when the meeting ends. ",
             );
             desc.createEl("a", {
               text: "Read how recorder control works",
