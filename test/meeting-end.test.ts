@@ -5,6 +5,9 @@ import {
   MEETING_END_COUNTDOWN_MS,
   MeetingEndWatch,
   meetingEndNoticeText,
+  meetingEndStopFailedText,
+  planMeetingEndStop,
+  sendMeetingEndStop,
   SpeechMeter,
   type MeetingEndCancelCause,
   type MeetingEndCountdown,
@@ -293,5 +296,42 @@ describe("SpeechMeter", () => {
 
   test("a replace-session correction is not new speech", () => {
     expect(new SpeechMeter().measure(update("replace-session", { snapshot: { session: "s", commits: [], final: { text: "x".repeat(200) } } }))).toBe(0);
+  });
+});
+
+describe("meeting-end stop decision", () => {
+  test("requests the stop regardless of control mode or adoption", () => {
+    // Adopted from Shorthand's hotkey, or control off: no recorder, so the plugin must send.
+    expect(planMeetingEndStop({ hasRecorder: false, shorthandDown: false })).toBe("send");
+    // Control on: the recorder's own stop path sends it.
+    expect(planMeetingEndStop({ hasRecorder: true, shorthandDown: false })).toBe("recorder");
+  });
+
+  test("does not send when Shorthand is known to be down", () => {
+    expect(planMeetingEndStop({ hasRecorder: false, shorthandDown: true })).toBe("skip");
+    expect(planMeetingEndStop({ hasRecorder: true, shorthandDown: true })).toBe("skip");
+  });
+
+  test("sends the given stop signal and reports success", async () => {
+    const sent: string[] = [];
+    const outcome = await sendMeetingEndStop(
+      { send: async (signal) => { sent.push(signal); return { status: "sent" }; } },
+      "stop-transcription",
+    );
+    expect(sent).toEqual(["stop-transcription"]);
+    expect(outcome).toEqual({ sent: true });
+  });
+
+  test("reports a refused, errored or thrown stop instead of throwing", async () => {
+    const notRunning = await sendMeetingEndStop({ send: async () => ({ status: "not-running" }) }, "stop-transcription");
+    expect(notRunning).toEqual({ sent: false, message: "Shorthand is not running." });
+    const errored = await sendMeetingEndStop({ send: async () => ({ status: "error", message: "boom" }) }, "stop-transcription");
+    expect(errored).toEqual({ sent: false, message: "boom" });
+    const thrown = await sendMeetingEndStop({ send: async () => { throw new Error("spawn failed"); } }, "stop-transcription");
+    expect(thrown).toEqual({ sent: false, message: "spawn failed" });
+  });
+
+  test("failure text says Shorthand may still be recording", () => {
+    expect(meetingEndStopFailedText("boom")).toContain("may still be recording");
   });
 });

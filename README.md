@@ -38,7 +38,7 @@ The first start adds Shorthand's note section automatically. Turn off **Automati
 - A linked transcript note when you turn on **Transcript notes**.
 - **Enhance now** for a saved transcript, or **Clean up this note** for writing with no transcript.
 - If enhancement fails during a capture, the transcript is kept in memory and the panel offers **Reprocess transcript** once you have fixed the agent.
-- In Meeting mode, a 30-second countdown you can cancel before recording stops when the transcript suggests the meeting has ended. Turn it off with **Detect meeting end and stop recording**.
+- In Meeting mode, a 30-second countdown you can cancel before Shorthand stops recording when the transcript suggests the meeting has ended. This applies even if **Control Shorthand transcription** is off or the recording began with Shorthand's hotkey. Turn it off with **Detect meeting end and stop recording**.
 
 ## Note writing
 

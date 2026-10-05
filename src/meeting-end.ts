@@ -1,4 +1,10 @@
-import { enhancementDelta, type EnhanceStatus, type TranscriptUpdate } from "shorthand-core";
+import {
+  enhancementDelta,
+  type ControlResult,
+  type ControlSignal,
+  type EnhanceStatus,
+  type TranscriptUpdate,
+} from "shorthand-core";
 import type { CaptureMode } from "./follow-policy.js";
 
 /**
@@ -219,4 +225,52 @@ export class MeetingEndWatch {
     this.#timer = undefined;
     this.#speechInCountdown = 0;
   }
+}
+
+/**
+ * What the countdown's expiry does about Shorthand's own recording, decided without regard to
+ * how the capture began. "Detect meeting end" is independent of "Control Shorthand
+ * transcription": a capture adopted from Shorthand's hotkey, or one with control switched off,
+ * has no recorder, and without this its expiry would finish the capture in Obsidian and leave
+ * the microphone recording.
+ *
+ * - `recorder`: the capture's recorder sends the stop itself as part of the normal stop path,
+ *   and sending it here too would race the recorder's wait for the terminal record.
+ * - `send`: no recorder, so the stop signal must be sent here.
+ * - `skip`: Shorthand is known not to be running, so there is nothing to stop, and a control
+ *   spawn with no Shorthand to forward to would start the app instead.
+ */
+export type MeetingEndStopPlan = "recorder" | "send" | "skip";
+
+export function planMeetingEndStop(capture: Readonly<{ hasRecorder: boolean; shorthandDown: boolean }>): MeetingEndStopPlan {
+  if (capture.shorthandDown) return "skip";
+  return capture.hasRecorder ? "recorder" : "send";
+}
+
+export type MeetingEndStopOutcome = Readonly<{ sent: true } | { sent: false; message: string }>;
+
+/**
+ * Sends the mode's idempotent stop signal, the same one `ShorthandRecorder` uses. Never
+ * throws: the capture still has to be finished whether or not Shorthand heard the signal.
+ */
+export async function sendMeetingEndStop(
+  control: Readonly<{ send: (signal: ControlSignal) => Promise<ControlResult> }>,
+  signal: ControlSignal,
+): Promise<MeetingEndStopOutcome> {
+  let result: ControlResult;
+  try {
+    result = await control.send(signal);
+  } catch (error) {
+    return { sent: false, message: error instanceof Error ? error.message : String(error) };
+  }
+  if (result.status === "sent") return { sent: true };
+  return {
+    sent: false,
+    message: result.status === "not-running" ? "Shorthand is not running." : result.message,
+  };
+}
+
+/** Plain wording for a stop that did not reach Shorthand: it may still be recording. */
+export function meetingEndStopFailedText(message: string): string {
+  return `Shorthand: the meeting looked like it had ended, but Shorthand did not confirm the stop (${message}). Shorthand may still be recording, so check it and stop it there if so.`;
 }

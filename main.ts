@@ -173,6 +173,9 @@ import {
 import {
   MeetingEndWatch,
   meetingEndNoticeText,
+  meetingEndStopFailedText,
+  planMeetingEndStop,
+  sendMeetingEndStop,
   SpeechMeter,
   type MeetingEndCancelCause,
   type MeetingEndCountdown,
@@ -890,7 +893,7 @@ export default class ShorthandPlugin extends Plugin {
             // idempotent stop and the transcript-recovery cards all behave identically.
             if (ownRuntime === undefined || this.#capture !== ownRuntime || ownRuntime.stopping) return;
             new Notice("Shorthand: stopping, the meeting looked like it had ended.");
-            void this.stopCapture().catch((error: unknown) => this.fail(errorMessage(error)));
+            void this.stopForMeetingEnd(ownRuntime).catch((error: unknown) => this.fail(errorMessage(error)));
           },
         });
         let enhancer: EnhanceRunner | undefined;
@@ -1262,6 +1265,25 @@ export default class ShorthandPlugin extends Plugin {
     }
     await runtime.settled;
     await this.finishRuntime(runtime, "stopped");
+  }
+
+  /**
+   * The countdown's expiry. Unlike a manual stop, this always asks Shorthand to stop
+   * recording, including for a capture with no recorder (adopted from Shorthand's hotkey, or
+   * "Control Shorthand transcription" off): the setting is independent of recorder control,
+   * and finishing only the Obsidian side would leave the microphone live.
+   */
+  private async stopForMeetingEnd(runtime: CaptureRuntime): Promise<void> {
+    const plan = planMeetingEndStop({ hasRecorder: runtime.recorder !== undefined, shorthandDown: runtime.shorthandDown });
+    if (plan === "send") {
+      // Before stopCapture so the follower's drain waits for the terminal record this stop
+      // produces, as it does after a recorder's finalize. The signal is idempotent.
+      const outcome = await sendMeetingEndStop(runtime.control, captureSignals(runtime.mode).stop);
+      this.debugCapture(`meeting-end stop ${outcome.sent ? "sent" : `failed: ${outcome.message}`}`);
+      if (!outcome.sent) new Notice(meetingEndStopFailedText(outcome.message), 15_000);
+      if (this.#capture !== runtime || runtime.stopping) return;
+    }
+    await this.stopCapture();
   }
 
   forceStopCapture(): void {
@@ -2981,7 +3003,7 @@ class ShorthandSettingTab extends PluginSettingTab {
         },
         {
           name: "Detect meeting end and stop recording",
-          desc: "Watches the transcript for signs the meeting has wrapped up, then stops after a 30-second countdown you can cancel.",
+          desc: "Watches the transcript for signs the meeting has wrapped up, then stops Shorthand's recording after a 30-second countdown you can cancel. Works whether or not you control Shorthand transcription.",
           control: { type: "toggle", key: "detectMeetingEnd" },
         },
         {
