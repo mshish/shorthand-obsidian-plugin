@@ -156,7 +156,9 @@ import {
   describeAgentStatus,
   INITIAL_PROBE_STATE,
   needsProbe,
+  needsProbeOnOpen,
   probeKey,
+  shouldReprobeAtCaptureStart,
   reduceProbeState,
   type AgentStatusModel,
   type ProbeEvent,
@@ -460,6 +462,13 @@ export default class ShorthandPlugin extends Plugin {
   // assigning `undefined` to an optional property, and both are cleared on teardown.
   #statusBar: HTMLElement | undefined = undefined;
   #capture: CaptureRuntime | undefined = undefined;
+  /**
+   * The note a start is setting up, from the moment it is chosen until `startCaptureOnActiveNote`
+   * returns. `#capture` is assigned only after the awaited setup (scaffold, confirmation modal,
+   * sidecar, `createEnhancer`), so a reprocess of the same note started in that window saw no
+   * capture and two writers raced on one AI block.
+   */
+  #startingNote: TFile | undefined = undefined;
   /** Makes the selected mode visible during setup, before a runtime exists to own it. */
   #requestedCaptureMode: CaptureMode | undefined = undefined;
   /**
@@ -722,7 +731,9 @@ export default class ShorthandPlugin extends Plugin {
     return describeAgentStatus({
       settings: this.settings,
       probe: this.#agentProbe,
-      captureInFlight: this.#capture !== undefined,
+      // A start still being set up counts: its `createEnhancer` has read or is about to read the
+      // settings, so a switch made now misses it just as one made during the capture does.
+      captureInFlight: this.#capture !== undefined || this.#state.starting,
     });
   }
 
@@ -741,6 +752,14 @@ export default class ShorthandPlugin extends Plugin {
   /** A no-op while the cached answer still applies, so opening the panel is cheap. */
   ensureAgentProbe(): void {
     if (needsProbe(this.#agentProbe, this.settings)) this.#runAgentProbe();
+  }
+
+  /**
+   * Opening the panel also re-asks a cached signed-out or failed answer: the user fixes those
+   * outside the plugin, so only a new probe can clear the warning.
+   */
+  ensureAgentProbeOnPanelOpen(): void {
+    if (needsProbeOnOpen(this.#agentProbe, this.settings)) this.#runAgentProbe();
   }
 
   #applyProbeEvent(event: ProbeEvent): void {
@@ -818,6 +837,9 @@ export default class ShorthandPlugin extends Plugin {
           new Notice("Shorthand is reprocessing this note's transcript. Wait for it to finish before taking new notes on it.");
           return;
         }
+        // Claimed in the same synchronous run as the check above, so `reprocessTranscript`
+        // cannot slip in between that check and `#capture` being assigned.
+        this.#startingNote = file;
         const vaultRoot = this.vaultRoot();
         if (vaultRoot === undefined) return;
         const noteSink = this.noteSink(file, vaultRoot);
@@ -900,6 +922,10 @@ export default class ShorthandPlugin extends Plugin {
         });
         let enhancer: EnhanceRunner | undefined;
         let enhancementUnavailable: string | undefined;
+        // The settings `createEnhancer` reads, taken in the same synchronous run as its call. The
+        // start Notice below is about this agent, not whichever one a panel switch selected
+        // while setup was awaiting.
+        const enhancerSettings = this.settings;
         try {
           enhancer = await this.createEnhancer(
             noteSink,
@@ -993,8 +1019,11 @@ export default class ShorthandPlugin extends Plugin {
         // Shown only once the start can no longer bail out, so it never warns about a capture
         // that did not begin. Advisory: capture proceeds, because a stale or wrong "signed out"
         // must never cost a user their recording.
-        const signedOutNotice = captureStartNotice(this.#agentProbe, this.settings);
+        const signedOutNotice = captureStartNotice(this.#agentProbe, enhancerSettings);
         if (signedOutNotice !== undefined) new Notice(signedOutNotice, 10_000);
+        // The user may have signed in since that answer; ask again without waiting, so the panel
+        // and the next start are right. Never awaited: capture does not depend on it.
+        if (shouldReprobeAtCaptureStart(this.#agentProbe, enhancerSettings)) this.refreshAgentProbe();
         unownedEnhancer = undefined;
         // Only a capture with no recorder of its own — an attach, or control switched off —
         // goes straight to capturing. Everything this plugin starts itself waits for
@@ -1205,6 +1234,8 @@ export default class ShorthandPlugin extends Plugin {
       }
     } finally {
       this.#requestedCaptureMode = undefined;
+      // From here `#capture` (or nothing, after a failed start) answers for the note.
+      this.#startingNote = undefined;
       // Any path that left without handing ownership to a live runtime has to release
       // `starting`, or the plugin refuses every later start with "already taking notes".
       // `capture-start-failed` returns to idle only from `starting`, so a setup error
@@ -1522,7 +1553,7 @@ export default class ShorthandPlugin extends Plugin {
       await this.copyRecoveredTranscript(file);
       return;
     }
-    if (this.#capture?.noteFile === file) {
+    if (this.#capture?.noteFile === file || this.#startingNote === file) {
       new Notice("Shorthand is taking notes on this note. Stop taking notes before reprocessing its transcript.");
       return;
     }
@@ -1574,6 +1605,9 @@ export default class ShorthandPlugin extends Plugin {
 
   /** Discards the in-memory transcript. There is no other copy unless Transcript notes was on. */
   dismissRecovery(file: TFile): void {
+    // The card disables Dismiss during an attempt; this is the same rule for any other caller.
+    // A dismissed slot would make a failed attempt report "still held", which would be false.
+    if (this.#recovery.isBusy(file)) return;
     this.#recovery.release(file);
     this.#render();
   }
@@ -2527,13 +2561,8 @@ class ShorthandSettingTab extends PluginSettingTab {
         control: {
           type: "dropdown",
           key: "backend",
-          options: {
-            "claude-agent-sdk": "Claude Code",
-            codex: "Codex",
-            cursor: "Cursor CLI",
-            acp: "Agent Client Protocol (ACP)",
-            llm: "LLM provider",
-          } satisfies Record<EnhancementBackend, string>,
+          // One list with the panel's switcher, so a new backend cannot reach one and not the other.
+          options: BACKEND_DISPLAY_NAMES,
         },
       },
       // Each backend fetches its own catalog and renders its own sign-in row (shown only once
@@ -3359,7 +3388,7 @@ class ShorthandPanelView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
-    this.plugin.ensureAgentProbe();
+    this.plugin.ensureAgentProbeOnPanelOpen();
     this.render();
   }
 
@@ -3521,6 +3550,7 @@ class ShorthandPanelView extends ItemView {
         void run.catch((error: unknown) => new Notice(`Shorthand: ${errorMessage(error)}`, 10_000));
       };
       const dismiss = buttons.createEl("button", { text: card.dismissLabel, attr: { type: "button" } });
+      dismiss.disabled = !card.dismissEnabled;
       dismiss.onclick = () => { this.plugin.dismissRecovery(file); };
       el.createEl("p", { cls: "shorthand-panel-recovery-disk", text: card.diskNote });
     }
