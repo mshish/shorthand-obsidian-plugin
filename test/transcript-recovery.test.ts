@@ -60,7 +60,7 @@ describe("CaptureRecord", () => {
     const record = new CaptureRecord("meeting");
     record.noteStatus(status("error", "dropped"));
     record.noteStatus(status("finished"));
-    record.noteOutcome({ status: "completed", tier: "tick", sections: [], written: true });
+    record.noteOutcome({ status: "completed", tier: "tick", sections: [], written: true, meetingStatus: { ended: false, reason: "" } });
     expect(record.failed).toBe(true);
     expect(record.lastError).toBe("dropped");
   });
@@ -107,7 +107,7 @@ describe("CaptureRecord", () => {
 
 describe("reprocessResult", () => {
   test("only a completed pass succeeds, written or not", () => {
-    expect(reprocessResult({ status: "completed", tier: "tick", sections: [], written: false }, undefined))
+    expect(reprocessResult({ status: "completed", tier: "tick", sections: [], written: false, meetingStatus: { ended: false, reason: "" } }, undefined))
       .toEqual({ ok: true, written: false });
   });
 
