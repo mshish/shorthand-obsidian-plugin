@@ -110,87 +110,34 @@ describe("acpSlot", () => {
 describe("planCredentialMigration", () => {
   const vaultId = "3f9a1c2b4d5e6f70";
 
-  test("moves both a legacy LLM key and the stored ACP token into slots", () => {
+  test("moves the stored ACP token into a slot and clears it from settings", () => {
     const settings = settingsWith({ acpAuthToken: "tok", acpNetworkUrl: "wss://agent.example/acp" });
-    const plan = planCredentialMigration(settings, vaultId, {
-      provider: "openai",
-      model: "gpt-5",
-      api_key: "sk-test",
-    });
-    expect(plan.sets).toHaveLength(2);
-    expect(plan.sets).toContainEqual({
-      slot: { kind: "notes-llm", provider: "openai", origin: "https://api.openai.com" },
-      secret: "sk-test",
-    });
-    expect(plan.sets).toContainEqual({
-      slot: { kind: "notes-acp", vaultId, origin: "wss://agent.example" },
-      secret: "tok",
-    });
-    expect(plan.patch).toEqual({
-      llmProvider: "openai",
-      llmModel: "gpt-5",
-      llmBaseUrl: "",
-      acpAuthToken: "",
-      appCredentialsMigrated: true,
-    });
+    const plan = planCredentialMigration(settings, vaultId);
+    expect(plan.sets).toEqual([
+      { slot: { kind: "notes-acp", vaultId, origin: "wss://agent.example" }, secret: "tok" },
+    ]);
+    expect(plan.patch).toEqual({ acpAuthToken: "", appCredentialsMigrated: true });
   });
 
-  test("with no legacy file and a blank ACP token, plans nothing but marks migration done", () => {
-    const settings = settingsWith({});
-    const plan = planCredentialMigration(settings, vaultId, undefined);
+  test("with a blank ACP token, plans nothing but marks migration done", () => {
+    const plan = planCredentialMigration(settingsWith({}), vaultId);
     expect(plan.sets).toEqual([]);
     expect(plan.patch).toEqual({ appCredentialsMigrated: true });
   });
 
-  // A legacy file with no key still names a provider and model worth keeping; there is
-  // simply no secret to move, since the user (or a prior partial migration) already cleared it.
-  test("copies provider and model from a legacy file with no api_key, but sets nothing", () => {
-    const settings = settingsWith({});
-    const plan = planCredentialMigration(settings, vaultId, { provider: "anthropic", model: "claude-opus-4-6" });
+  // A token with no resolvable network URL cannot be placed in a slot, but data.json should
+  // still stop holding it in plain text.
+  test("clears an ACP token it cannot place", () => {
+    const plan = planCredentialMigration(settingsWith({ acpAuthToken: "tok", acpNetworkUrl: "" }), vaultId);
     expect(plan.sets).toEqual([]);
-    expect(plan.patch).toEqual({
-      llmProvider: "anthropic",
-      llmModel: "claude-opus-4-6",
-      llmBaseUrl: "",
-      appCredentialsMigrated: true,
-    });
-  });
-
-  // The load-bearing property: a user who has already configured the new fields must win
-  // over a legacy file that may be stale, or name a different provider entirely.
-  test("does not overwrite an already-chosen provider with the legacy file's", () => {
-    const settings = settingsWith({ llmProvider: "openai", llmModel: "gpt-5" });
-    const plan = planCredentialMigration(settings, vaultId, { provider: "anthropic", model: "claude-opus-4-6" });
-    expect(plan.patch).not.toHaveProperty("llmProvider");
-    expect(plan.patch).not.toHaveProperty("llmModel");
-    expect(plan.patch).not.toHaveProperty("llmBaseUrl");
-    expect(plan.patch).toEqual({ appCredentialsMigrated: true });
-  });
-
-  // The failure a missing provider check would produce: settings is already on anthropic
-  // (with its own correct secret already in the keyring), and a stale llm-credentials.json
-  // still holds an openai key. Migrating that key into the anthropic slot would silently
-  // overwrite the real anthropic secret with the wrong provider's key.
-  test("does not migrate a legacy api_key whose provider does not match the settings already chosen", () => {
-    const settings = settingsWith({ llmProvider: "anthropic", llmModel: "claude-opus-4-6" });
-    const plan = planCredentialMigration(settings, vaultId, {
-      provider: "openai",
-      model: "gpt-5",
-      api_key: "sk-test",
-    });
-    expect(plan.sets).toEqual([]);
+    expect(plan.patch).toEqual({ acpAuthToken: "", appCredentialsMigrated: true });
   });
 
   // Sticky per settings.ts's doc comment on appCredentialsMigrated: once migration has run,
-  // re-running it must not look like a legacy secret reappearing from nowhere.
+  // re-running it must not look like a secret reappearing from nowhere.
   test("plans nothing once migration has already run", () => {
     const settings = settingsWith({ appCredentialsMigrated: true, acpAuthToken: "tok" });
-    const plan = planCredentialMigration(settings, vaultId, {
-      provider: "openai",
-      model: "gpt-5",
-      api_key: "sk-test",
-    });
-    expect(plan).toEqual({ sets: [], patch: {} });
+    expect(planCredentialMigration(settings, vaultId)).toEqual({ sets: [], patch: {} });
   });
 });
 

@@ -234,114 +234,77 @@ const vaultId = "3f9a1c2b4d5e6f70";
 
 describe("runCredentialMigration", () => {
   test('returns "skipped" and calls nothing when appCredentialsMigrated is already true', async () => {
-    const settings = settingsWith({ appCredentialsMigrated: true });
-    const readLegacy = mock(() => Promise.resolve(undefined));
-    const deleteLegacy = mock(() => Promise.resolve());
+    const settings = settingsWith({ appCredentialsMigrated: true, acpAuthToken: "tok" });
     const save = mock(() => Promise.resolve());
     const connection = new AppConnection(() => Promise.reject(new Error("must not connect")));
 
-    const result = await runCredentialMigration({ settings, vaultId, readLegacy, deleteLegacy, connection, save });
+    const result = await runCredentialMigration({ settings, vaultId, connection, save });
 
     expect(result).toBe("skipped");
-    expect(readLegacy).not.toHaveBeenCalled();
-    expect(deleteLegacy).not.toHaveBeenCalled();
     expect(save).not.toHaveBeenCalled();
   });
 
-  test('returns "deferred" and calls neither deleteLegacy nor save when the app is unavailable', async () => {
-    const settings = settingsWith({});
-    const readLegacy = mock(() => Promise.resolve({ provider: "openai" as const, model: "gpt-5", api_key: "sk-test" }));
-    const deleteLegacy = mock(() => Promise.resolve());
+  test('returns "deferred" and does not save when the app is unavailable', async () => {
+    const settings = settingsWith({ acpAuthToken: "tok", acpNetworkUrl: "wss://agent.example/acp" });
     const save = mock(() => Promise.resolve());
     const connection = new AppConnection(() =>
       Promise.reject(new AppUnavailableError("not-running", "Shorthand is not running.")));
 
-    const result = await runCredentialMigration({ settings, vaultId, readLegacy, deleteLegacy, connection, save });
+    const result = await runCredentialMigration({ settings, vaultId, connection, save });
 
     expect(result).toBe("deferred");
-    expect(deleteLegacy).not.toHaveBeenCalled();
     expect(save).not.toHaveBeenCalled();
   });
 
-  test('performs every setCredential before deleteLegacy and save, and returns "done"', async () => {
-    const settings = settingsWith({
-      llmProvider: "openai",
-      llmModel: "gpt-5",
-      acpAuthToken: "tok",
-      acpNetworkUrl: "wss://agent.example/acp",
-    });
-    const readLegacy = mock(() =>
-      Promise.resolve({ provider: "openai" as const, model: "gpt-5", api_key: "sk-test" }));
+  test('performs setCredential before save, and returns "done"', async () => {
+    const settings = settingsWith({ acpAuthToken: "tok", acpNetworkUrl: "wss://agent.example/acp" });
     const order: string[] = [];
     const client = new FakeAppClient(async () => {
       order.push("setCredential");
-    });
-    const deleteLegacy = mock(async () => {
-      order.push("deleteLegacy");
     });
     const save = mock(async () => {
       order.push("save");
     });
     const connection = new AppConnection(() => Promise.resolve<AppClientLike>(client));
 
-    const result = await runCredentialMigration({ settings, vaultId, readLegacy, deleteLegacy, connection, save });
+    const result = await runCredentialMigration({ settings, vaultId, connection, save });
 
     expect(result).toBe("done");
-    expect(client.setCredentialCalls).toHaveLength(2);
-    expect(order).toEqual(["setCredential", "setCredential", "deleteLegacy", "save"]);
+    expect(client.setCredentialCalls).toHaveLength(1);
+    expect(order).toEqual(["setCredential", "save"]);
   });
 
-  test("nothing is deleted or saved when the second setCredential rejects", async () => {
-    const settings = settingsWith({
-      llmProvider: "openai",
-      llmModel: "gpt-5",
-      acpAuthToken: "tok",
-      acpNetworkUrl: "wss://agent.example/acp",
-    });
-    const readLegacy = mock(() =>
-      Promise.resolve({ provider: "openai" as const, model: "gpt-5", api_key: "sk-test" }));
-    let calls = 0;
+  test("nothing is saved when setCredential rejects", async () => {
+    const settings = settingsWith({ acpAuthToken: "tok", acpNetworkUrl: "wss://agent.example/acp" });
     const client = new FakeAppClient(async () => {
-      calls += 1;
-      if (calls === 2) throw new Error("keyring rejected the secret");
+      throw new Error("keyring rejected the secret");
     });
-    const deleteLegacy = mock(() => Promise.resolve());
     const save = mock(() => Promise.resolve());
     const connection = new AppConnection(() => Promise.resolve<AppClientLike>(client));
 
     let caught: unknown;
     try {
-      await runCredentialMigration({ settings, vaultId, readLegacy, deleteLegacy, connection, save });
+      await runCredentialMigration({ settings, vaultId, connection, save });
     } catch (thrown) {
       caught = thrown;
     }
     expect(caught).toBeInstanceOf(Error);
     expect((caught as Error).message).toBe("keyring rejected the secret");
-
-    expect(deleteLegacy).not.toHaveBeenCalled();
     expect(save).not.toHaveBeenCalled();
   });
 
-  test("a plan with zero sets still saves the marker and deletes a legacy file with no key", async () => {
+  test("a plan with zero sets still saves the marker without reaching the app", async () => {
     const settings = settingsWith({});
-    const readLegacy = mock(() => Promise.resolve({ provider: "anthropic" as const, model: "claude-opus-4-6" }));
-    const deleteLegacy = mock(() => Promise.resolve());
     const save = mock((patch: Partial<ShorthandPluginSettings>) => {
-      expect(patch).toEqual({
-        llmProvider: "anthropic",
-        llmModel: "claude-opus-4-6",
-        llmBaseUrl: "",
-        appCredentialsMigrated: true,
-      });
+      expect(patch).toEqual({ appCredentialsMigrated: true });
       return Promise.resolve();
     });
     // No connection needed: a plan with nothing to set never has to reach the app.
     const connection = new AppConnection(() => Promise.reject(new Error("must not connect")));
 
-    const result = await runCredentialMigration({ settings, vaultId, readLegacy, deleteLegacy, connection, save });
+    const result = await runCredentialMigration({ settings, vaultId, connection, save });
 
     expect(result).toBe("done");
-    expect(deleteLegacy).toHaveBeenCalledTimes(1);
     expect(save).toHaveBeenCalledTimes(1);
   });
 });

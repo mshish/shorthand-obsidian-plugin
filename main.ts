@@ -22,7 +22,6 @@ import {
   type WorkspaceLeaf,
 } from "obsidian";
 import { existsSync } from "node:fs";
-import { rm } from "node:fs/promises";
 // Core is consumed by package name through its `exports` map — never a deep path.
 // It is a separate repository (mshish/shorthand-core), pinned by tag in package.json.
 import {
@@ -47,8 +46,6 @@ import {
   listClaudeModels,
   listCodexModels,
   LlmAgentClient,
-  llmCredentialsPath,
-  readLlmCredentials,
   ShorthandAppClient,
   ShorthandControl,
   SidecarWriter,
@@ -686,9 +683,8 @@ export default class ShorthandPlugin extends Plugin {
   }
 
   /**
-   * Moves any secret still in `data.json` or the legacy `llm-credentials.json` file into the
-   * Shorthand app's keyring, then marks the move done — see `runCredentialMigration`'s own
-   * doc comment for the ordering guarantee. Silent on `"skipped"`, since that is every load
+   * Moves any secret still in `data.json` into the Shorthand app's keyring, then marks the
+   * move done — see `runCredentialMigration`'s own doc comment for the ordering guarantee. Silent on `"skipped"`, since that is every load
    * after the first successful one. `"deferred"` (the app was not open) only tells the user
    * anything when there was actually a secret waiting to move — an empty settings file
    * deferring silently forever is the expected, permanent state for a user who has never
@@ -697,30 +693,22 @@ export default class ShorthandPlugin extends Plugin {
    * Called `void`d from `onload` (nothing there awaits it), so a rejection this method does
    * not catch itself becomes an unhandled promise rejection with no user-facing message at
    * all — a plausible failure here, since `runCredentialMigration` rethrows anything that
-   * is not `AppUnavailableError` (a rejected `setCredential`, `deleteLegacy`'s `rm`, or
-   * `saveSettings`). The catch names the failure without ever formatting a secret into it:
+   * is not `AppUnavailableError` (a rejected `setCredential` or `saveSettings`). The catch names the failure without ever formatting a secret into it:
    * every value this method or its dependencies can throw about is a path, a status code or
    * an error message, never the credential itself.
    */
   private async migrateCredentials(): Promise<void> {
-    const credentialsPath = llmCredentialsPath();
-    const legacyFileExisted = existsSync(credentialsPath);
     const hadAcpToken = this.settings.acpAuthToken.length > 0;
     try {
       const result = await runCredentialMigration({
         settings: this.settings,
         vaultId: this.vaultId(),
-        readLegacy: async () => {
-          const read = await readLlmCredentials(credentialsPath);
-          return read.ok ? read.value : undefined;
-        },
-        deleteLegacy: () => rm(credentialsPath, { force: true }),
         connection: this.#appConnection,
         save: (patch) => this.saveSettings({ ...this.settings, ...patch }),
       });
       if (result === "done") {
         new Notice("Shorthand: provider keys moved to the Shorthand app.");
-      } else if (result === "deferred" && (legacyFileExisted || hadAcpToken)) {
+      } else if (result === "deferred" && hadAcpToken) {
         new Notice(`${APP_NOT_RUNNING_MESSAGE} Provider keys will move on the next load.`);
       }
     } catch (error) {
