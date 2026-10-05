@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { BACKEND_DISPLAY_NAMES } from "../src/agent-status.js";
 
 /**
  * Obsidian's declarative settings renderer (1.13.7) builds a group's rows from its `items`,
@@ -21,9 +22,14 @@ describe("the settings tab", () => {
     expect(source).not.toMatch(/\.addSetting\(/);
   });
 
+  test("offers the backend dropdown from the one shared list, not a second copy", () => {
+    const source = readFileSync(resolve(process.cwd(), "main.ts"), "utf8");
+    expect(source).toMatch(/options: BACKEND_DISPLAY_NAMES/);
+  });
+
   test("declares ACP backend options and controls", () => {
     const source = readFileSync(resolve(process.cwd(), "main.ts"), "utf8");
-    expect(source).toContain('acp: "Agent Client Protocol (ACP)"');
+    expect(BACKEND_DISPLAY_NAMES.acp).toBe("Agent Client Protocol (ACP)");
     expect(source).toContain('"ACP model"');
     expect(source).toContain('"ACP transport"');
     expect(source).toContain('"ACP executable"');
@@ -35,7 +41,7 @@ describe("the settings tab", () => {
 
   test("declares Cursor CLI backend options and controls", () => {
     const source = readFileSync(resolve(process.cwd(), "main.ts"), "utf8");
-    expect(source).toContain('cursor: "Cursor CLI"');
+    expect(BACKEND_DISPLAY_NAMES.cursor).toBe("Cursor CLI");
     expect(source).toContain('"Cursor CLI model"');
     expect(source).toContain('"Cursor CLI executable"');
     expect(source).toContain('"cursorExecutable"');

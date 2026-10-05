@@ -61,21 +61,29 @@ export class CaptureRecord {
   /**
    * `error` and `skipped` are failed passes. `disabled-for-read-failures` and `expired` end
    * enhancement for the rest of the capture, so everything said after them is never
-   * enhanced. `requeued` and `timed-out` heal on the next pass and are not failures here;
-   * a final pass that still ends that way is caught by `noteOutcome`.
+   * enhanced.
+   *
+   * `requeued` and `timed-out` are failures too, though both usually heal on the next pass.
+   * Core's `EnhanceRunner` re-queues the pass's input on either one, and once the re-queued
+   * text exceeds `maxRequeuedCharacters` (20000 by default) it keeps only a tail behind a
+   * "[...earlier transcript dropped...]" marker, emitting no status for the truncation. A
+   * later `finished` therefore cannot prove nothing was lost, and a capture whose notes are
+   * missing material must always show the recovery card. The cost is a card after a
+   * transient busy read that did heal; reprocessing then is harmless, whereas a silently
+   * truncated meeting is not recoverable.
    */
   noteStatus(status: EnhanceStatus): void {
     switch (status.kind) {
       case "error":
       case "skipped":
+      case "requeued":
+      case "timed-out":
       case "disabled-for-read-failures":
       case "expired":
         this.#fail(status.message);
         return;
       case "started":
       case "finished":
-      case "requeued":
-      case "timed-out":
       case "declined":
         return;
       default: {
@@ -302,6 +310,11 @@ export type RecoveryCardModel = Readonly<{
   progress: string | undefined;
   action: Readonly<{ id: RecoveryCardAction; label: string; enabled: boolean }>;
   dismissLabel: string;
+  /**
+   * False while a reprocess runs. Dismissing then would release the slot under the attempt, and
+   * a failure would be reported as "the transcript is still held" when it is gone.
+   */
+  dismissEnabled: boolean;
 }>;
 
 export type RecoveryNoteInfo = Readonly<{
@@ -334,6 +347,7 @@ export function describeRecoveryCards<F extends object>(
         progress: undefined,
         action: { id: "copy", label: "Copy transcript", enabled: true },
         dismissLabel: "Dismiss",
+        dismissEnabled: true,
       };
     }
     return {
@@ -349,6 +363,7 @@ export function describeRecoveryCards<F extends object>(
       progress: entry.busy ? "Reprocessing transcript…" : undefined,
       action: { id: "reprocess", label: entry.busy ? "Reprocessing…" : "Reprocess transcript", enabled: !entry.busy },
       dismissLabel: "Dismiss",
+      dismissEnabled: !entry.busy,
     };
   });
 }

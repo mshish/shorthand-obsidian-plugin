@@ -4,6 +4,8 @@ import {
   describeAgentStatus,
   INITIAL_PROBE_STATE,
   needsProbe,
+  needsProbeOnOpen,
+  shouldReprobeAtCaptureStart,
   probeKey,
   reduceProbeState,
   selectedModelLabel,
@@ -14,22 +16,25 @@ import { DEFAULT_PLUGIN_SETTINGS } from "../src/settings.js";
 const claude = DEFAULT_PLUGIN_SETTINGS;
 const codex = { ...DEFAULT_PLUGIN_SETTINGS, backend: "codex" as const };
 const llm = { ...DEFAULT_PLUGIN_SETTINGS, backend: "llm" as const };
-const claudeKey = probeKey(claude)!;
+const claudeKey = probeKey(claude) ?? "";
 
-const checking = (token: number, key = claudeKey): ProbeState => ({ kind: "checking", key, token });
+// The key is required: a default would silently stand in for Claude's key in a test about
+// another selection, and the test would pass for the wrong reason.
+const checking = (token: number, key: string): ProbeState => ({ kind: "checking", key, token });
+const codexKey = probeKey(codex) ?? "";
 
 describe("reduceProbeState", () => {
   test("moves from checking to the probe's answer", () => {
-    expect(reduceProbeState(checking(1), { type: "probe-succeeded", token: 1, signedIn: true, account: "a@b.c" }))
+    expect(reduceProbeState(checking(1, claudeKey), { type: "probe-succeeded", token: 1, signedIn: true, account: "a@b.c" }))
       .toEqual({ kind: "signed-in", key: claudeKey, account: "a@b.c" });
-    expect(reduceProbeState(checking(1), { type: "probe-succeeded", token: 1, signedIn: false, account: undefined }))
+    expect(reduceProbeState(checking(1, claudeKey), { type: "probe-succeeded", token: 1, signedIn: false, account: undefined }))
       .toEqual({ kind: "signed-out", key: claudeKey });
-    expect(reduceProbeState(checking(1), { type: "probe-failed", token: 1, reason: "timeout", message: "slow" }))
+    expect(reduceProbeState(checking(1, claudeKey), { type: "probe-failed", token: 1, reason: "timeout", message: "slow" }))
       .toEqual({ kind: "failed", key: claudeKey, reason: "timeout", message: "slow" });
   });
 
   test("ignores a result from a probe that has been superseded", () => {
-    const now = checking(2, probeKey(codex)!);
+    const now = checking(2, codexKey);
     expect(reduceProbeState(now, { type: "probe-succeeded", token: 1, signedIn: true, account: undefined })).toBe(now);
     expect(reduceProbeState(now, { type: "probe-failed", token: 1, reason: "spawn-failed", message: undefined })).toBe(now);
   });
@@ -41,7 +46,7 @@ describe("reduceProbeState", () => {
 
   test("a new start replaces whatever was cached; clearing returns to unprobed", () => {
     const signedOut: ProbeState = { kind: "signed-out", key: claudeKey };
-    expect(reduceProbeState(signedOut, { type: "probe-started", key: claudeKey, token: 3 })).toEqual(checking(3));
+    expect(reduceProbeState(signedOut, { type: "probe-started", key: claudeKey, token: 3 })).toEqual(checking(3, claudeKey));
     expect(reduceProbeState(signedOut, { type: "probe-cleared" })).toEqual(INITIAL_PROBE_STATE);
   });
 });
@@ -73,14 +78,44 @@ describe("probeKey and needsProbe", () => {
   });
 });
 
+describe("needsProbeOnOpen", () => {
+  test("re-asks a cached signed-out or failed answer, which the user fixes outside the plugin", () => {
+    expect(needsProbeOnOpen({ kind: "signed-out", key: claudeKey }, claude)).toBe(true);
+    expect(needsProbeOnOpen({ kind: "failed", key: claudeKey, reason: "timeout", message: undefined }, claude)).toBe(true);
+    // The ordinary cache hit does not move: a probe spawns a CLI.
+    expect(needsProbe({ kind: "signed-out", key: claudeKey }, claude)).toBe(false);
+  });
+
+  test("leaves a signed-in or running probe alone, and asks when the selection changed", () => {
+    expect(needsProbeOnOpen({ kind: "signed-in", key: claudeKey, account: undefined }, claude)).toBe(false);
+    expect(needsProbeOnOpen(checking(1, claudeKey), claude)).toBe(false);
+    expect(needsProbeOnOpen({ kind: "signed-in", key: claudeKey, account: undefined }, codex)).toBe(true);
+    expect(needsProbeOnOpen(INITIAL_PROBE_STATE, claude)).toBe(true);
+  });
+
+  test("never asks when the selection has nothing to probe", () => {
+    expect(needsProbeOnOpen(INITIAL_PROBE_STATE, llm)).toBe(false);
+  });
+});
+
+describe("shouldReprobeAtCaptureStart", () => {
+  test("only for a signed-out answer about the current selection", () => {
+    expect(shouldReprobeAtCaptureStart({ kind: "signed-out", key: claudeKey }, claude)).toBe(true);
+    expect(shouldReprobeAtCaptureStart({ kind: "signed-out", key: claudeKey }, codex)).toBe(false);
+    expect(shouldReprobeAtCaptureStart({ kind: "failed", key: claudeKey, reason: "timeout", message: undefined }, claude)).toBe(false);
+    expect(shouldReprobeAtCaptureStart({ kind: "signed-in", key: claudeKey, account: undefined }, claude)).toBe(false);
+    expect(shouldReprobeAtCaptureStart({ kind: "signed-out", key: "x" }, llm)).toBe(false);
+  });
+});
+
 describe("describeAgentStatus", () => {
   const describeWith = (probe: ProbeState, settings = claude, captureInFlight = false) =>
     describeAgentStatus({ settings, probe, captureInFlight });
 
   test("shows checking before any answer, and for another selection's answer", () => {
     expect(describeWith(INITIAL_PROBE_STATE).statusText).toBe("Checking sign-in…");
-    expect(describeWith(checking(1)).tone).toBe("checking");
-    const codexAnswer: ProbeState = { kind: "signed-out", key: probeKey(codex)! };
+    expect(describeWith(checking(1, claudeKey)).tone).toBe("checking");
+    const codexAnswer: ProbeState = { kind: "signed-out", key: codexKey };
     const model = describeWith(codexAnswer);
     expect(model.tone).toBe("checking");
     expect(model.warning).toBeUndefined();
@@ -95,7 +130,7 @@ describe("describeAgentStatus", () => {
 
   test("does not present an ACP or Cursor agent name as the signed-in account", () => {
     const cursor = { ...claude, backend: "cursor" as const };
-    const model = describeWith({ kind: "signed-in", key: probeKey(cursor)!, account: "Cursor CLI" }, cursor);
+    const model = describeWith({ kind: "signed-in", key: probeKey(cursor) ?? "", account: "Cursor CLI" }, cursor);
     expect(model.statusText).toBe("Agent responded");
     expect(model.statusText).not.toContain("Signed in as");
   });
@@ -108,7 +143,7 @@ describe("describeAgentStatus", () => {
   });
 
   test("tells a signed-out Codex user the command to run", () => {
-    const model = describeWith({ kind: "signed-out", key: probeKey(codex)! }, codex);
+    const model = describeWith({ kind: "signed-out", key: codexKey }, codex);
     expect(model.warning).toContain("codex login");
   });
 
@@ -149,7 +184,7 @@ describe("captureStartNotice", () => {
     expect(captureStartNotice({ kind: "signed-out", key: claudeKey }, claude)).toContain("claude login");
     expect(captureStartNotice({ kind: "signed-out", key: claudeKey }, claude)).toContain("will not be enhanced");
     expect(captureStartNotice({ kind: "signed-out", key: claudeKey }, codex)).toBeUndefined();
-    expect(captureStartNotice(checking(1), claude)).toBeUndefined();
+    expect(captureStartNotice(checking(1, claudeKey), claude)).toBeUndefined();
     expect(captureStartNotice({ kind: "failed", key: claudeKey, reason: "timeout", message: undefined }, claude)).toBeUndefined();
     expect(captureStartNotice({ kind: "signed-in", key: claudeKey, account: undefined }, claude)).toBeUndefined();
   });

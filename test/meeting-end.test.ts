@@ -6,6 +6,8 @@ import {
   MeetingEndWatch,
   meetingEndNoticeText,
   meetingEndStopFailedText,
+  captureHasRecorder,
+  meetingEndStopSender,
   planMeetingEndStop,
   runMeetingEndStop,
   sendMeetingEndStop,
@@ -301,16 +303,34 @@ describe("SpeechMeter", () => {
 });
 
 describe("meeting-end stop decision", () => {
-  test("plans a send without a recorder and leaves it to the recorder with one", () => {
-    // Adopted from Shorthand's hotkey, or control off: no recorder, so the plugin must send.
-    expect(planMeetingEndStop({ hasRecorder: false, shorthandDown: false })).toBe("send");
-    // Control on: the recorder's own stop path sends it.
-    expect(planMeetingEndStop({ hasRecorder: true, shorthandDown: false })).toBe("recorder");
+  test("a meeting-end stop is sent by someone in all four control/adoption combinations", () => {
+    const attach = 7;
+    // Control on, own start: the recorder sends it.
+    expect(meetingEndStopSender({ controlShorthandRecording: true, attachToSession: undefined, meetingEnd: true })).toBe("recorder");
+    // Control on, adopted from Shorthand's hotkey: no recorder, so the plugin sends it.
+    expect(meetingEndStopSender({ controlShorthandRecording: true, attachToSession: attach, meetingEnd: true })).toBe("plugin");
+    // Control off, own start: the plugin sends it.
+    expect(meetingEndStopSender({ controlShorthandRecording: false, attachToSession: undefined, meetingEnd: true })).toBe("plugin");
+    // Control off, adopted: the plugin sends it.
+    expect(meetingEndStopSender({ controlShorthandRecording: false, attachToSession: attach, meetingEnd: true })).toBe("plugin");
   });
 
-  test("does not send when Shorthand is known to be down", () => {
-    expect(planMeetingEndStop({ hasRecorder: false, shorthandDown: true })).toBe("skip");
-    expect(planMeetingEndStop({ hasRecorder: true, shorthandDown: true })).toBe("skip");
+  test("a manual stop is sent only by a recorder", () => {
+    expect(meetingEndStopSender({ controlShorthandRecording: true, attachToSession: undefined, meetingEnd: false })).toBe("recorder");
+    expect(meetingEndStopSender({ controlShorthandRecording: true, attachToSession: 7, meetingEnd: false })).toBe("nobody");
+    expect(meetingEndStopSender({ controlShorthandRecording: false, attachToSession: undefined, meetingEnd: false })).toBe("nobody");
+    expect(meetingEndStopSender({ controlShorthandRecording: false, attachToSession: 7, meetingEnd: false })).toBe("nobody");
+  });
+
+  test("a recorder exists only with control on and no attach", () => {
+    expect(captureHasRecorder({ controlShorthandRecording: true, attachToSession: undefined })).toBe(true);
+    expect(captureHasRecorder({ controlShorthandRecording: true, attachToSession: 0 })).toBe(false);
+    expect(captureHasRecorder({ controlShorthandRecording: false, attachToSession: undefined })).toBe(false);
+  });
+
+  test("plans a send unless Shorthand is known to be down", () => {
+    expect(planMeetingEndStop({ shorthandDown: false })).toBe("send");
+    expect(planMeetingEndStop({ shorthandDown: true })).toBe("skip");
   });
 
   test("sends the given stop signal and reports success", async () => {
@@ -370,16 +390,14 @@ describe("runMeetingEndStop", () => {
     expect(warned[0]).toContain("may still be recording");
   });
 
-  test("does nothing for the recorder and skip plans", async () => {
-    for (const plan of ["recorder", "skip"] as const) {
-      let called = false;
-      await runMeetingEndStop({
-        plan,
-        send: async () => { called = true; return sentOutcome; },
-        report: () => { called = true; },
-        warn: () => { called = true; },
-      });
-      expect(called).toBe(false);
-    }
+  test("does nothing for the skip plan", async () => {
+    let called = false;
+    await runMeetingEndStop({
+      plan: "skip",
+      send: async () => { called = true; return sentOutcome; },
+      report: () => { called = true; },
+      warn: () => { called = true; },
+    });
+    expect(called).toBe(false);
   });
 });

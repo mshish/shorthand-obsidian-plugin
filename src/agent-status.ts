@@ -106,6 +106,29 @@ export function needsProbe(state: ProbeState, settings: ProbeSettings): boolean 
   return state.kind === "unprobed" || state.key !== key;
 }
 
+/**
+ * Whether opening the panel should ask again. Everything `needsProbe` asks for, plus a cached
+ * signed-out or failed answer for the current selection: the user fixes those outside the
+ * plugin (`claude login`, a reinstall), so the cache only ever goes stale in the direction
+ * that keeps showing the warning, and without this the panel would keep saying "Notes will
+ * not be enhanced" until the user found the refresh button. A signed-in answer is not
+ * re-asked, so opening the panel stays free of a subprocess in the healthy case.
+ */
+export function needsProbeOnOpen(state: ProbeState, settings: ProbeSettings): boolean {
+  if (needsProbe(state, settings)) return true;
+  return state.kind === "signed-out" || state.kind === "failed";
+}
+
+/**
+ * Whether a capture start should re-ask in the background: the cached answer says signed out
+ * for the current selection, which is the answer the start Notice would act on, and the user
+ * may have signed in since. The start itself does not wait for it.
+ */
+export function shouldReprobeAtCaptureStart(state: ProbeState, settings: ProbeSettings): boolean {
+  const key = probeKey(settings);
+  return key !== undefined && state.kind === "signed-out" && state.key === key;
+}
+
 function probeLabel(backend: EnhancementBackend): AgentBackendLabel | undefined {
   switch (backend) {
     case "claude-agent-sdk": return "Claude";
