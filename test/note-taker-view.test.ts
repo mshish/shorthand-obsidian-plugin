@@ -63,22 +63,22 @@ describe("friendlyModelName", () => {
 describe("describeNoteTaker: the healthy line", () => {
   test("is one quiet line with the provider and model, and the account as the tooltip", () => {
     const v = view({ kind: "signed-in", key: key(claude), account: "you@example.com" });
-    expect(v.line).toBe("AI note taker: Claude · Opus");
+    expect(v.line).toBe("Note taker: Claude · Opus");
     expect(v.tone).toBe("ready");
     expect(v.tooltip).toBe("Using you@example.com");
-    expect(v.accessibleLabel).toBe("AI note taker: Claude · Opus. Using you@example.com");
+    expect(v.accessibleLabel).toBe("Note taker: Claude · Opus. Using you@example.com");
     expect(v.problem).toBeUndefined();
     expect(v.switchNote).toBeUndefined();
   });
 
   test("omits the model part when none is chosen", () => {
     const v = view({ kind: "signed-in", key: key(DEFAULT_PLUGIN_SETTINGS), account: undefined }, DEFAULT_PLUGIN_SETTINGS);
-    expect(v.line).toBe("AI note taker: Claude");
+    expect(v.line).toBe("Note taker: Claude");
   });
 
   test("names a Codex user's provider as ChatGPT", () => {
     const v = view({ kind: "signed-in", key: key(codex), account: "me@example.com" }, codex);
-    expect(v.line).toBe("AI note taker: ChatGPT (Codex) · GPT-5.4");
+    expect(v.line).toBe("Note taker: ChatGPT (Codex) · GPT-5.4");
     expect(v.tooltip).toBe("Using me@example.com");
   });
 
@@ -91,7 +91,7 @@ describe("describeNoteTaker: the healthy line", () => {
 
   test("an API key has nothing to check: a neutral line, no tooltip, nothing to check", () => {
     const v = view(INITIAL_PROBE_STATE, llm);
-    expect(v.line).toBe("AI note taker: Your own API key · GPT-4o");
+    expect(v.line).toBe("Note taker: Your own API key · GPT-4o");
     expect(v.tone).toBe("unknown");
     expect(v.tooltip).toBeUndefined();
     expect(v.menu.canCheck).toBe(false);
@@ -111,21 +111,21 @@ describe("describeNoteTaker: checking", () => {
       expect(v.problem).toBeUndefined();
       expect(v.tooltip).toBeUndefined();
     }
-    expect(NOTE_TAKER_CHECKING_TEXT).toBe("Checking the AI note taker…");
+    expect(NOTE_TAKER_CHECKING_TEXT).toBe("Checking the note taker…");
   });
 });
 
 describe("describeNoteTaker: signed out", () => {
   test("Claude: the line stays, with a callout that says what to do", () => {
     const v = view({ kind: "signed-out", key: key(claude) });
-    expect(v.line).toBe("AI note taker: Claude · Opus");
+    expect(v.line).toBe("Note taker: Claude · Opus");
     expect(v.tone).toBe("problem");
     expect(v.problem).toEqual({
       headline: "Claude can't take notes for you yet.",
       body: "Sign in to Claude Code: open a terminal and run claude auth login.",
       details: undefined,
       checkAgainLabel: "Check again",
-      chooseAnotherLabel: "Choose a different AI note taker",
+      chooseAnotherLabel: "Choose a different note taker",
     });
   });
 
@@ -188,7 +188,7 @@ describe("describeNoteTaker: switching during a capture", () => {
 describe("describeNoteTaker: the menu", () => {
   test("lists every choice by its friendly name with a check on the current one", () => {
     const v = view(INITIAL_PROBE_STATE, codex);
-    expect(v.menu.heading).toBe("AI note taker");
+    expect(v.menu.heading).toBe("Note taker");
     expect(v.menu.checkLabel).toBe("Check connection");
     expect(v.menu.choices).toEqual([
       { backend: "claude-agent-sdk", label: "Claude", checked: false },
@@ -236,7 +236,7 @@ describe("sign-in commands", () => {
     expect(view({ kind: "signed-out", key: key(codex) }, codex).problem?.body).toContain(SIGN_IN_COMMANDS.codex);
   });
   test("with no tooltip the accessible label is the line alone", () => {
-    expect(view({ kind: "checking", key: key(claude), token: 1 }).accessibleLabel).toBe("Checking the AI note taker…");
+    expect(view({ kind: "checking", key: key(claude), token: 1 }).accessibleLabel).toBe("Checking the note taker…");
   });
 });
 

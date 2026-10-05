@@ -402,8 +402,8 @@ export function describeRecoveryCards<F extends object>(
       reason: entry.retried
         ? "That didn't work either."
         : entry.unavailableAtStart
-          ? `${entry.noteTaker ?? "The AI note taker"} couldn't start taking notes.`
-          : `${entry.noteTaker ?? "The AI note taker"} ran into a problem partway through.`,
+          ? `${entry.noteTaker ?? "The note taker"} couldn't start taking notes.`
+          : `${entry.noteTaker ?? "The note taker"} ran into a problem partway through.`,
       details: entry.error,
       hint: HINT,
       action: { id: "reprocess", label: entry.busy ? "Taking notes again…" : "Take notes again", enabled: !entry.busy },

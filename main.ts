@@ -2574,7 +2574,7 @@ class ShorthandSettingTab extends PluginSettingTab {
   private basicDefinitions(): SettingDefinitionItem<SettingsKey>[] {
     return [
       {
-        name: "AI note taker",
+        name: "Note taker",
         desc: "Only Claude can look things up elsewhere in your vault.",
         control: {
           type: "dropdown",

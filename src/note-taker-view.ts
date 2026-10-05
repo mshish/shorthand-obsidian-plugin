@@ -88,7 +88,7 @@ export type NoteTakerProblem = Readonly<{
 }>;
 
 export type NoteTakerView = Readonly<{
-  /** The one quiet line: "AI note taker: Claude · Opus", or the checking text. */
+  /** The one quiet line: "Note taker: Claude · Opus", or the checking text. */
   line: string;
   tone: NoteTakerTone;
   /** Hover text: whose account is in use. Absent when nothing is known about it. */
@@ -128,7 +128,7 @@ export const SIGN_IN_COMMANDS = {
   codex: "codex login",
 } as const;
 
-export const NOTE_TAKER_CHECKING_TEXT = "Checking the AI note taker…";
+export const NOTE_TAKER_CHECKING_TEXT = "Checking the note taker…";
 export const NOTE_TAKER_SWITCH_NOTE = "Applies starting with the next meeting.";
 
 function signedOutBody(backend: EnhancementBackend): string {
@@ -169,7 +169,7 @@ export function describeNoteTaker(input: NoteTakerInput): NoteTakerView {
   const current = key !== undefined && probe.kind !== "unprobed" && probe.key === key ? probe : undefined;
 
   const model = friendlyModelName(selectedModelId(settings));
-  const summary = `AI note taker: ${BACKEND_DISPLAY_NAMES[backend]}${model === undefined ? "" : ` · ${model}`}`;
+  const summary = `Note taker: ${BACKEND_DISPLAY_NAMES[backend]}${model === undefined ? "" : ` · ${model}`}`;
 
   let line = summary;
   let tone: NoteTakerTone = "unknown";
@@ -197,7 +197,7 @@ export function describeNoteTaker(input: NoteTakerInput): NoteTakerView {
       body: signedOutBody(backend),
       details: undefined,
       checkAgainLabel: "Check again",
-      chooseAnotherLabel: "Choose a different AI note taker",
+      chooseAnotherLabel: "Choose a different note taker",
     };
   } else {
     tone = "problem";
@@ -207,7 +207,7 @@ export function describeNoteTaker(input: NoteTakerInput): NoteTakerView {
       body: unreachableBody(backend, current.reason),
       details: message === undefined || message.length === 0 ? undefined : message,
       checkAgainLabel: "Check again",
-      chooseAnotherLabel: "Choose a different AI note taker",
+      chooseAnotherLabel: "Choose a different note taker",
     };
   }
 
@@ -221,7 +221,7 @@ export function describeNoteTaker(input: NoteTakerInput): NoteTakerView {
     // reach it.
     switchNote: captureBackend !== undefined && captureBackend !== backend ? NOTE_TAKER_SWITCH_NOTE : undefined,
     menu: {
-      heading: "AI note taker",
+      heading: "Note taker",
       choices: (Object.keys(BACKEND_DISPLAY_NAMES) as EnhancementBackend[]).map((value) => ({
         backend: value,
         label: BACKEND_DISPLAY_NAMES[value],

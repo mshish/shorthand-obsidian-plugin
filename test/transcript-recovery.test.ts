@@ -276,7 +276,7 @@ describe("describeRecoveryCards", () => {
     store.keep(file, failedRecord("Not signed in"));
     const [card] = describeRecoveryCards(store.entries(), info(true));
     expect(card?.headline).toBe("Some of this meeting didn't make it into your notes.");
-    expect(card?.reason).toBe("The AI note taker ran into a problem partway through.");
+    expect(card?.reason).toBe("The note taker ran into a problem partway through.");
     expect(card?.details).toBe("Not signed in");
     expect(card?.action).toEqual({ id: "reprocess", label: "Take notes again", enabled: true });
     expect(card?.dismissLabel).toBe("Dismiss");
