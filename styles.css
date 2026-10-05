@@ -390,3 +390,43 @@ button.shorthand-panel-button.is-stop .shorthand-panel-button-copy {
   margin: var(--size-2-1) 0;
   overflow-wrap: anywhere;
 }
+
+/* Recovery card -------------------------------------------------------------- */
+.shorthand-panel-recovery {
+  background-color: color-mix(in srgb, var(--shorthand-panel-orange) 10%, var(--background-primary));
+  border: 1px solid color-mix(in srgb, var(--shorthand-panel-orange) 30%, var(--background-modifier-border));
+  border-radius: var(--radius-m);
+  margin-top: var(--size-4-3);
+  padding: var(--size-4-3);
+}
+
+.shorthand-panel-recovery-headline {
+  font-size: var(--font-ui-medium);
+  margin: 0 0 var(--size-2-1);
+}
+
+.shorthand-panel-recovery-note,
+.shorthand-panel-recovery-text,
+.shorthand-panel-recovery-disk {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  line-height: var(--line-height-normal);
+  margin: 0 0 var(--size-2-3);
+  overflow-wrap: anywhere;
+}
+
+/* Text, not colour alone, carries the problem; the colour only reinforces it. */
+.shorthand-panel-recovery-error {
+  color: var(--text-warning);
+  font-size: var(--font-ui-small);
+  line-height: var(--line-height-normal);
+  margin: 0 0 var(--size-2-3);
+  overflow-wrap: anywhere;
+}
+
+.shorthand-panel-recovery-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-2);
+  margin-bottom: var(--size-2-3);
+}

@@ -162,6 +162,14 @@ import {
   type ProbeEvent,
   type ProbeState,
 } from "./src/agent-status.js";
+import {
+  CaptureRecord,
+  describeRecoveryCards,
+  RecoveryStore,
+  reprocessResult,
+  type ReprocessResult,
+  type RecoveryCardModel,
+} from "./src/transcript-recovery.js";
 import { ObsidianNoteSink } from "./src/obsidian-note-sink.js";
 import { ObsidianSidecarStore } from "./src/obsidian-sidecar-store.js";
 import {
@@ -276,6 +284,12 @@ type CaptureRuntime = {
   /** `undefined` when `writeTranscriptNote` is off: no sidecar file exists for this capture. */
   sidecar: SidecarWriter | undefined;
   enhancer: EnhanceRunner | undefined;
+  /**
+   * The capture's full transcript and its enhancement failures. Separate from `enhancer`
+   * because the runner drops a transcript after repeated failures and has no way to hand it
+   * back, and because `enhancer` is `undefined` exactly when enhancement failed to start.
+   */
+  record: CaptureRecord;
   settled: Promise<ExitDiagnosis>;
   stopping: boolean;
   /**
@@ -440,6 +454,11 @@ export default class ShorthandPlugin extends Plugin {
   #agentProbe: ProbeState = INITIAL_PROBE_STATE;
   #agentProbeToken = 0;
   /**
+   * Transcripts of captures whose enhancement failed, one per meeting note, held until the
+   * user reprocesses or dismisses them. In memory only: see `src/transcript-recovery.ts`.
+   */
+  #recovery = new RecoveryStore<TFile>();
+  /**
    * A follower held open while no capture owns one, so a recording started with
    * Shorthand's hotkey is seen at all. Adopted by an attached capture rather than
    * replaced — see `adoptIdleFollower`.
@@ -561,6 +580,19 @@ export default class ShorthandPlugin extends Plugin {
         return true;
       },
     });
+    // Offered only while a failed capture's transcript is held, so the palette never lists a
+    // command that has nothing to act on. It acts on the active note's slot when there is one.
+    this.addCommand({
+      id: "reprocess-transcript",
+      name: COMMAND_NAMES["reprocess-transcript"],
+      checkCallback: (checking: boolean) => {
+        if (this.#recovery.size === 0) return false;
+        if (!checking) {
+          void this.reprocessPicked().catch((error: unknown) => this.fail(errorMessage(error)));
+        }
+        return true;
+      },
+    });
     this.addCommand({
       id: "clean-up-this-note",
       name: COMMAND_NAMES["clean-up-this-note"],
@@ -610,6 +642,7 @@ export default class ShorthandPlugin extends Plugin {
   onunload(): void {
     this.stopIdleFollower();
     this.forceStopCapture();
+    this.#recovery.releaseAll();
     this.#appConnection.dispose();
   }
 
@@ -760,6 +793,12 @@ export default class ShorthandPlugin extends Plugin {
         // then abandon it on the very first early return.
         const file = this.activeMarkdownFile();
         if (file === undefined) return;
+        // A reprocess writes this note's AI block, as would the capture; two writers on one
+        // block is the race the standalone commands already refuse for a live capture.
+        if (this.#recovery.isBusy(file)) {
+          new Notice("Shorthand is reprocessing this note's transcript. Wait for it to finish before taking new notes on it.");
+          return;
+        }
         const vaultRoot = this.vaultRoot();
         if (vaultRoot === undefined) return;
         const noteSink = this.noteSink(file, vaultRoot);
@@ -810,6 +849,7 @@ export default class ShorthandPlugin extends Plugin {
           });
         }
         const transcript = new TranscriptStore();
+        const captureRecord = new CaptureRecord(mode);
         let enhancer: EnhanceRunner | undefined;
         let enhancementUnavailable: string | undefined;
         try {
@@ -817,10 +857,12 @@ export default class ShorthandPlugin extends Plugin {
             noteSink,
             DEFAULT_CONFIG.enhancement.timeoutMs,
             mode,
+            (status) => captureRecord.noteStatus(status),
           );
           unownedEnhancer = enhancer;
         } catch (error) {
           enhancementUnavailable = `${errorMessage(error)} Note-taking will continue with transcript only.`;
+          captureRecord.noteFailure(enhancementUnavailable);
         }
         const command = this.shorthandCommand();
         // Adopted, not replaced, when attaching. The app replays a session only while it is
@@ -883,12 +925,17 @@ export default class ShorthandPlugin extends Plugin {
           helloEver: false,
           sidecar,
           enhancer,
+          record: captureRecord,
           settled,
           stopping: false,
           startedAt: Date.now(),
         };
         this.#capture = runtime;
         handedOff = true;
+        // Released here, not earlier: a start that bails out before this point must not cost
+        // the user the transcript an earlier failed capture left on this note. From here the
+        // new capture owns the note and its own record supersedes the old one.
+        this.#recovery.release(file);
         // Shown only once the start can no longer bail out, so it never warns about a capture
         // that did not begin. Advisory: capture proceeds, because a stale or wrong "signed out"
         // must never cost a user their recording.
@@ -938,6 +985,9 @@ export default class ShorthandPlugin extends Plugin {
           sidecar?.apply(update);
           const delta = enhancementDelta(update);
           if (delta.length === 0) return;
+          // Before the runner, and regardless of whether it exists or its passes succeed:
+          // this copy is what a later reprocess replays.
+          captureRecord.appendDelta(delta);
           enhancer?.appendTranscript(delta);
           if (enhancer !== undefined && this.settings.enableLiveEnhancement) {
             enhancer.requestTick();
@@ -1367,6 +1417,114 @@ export default class ShorthandPlugin extends Plugin {
     return buffer;
   }
 
+  /**
+   * The palette command: the active note's held transcript if it has one, otherwise the
+   * oldest. A deleted note falls through to the clipboard copy inside `reprocessTranscript`.
+   */
+  private async reprocessPicked(): Promise<void> {
+    const entry = this.#recovery.pick(this.activeNote());
+    if (entry === undefined) return;
+    await this.reprocessTranscript(entry.file);
+  }
+
+  /**
+   * Replays a failed capture's in-memory transcript through the standalone enhancement path,
+   * in the mode that capture ran in. Only a completed pass releases the transcript; any
+   * other result keeps it and shows the new error so the user can fix the agent and retry.
+   */
+  async reprocessTranscript(file: TFile): Promise<void> {
+    const entry = this.#recovery.get(file);
+    if (entry === undefined) return;
+    if (!this.noteExists(file)) {
+      await this.copyRecoveredTranscript(file);
+      return;
+    }
+    if (this.#capture?.noteFile === file) {
+      new Notice("Shorthand is taking notes on this note. Stop taking notes before reprocessing its transcript.");
+      return;
+    }
+    if (this.#recovery.beginReprocess(file) !== "started") {
+      new Notice("Shorthand is already reprocessing this transcript.");
+      return;
+    }
+    this.#render();
+    let result: ReprocessResult;
+    try {
+      const vaultRoot = this.vaultRoot();
+      if (vaultRoot === undefined) {
+        result = { ok: false, error: "Shorthand requires a desktop filesystem-backed Obsidian vault." };
+      } else {
+        const noteSink = this.noteSink(file, vaultRoot);
+        if (!await this.prepareScaffold(noteSink, entry.mode)) {
+          result = { ok: false, error: "The meeting note could not be prepared for writing, so nothing was written." };
+        } else {
+          // A throwaway record, used only to learn the message a failed pass carried: the
+          // outcome alone says "skipped" without saying why.
+          const attempt = new CaptureRecord(entry.mode);
+          const enhancer = await this.createEnhancer(
+            noteSink,
+            DEFAULT_CONFIG.enhancement.standaloneTimeoutMs,
+            entry.mode,
+            (status) => attempt.noteStatus(status),
+          );
+          try {
+            enhancer.appendTranscript(entry.transcript);
+            result = reprocessResult(await enhancer.enhanceNow("link"), attempt.lastError);
+          } finally {
+            await enhancer.dispose();
+          }
+        }
+      }
+    } catch (error) {
+      result = { ok: false, error: errorMessage(error) };
+    }
+    this.#recovery.finishReprocess(file, result);
+    if (result.ok) {
+      new Notice(result.written
+        ? `Shorthand reprocessed the transcript into ${file.basename}.`
+        : `${file.basename} was already up to date.`);
+    } else {
+      new Notice(`Shorthand: reprocessing failed. ${result.error} The transcript is still held; you can retry.`, 10_000);
+    }
+    this.#render();
+  }
+
+  /** Discards the in-memory transcript. There is no other copy unless Transcript notes was on. */
+  dismissRecovery(file: TFile): void {
+    this.#recovery.release(file);
+    this.#render();
+  }
+
+  async copyRecoveredTranscript(file: TFile): Promise<void> {
+    const entry = this.#recovery.get(file);
+    if (entry === undefined) return;
+    try {
+      await navigator.clipboard.writeText(entry.transcript);
+      new Notice(`The note ${file.basename} no longer exists. Its transcript was copied to the clipboard.`, 10_000);
+    } catch (error) {
+      new Notice(`Shorthand: could not copy the transcript. ${errorMessage(error)}`, 10_000);
+    }
+  }
+
+  /** The vault returns the same object only while the file is in it, and a rename keeps the object. */
+  private noteExists(file: TFile): boolean {
+    return this.app.vault.getAbstractFileByPath(file.path) === file;
+  }
+
+  /** The panel's recovery cards, each with the file its buttons act on. */
+  recoveryCards(): readonly Readonly<{ card: RecoveryCardModel; file: TFile }>[] {
+    const entries = this.#recovery.entries();
+    const cards = describeRecoveryCards(entries, (file) => ({
+      basename: file.basename,
+      path: file.path,
+      exists: this.noteExists(file),
+    }));
+    return cards.flatMap((card, index) => {
+      const entry = entries[index];
+      return entry === undefined ? [] : [{ card, file: entry.file }];
+    });
+  }
+
   async enhanceActiveNote(): Promise<void> {
     await this.runEnhancement("enhance-now");
   }
@@ -1514,6 +1672,7 @@ export default class ShorthandPlugin extends Plugin {
     sink: ObsidianNoteSink,
     timeoutMs: number,
     mode: CaptureMode,
+    observe?: (status: EnhanceStatus) => void,
   ): Promise<EnhanceRunner> {
     const backend = this.settings.backend;
     const configuredClaude = this.settings.claudeExecutable;
@@ -1665,7 +1824,12 @@ export default class ShorthandPlugin extends Plugin {
       // `onStatus` is supplied, and we always supply one — so without `traceMachine` a
       // logger here would be silent. The trace is the whole point of the toggle.
       ...(debugLogging ? { logger: console, traceMachine: true } : {}),
-      onStatus: (status) => this.onEnhanceStatus(status, debugLogging),
+      // The observer first: `onEnhanceStatus` throws on an unhandled status kind, and the
+      // failure record must not be the thing that throw skips.
+      onStatus: (status) => {
+        observe?.(status);
+        this.onEnhanceStatus(status, debugLogging);
+      },
     });
   }
 
@@ -1718,15 +1882,25 @@ export default class ShorthandPlugin extends Plugin {
           // Not issued from either command: this is capture's own finishing pass. "Enhance now"
           // is still the right retry, since it is the command that resumes work on a note this
           // capture already owns.
-          this.reportOutcome(await runtime.enhancer.enhanceNow("link"), "enhance-now");
+          const closing = await runtime.enhancer.enhanceNow("link");
+          runtime.record.noteOutcome(closing);
+          this.reportOutcome(closing, "enhance-now");
         }
       } finally {
         await runtime.enhancer?.dispose();
       }
       new Notice("Shorthand stopped taking notes.");
     } catch (error) {
+      runtime.record.noteFailure(`Wrapping up failed: ${errorMessage(error)}`);
       this.fail(`Wrapping up failed: ${errorMessage(error)}`);
     } finally {
+      // Before `capture-stopped`, so the repaint it triggers already shows the card.
+      if (this.#recovery.keep(runtime.noteFile, runtime.record) !== undefined) {
+        new Notice(
+          "Shorthand: some of this meeting may be missing from the note. Open the Shorthand panel to reprocess the transcript.",
+          10_000,
+        );
+      }
       if (this.#capture === runtime) this.#capture = undefined;
       this.dispatch({ type: "capture-stopped" });
       this.syncIdleFollower();
@@ -2997,6 +3171,9 @@ class ShorthandPanelView extends ItemView {
   #agentWarningEl!: HTMLElement;
   #agentNoteEl!: HTMLElement;
   #agentRefresh!: ExtraButtonComponent;
+  #recoveryEl!: HTMLElement;
+  /** What the recovery cards were last built from; they are rebuilt only when it changes. */
+  #recoverySignature = "";
   #actionsEl!: HTMLElement;
   #buttonEls: ReadonlyMap<PanelButtonId, Readonly<{
     button: HTMLButtonElement;
@@ -3077,6 +3254,9 @@ class ShorthandPanelView extends ItemView {
     this.#activityLabelEl = this.#activityEl.createSpan();
     this.#detailEl = this.#statusEl.createEl("p", { cls: "shorthand-panel-detail" });
 
+    // Above the agent section on purpose: a recovery card tells the user to fix the agent,
+    // and the switcher and sign-in status it points at sit directly beneath it.
+    this.#recoveryEl = container.createDiv({ cls: "shorthand-panel-recovery-list" });
     this.#buildAgentSection(container);
 
     this.#actionsEl = container.createDiv({ cls: "shorthand-panel-actions" });
@@ -3125,6 +3305,48 @@ class ShorthandPanelView extends ItemView {
     this.#agentNoteEl = section.createEl("p", { cls: "shorthand-panel-agent-line" });
   }
 
+  /**
+   * Rebuilt only when the cards' content changes, never per tick: this runs once a second,
+   * and recreating a focused button on that cadence is the focus loss `render()` describes.
+   * A card's content changes only on a real event (a failure, a reprocess starting or
+   * ending, a dismissal), so the rebuild is rare and always follows something the user did.
+   */
+  #patchRecoverySection(cards: readonly Readonly<{ card: RecoveryCardModel; file: TFile }>[]): void {
+    const signature = JSON.stringify(cards.map(({ card }) => card));
+    if (signature === this.#recoverySignature) return;
+    this.#recoverySignature = signature;
+    this.#recoveryEl.empty();
+    for (const { card, file } of cards) {
+      const el = this.#recoveryEl.createDiv({
+        cls: "shorthand-panel-recovery",
+        attr: { role: "group", "aria-label": card.headline },
+      });
+      el.createEl("h4", { cls: "shorthand-panel-recovery-headline", text: card.headline });
+      el.createEl("p", { cls: "shorthand-panel-recovery-note", text: `Note: ${card.noteName}` });
+      el.createEl("p", { cls: "shorthand-panel-recovery-error", text: card.error, attr: { role: "alert" } });
+      if (card.guidance !== undefined) el.createEl("p", { cls: "shorthand-panel-recovery-text", text: card.guidance });
+      if (card.progress !== undefined) {
+        el.createEl("p", { cls: "shorthand-panel-recovery-text", text: card.progress, attr: { "aria-live": "polite" } });
+      }
+      const buttons = el.createDiv({ cls: "shorthand-panel-recovery-buttons" });
+      const action = buttons.createEl("button", {
+        cls: "mod-cta",
+        text: card.action.label,
+        attr: { type: "button" },
+      });
+      action.disabled = !card.action.enabled;
+      action.onclick = () => {
+        const run = card.action.id === "copy"
+          ? this.plugin.copyRecoveredTranscript(file)
+          : this.plugin.reprocessTranscript(file);
+        void run.catch((error: unknown) => new Notice(`Shorthand: ${errorMessage(error)}`, 10_000));
+      };
+      const dismiss = buttons.createEl("button", { text: card.dismissLabel, attr: { type: "button" } });
+      dismiss.onclick = () => { this.plugin.dismissRecovery(file); };
+      el.createEl("p", { cls: "shorthand-panel-recovery-disk", text: card.diskNote });
+    }
+  }
+
   #patchAgentSection(agent: AgentStatusModel): void {
     // Only when different: this runs once a second, and rewriting an open dropdown's value
     // would close it under the user's pointer.
@@ -3168,6 +3390,7 @@ class ShorthandPanelView extends ItemView {
     this.#activityEl.hidden = model.activityLabel === undefined;
     this.#detailEl.textContent = model.detail ?? "";
     this.#detailEl.hidden = model.detail === undefined;
+    this.#patchRecoverySection(this.plugin.recoveryCards());
     this.#patchAgentSection(this.plugin.agentStatus());
     this.#actionsEl.hidden = !model.buttons.some(({ id, visible }) => id !== "stop" && visible);
 
