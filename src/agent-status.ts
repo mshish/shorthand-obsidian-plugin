@@ -148,7 +148,6 @@ export type AgentStatusTone = "neutral" | "checking" | "ok" | "warning";
 
 export type AgentStatusModel = Readonly<{
   backendValue: EnhancementBackend;
-  backendLabel: string;
   modelLabel: string;
   /** One short line: "Checking…", "Signed in as …", or nothing when no probe applies. */
   statusText: string | undefined;
@@ -184,7 +183,12 @@ export function describeAgentStatus(input: AgentStatusInput): AgentStatusModel {
     statusText = "Checking sign-in…";
     tone = "checking";
   } else if (current.kind === "signed-in") {
-    statusText = current.account === undefined ? "Signed in" : `Signed in as ${current.account}`;
+    // Only Claude (accountInfo) and Codex (account/read) report a real account. For Cursor and
+    // ACP, core fills `account` with the agent's name (or the literal "Cursor CLI") and always
+    // reports signedIn, which only means the handshake succeeded, so naming it would be false.
+    const reportsAccount = backend === "claude-agent-sdk" || backend === "codex";
+    statusText = !reportsAccount ? "Agent responded"
+      : current.account === undefined ? "Signed in" : `Signed in as ${current.account}`;
     tone = "ok";
   } else if (current.kind === "signed-out") {
     statusText = "Not signed in";
@@ -202,7 +206,6 @@ export function describeAgentStatus(input: AgentStatusInput): AgentStatusModel {
 
   return {
     backendValue: backend,
-    backendLabel: BACKEND_DISPLAY_NAMES[backend],
     modelLabel: selectedModelLabel(settings),
     statusText,
     tone,

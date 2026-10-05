@@ -91,7 +91,13 @@ describe("describeAgentStatus", () => {
     expect(model.statusText).toBe("Signed in as me@example.com");
     expect(model.tone).toBe("ok");
     expect(model.warning).toBeUndefined();
-    expect(model.backendLabel).toBe("Claude Code");
+  });
+
+  test("does not present an ACP or Cursor agent name as the signed-in account", () => {
+    const cursor = { ...claude, backend: "cursor" as const };
+    const model = describeWith({ kind: "signed-in", key: probeKey(cursor)!, account: "Cursor CLI" }, cursor);
+    expect(model.statusText).toBe("Agent responded");
+    expect(model.statusText).not.toContain("Signed in as");
   });
 
   test("tells a signed-out Claude user the command to run", () => {
@@ -121,7 +127,6 @@ describe("describeAgentStatus", () => {
     const model = describeWith(INITIAL_PROBE_STATE, llm);
     expect(model.statusText).toBeUndefined();
     expect(model.canRefresh).toBe(false);
-    expect(model.backendLabel).toBe("LLM provider");
   });
 
   test("says a switch applies to the next capture only while one is running", () => {

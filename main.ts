@@ -738,10 +738,6 @@ export default class ShorthandPlugin extends Plugin {
     }
     this.#requestedCaptureMode = mode;
     this.dispatch({ type: "capture-starting" });
-    // Advisory only: capture proceeds, because a stale or wrong "signed out" must never cost a
-    // user their recording. The notes just will not be enhanced if the answer was right.
-    const signedOutNotice = captureStartNotice(this.#agentProbe, this.settings);
-    if (signedOutNotice !== undefined) new Notice(signedOutNotice, 10_000);
     let unownedEnhancer: EnhanceRunner | undefined;
     // "Handed off" means something else now owns this runtime's lifecycle — not that a
     // capture started. Set immediately after `#capture = runtime` below, before either
@@ -893,6 +889,11 @@ export default class ShorthandPlugin extends Plugin {
         };
         this.#capture = runtime;
         handedOff = true;
+        // Shown only once the start can no longer bail out, so it never warns about a capture
+        // that did not begin. Advisory: capture proceeds, because a stale or wrong "signed out"
+        // must never cost a user their recording.
+        const signedOutNotice = captureStartNotice(this.#agentProbe, this.settings);
+        if (signedOutNotice !== undefined) new Notice(signedOutNotice, 10_000);
         unownedEnhancer = undefined;
         // Only a capture with no recorder of its own — an attach, or control switched off —
         // goes straight to capturing. Everything this plugin starts itself waits for
@@ -2382,10 +2383,9 @@ class ShorthandSettingTab extends PluginSettingTab {
 
             if (this.plugin.settings.backend !== ownsBackend) return;
 
-            const executableOverride = this.plugin.settings[backend === "claude" ? "claudeExecutable" : "codexExecutable"];
-            const fetchCatalog = backend === "claude"
-              ? listClaudeModels(executableOverride.length === 0 ? {} : { executableOverride })
-              : listCodexModels(executableOverride.length === 0 ? {} : { codexPathOverride: executableOverride });
+            // The same request the panel's sign-in probe makes, so the two never ask different programs.
+            const fetchCatalog = fetchAgentCatalog(this.plugin.settings);
+            if (fetchCatalog === undefined) return;
 
             void fetchCatalog.then((loadedCatalog) => {
               if (disposed) return;
@@ -2480,11 +2480,8 @@ class ShorthandSettingTab extends PluginSettingTab {
 
             if (this.plugin.settings.backend !== "cursor") return;
 
-            const executableOverride = this.plugin.settings.cursorExecutable;
-            const fetchCatalog = listAcpModels({
-              ...(executableOverride.length === 0 ? {} : { executableOverride }),
-              args: ["acp"],
-            });
+            const fetchCatalog = fetchAgentCatalog(this.plugin.settings);
+            if (fetchCatalog === undefined) return;
 
             void fetchCatalog.then((loadedCatalog) => {
               if (disposed) return;
@@ -2553,13 +2550,8 @@ class ShorthandSettingTab extends PluginSettingTab {
               };
             }
 
-            const args = this.plugin.settings.acpArgs.trim().length > 0
-              ? this.plugin.settings.acpArgs.trim().split(/\s+/)
-              : [];
-            const fetchCatalog = listAcpModels({
-              command: configuredExecutable,
-              args,
-            });
+            const fetchCatalog = fetchAgentCatalog(this.plugin.settings);
+            if (fetchCatalog === undefined) return;
 
             void fetchCatalog.then((loadedCatalog) => {
               if (disposed) return;
@@ -2953,15 +2945,12 @@ function numberControlItem(
 }
 
 /**
- * The right-sidebar controls. Everything it decides is `describePanel`; this class is the
- * DOM wiring only, which is what keeps it reviewable by reading — it cannot be imported
- * under `bun test`.
- */
-/**
  * The same core catalog fetch the settings tab runs for each backend, with the same arguments.
  * `undefined` for a selection with nothing to ask (see `probeKey`).
  */
 function fetchAgentCatalog(settings: ShorthandPluginSettings): Promise<AgentCatalog> | undefined {
+  // One skip rule for the probe key and the request, so they cannot disagree about what is asked.
+  if (probeKey(settings) === undefined) return undefined;
   switch (settings.backend) {
     case "claude-agent-sdk":
       return listClaudeModels(settings.claudeExecutable.length === 0 ? {} : { executableOverride: settings.claudeExecutable });
@@ -2973,7 +2962,6 @@ function fetchAgentCatalog(settings: ShorthandPluginSettings): Promise<AgentCata
         args: ["acp"],
       });
     case "acp": {
-      if (settings.acpTransport === "network" || settings.acpExecutable.trim().length === 0) return undefined;
       const args = settings.acpArgs.trim().length > 0 ? settings.acpArgs.trim().split(/\s+/) : [];
       return listAcpModels({ command: settings.acpExecutable.trim(), args });
     }
@@ -2982,6 +2970,11 @@ function fetchAgentCatalog(settings: ShorthandPluginSettings): Promise<AgentCata
   }
 }
 
+/**
+ * The right-sidebar controls. Everything it decides is `describePanel`; this class is the
+ * DOM wiring only, which is what keeps it reviewable by reading — it cannot be imported
+ * under `bun test`.
+ */
 class ShorthandPanelView extends ItemView {
   // `#build` assigns these together, exactly once, before `#patch` ever reads them — see
   // `render()`'s guard. Definite-assignment fields rather than `| undefined` because every
@@ -3138,6 +3131,9 @@ class ShorthandPanelView extends ItemView {
     if (this.#agentDropdown.getValue() !== agent.backendValue) this.#agentDropdown.setValue(agent.backendValue);
     this.#agentModelEl.textContent = `Model: ${agent.modelLabel}`;
     this.#agentStatusEl.textContent = agent.statusText ?? "";
+    for (const tone of ["neutral", "checking", "ok", "warning"] as const) {
+      this.#agentStatusEl.classList.toggle(`is-${tone}`, agent.tone === tone);
+    }
     this.#agentStatusEl.hidden = agent.statusText === undefined;
     this.#agentWarningEl.textContent = agent.warning ?? "";
     this.#agentWarningEl.hidden = agent.warning === undefined;
