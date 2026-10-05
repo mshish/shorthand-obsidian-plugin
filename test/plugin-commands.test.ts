@@ -48,6 +48,7 @@ describe("command names", () => {
       "stop-notes",
       "enhance-now",
       "clean-up-this-note",
+      "reprocess-transcript",
       "toggle-recording",
       "toggle-assisted-notes",
       "cancel-recording",
