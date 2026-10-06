@@ -81,12 +81,18 @@ BRAT installs from a repo's latest GitHub **Release** assets
 bare tag, and `main.js` is gitignored, so a tag with no Release attached is
 invisible to it.
 
-1. Bump `manifest.json`, `package.json` and `versions.json` first, and commit.
-2. Push a tag equal to `manifest.json`'s `version` exactly, with no `v`
+1. Run `npm audit` and take every fix `npm audit fix` offers without `--force`.
+   The community directory scans the whole lockfile, dev dependencies included, and
+   flags advisories that `npm run lint` never sees: 0.10.3 shipped with a flagged
+   `fast-uri` that only the ESLint toolchain pulled in. `moment` is the known
+   exception: it arrives only through the `obsidian` typings, which pin it exactly,
+   and `--force` would downgrade those typings to 0.14.
+2. Bump `manifest.json`, `package.json` and `versions.json`, and commit.
+3. Push a tag equal to `manifest.json`'s `version` exactly, with no `v`
    prefix — `.github/workflows/release.yml` checks this and fails the build
    on a mismatch, because BRAT and Obsidian's directory tooling compare
    versions by string equality.
-3. The workflow builds and tests, then opens a **draft** release with the
+4. The workflow builds and tests, then opens a **draft** release with the
    three assets attached. Check them, then publish the draft by hand — the
    draft step is deliberate, matching how 0.1.0 and 0.2.0 were cut.
 
