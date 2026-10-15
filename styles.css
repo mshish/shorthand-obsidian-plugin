@@ -551,6 +551,20 @@ button.shorthand-panel-note-taker-line:focus-visible {
   white-space: pre-wrap;
 }
 
+.shorthand-panel-callout-model {
+  align-items: center;
+  color: var(--text-normal);
+  display: flex;
+  font-size: var(--font-ui-small);
+  gap: var(--size-2-2);
+  line-height: var(--line-height-normal);
+  margin: 0 0 var(--size-2-3);
+}
+
+.shorthand-panel-callout-model strong {
+  font-weight: var(--font-semibold);
+}
+
 .shorthand-panel-callout-buttons {
   align-items: center;
   display: flex;

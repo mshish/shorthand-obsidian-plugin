@@ -323,6 +323,8 @@ export type RecoveryCardModel = Readonly<{
   key: string;
   noteName: string;
   notePath: string | undefined;
+  /** Who was taking the notes when this capture failed, if known. */
+  noteTaker: string | undefined;
   /** Shown bold. */
   headline: string;
   /** One plain sentence on why. */
@@ -335,7 +337,7 @@ export type RecoveryCardModel = Readonly<{
   dismissLabel: string;
   /**
    * False while an attempt runs. Dismissing then would release the slot under the attempt, and
-   * a failure would be reported as "the transcript is still held" when it is gone.
+   * a failure would be reported as "the transcript is still available" when it is gone.
    */
   dismissEnabled: boolean;
 }>;
@@ -350,21 +352,21 @@ export type RecoveryNoteInfo = Readonly<{
 const HINT = "This copy is lost if Obsidian closes. Turn on Transcript notes to keep one on disk.";
 
 /**
- * Notices about recovery, in the panel's vocabulary. "Take notes again" is the card's own
+ * Notices about recovery, in the panel's vocabulary. "Retry note taking" is the card's own
  * button label and the palette command's wording, so the three read as one feature.
  */
 export const RECOVERY_NOTICES = {
   /** Shown when a capture ends with notes missing; worded like the card's headline. */
   missing: (mode: CaptureMode): string =>
-    `Shorthand: ${mode === "assisted-notes" ? "some of what you said" : "some of this meeting"} didn't make it into your notes. Open the Shorthand panel to take notes again.`,
-  success: (noteName: string): string => `Shorthand took notes again in ${noteName}.`,
+    `Shorthand: ${mode === "assisted-notes" ? "some of what you said" : "some of this meeting"} didn't make it into your notes. Open the Shorthand panel to retry note taking.`,
+  success: (noteName: string): string => `Shorthand retried note taking in ${noteName}.`,
   alreadyCurrent: (noteName: string): string => `${noteName} was already up to date.`,
-  failed: (error: string): string => `Shorthand: that didn't work either. ${error} Your transcript is still held, so you can try again.`,
+  failed: (error: string): string => `Shorthand: that didn't work either. ${error} Your transcript is still available, so you can try again.`,
   /** A start on a note whose card is mid-attempt. */
-  busyOnStart: "Shorthand is taking notes again on this note. Wait for it to finish before taking new notes on it.",
+  busyOnStart: "Shorthand is retrying note taking on this note. Wait for it to finish before taking new notes on it.",
   /** Taking notes again on a note a capture is writing to. */
-  captureRunning: "Shorthand is taking notes on this note. Stop taking notes before taking them again.",
-  alreadyRunning: "Shorthand is already taking notes again from this transcript.",
+  captureRunning: "Shorthand is taking notes on this note. Stop taking notes before retrying note taking.",
+  alreadyRunning: "Shorthand is already retrying note taking from this transcript.",
   copied: (noteName: string): string => `The note ${noteName} no longer exists. Its transcript was copied to the clipboard.`,
   copyFailed: (error: string): string => `Shorthand: could not copy the transcript. ${error}`,
 } as const;
@@ -373,18 +375,18 @@ export const RECOVERY_NOTICES = {
 export function describeRecoveryCards<F extends object>(
   entries: readonly RecoveryEntry<F>[],
   noteInfo: (file: F) => RecoveryNoteInfo,
+  activeNoteTaker?: string,
 ): readonly RecoveryCardModel[] {
   return entries.map((entry) => {
     const note = noteInfo(entry.file);
-    const key = `${note.path}\0${entry.seq}`;
-    const headline = entry.mode === "assisted-notes"
-      ? "Some of what you said didn't make it into your notes."
-      : "Some of this meeting didn't make it into your notes.";
+    const key = `${note.path}\0${entry.seq}\0${activeNoteTaker ?? ""}`;
+    const headline = `Note taking didn't finish: ${note.basename}`;
     if (!note.exists) {
       return {
         key,
         noteName: note.basename,
         notePath: undefined,
+        noteTaker: activeNoteTaker ?? entry.noteTaker,
         headline,
         reason: `"${note.basename}" was deleted, so there is nowhere to put them. Copy the transcript to keep it.`,
         details: entry.error,
@@ -398,6 +400,7 @@ export function describeRecoveryCards<F extends object>(
       key,
       noteName: note.basename,
       notePath: note.path,
+      noteTaker: activeNoteTaker ?? entry.noteTaker,
       headline,
       reason: entry.retried
         ? "That didn't work either."
@@ -406,7 +409,7 @@ export function describeRecoveryCards<F extends object>(
           : `${entry.noteTaker ?? "The note taker"} ran into a problem partway through.`,
       details: entry.error,
       hint: HINT,
-      action: { id: "reprocess", label: entry.busy ? "Taking notes again…" : "Take notes again", enabled: !entry.busy },
+      action: { id: "reprocess", label: entry.busy ? "Retrying note taking…" : "Retry note taking", enabled: !entry.busy },
       dismissLabel: "Dismiss",
       dismissEnabled: !entry.busy,
     };

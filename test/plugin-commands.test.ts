@@ -49,6 +49,7 @@ describe("command names", () => {
       "enhance-now",
       "clean-up-this-note",
       "reprocess-transcript",
+      "insert-scaffold",
       "toggle-recording",
       "toggle-assisted-notes",
       "cancel-recording",

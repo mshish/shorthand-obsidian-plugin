@@ -15,6 +15,7 @@ export type CommandId =
   | "enhance-now"
   | "clean-up-this-note"
   | "reprocess-transcript"
+  | "insert-scaffold"
   | "toggle-recording"
   | "toggle-assisted-notes"
   | "cancel-recording"
@@ -49,7 +50,8 @@ export const COMMAND_NAMES: Readonly<Record<CommandId, string>> = Object.freeze(
   "stop-notes": "Stop taking notes",
   "enhance-now": "Enhance now",
   "clean-up-this-note": "Clean up this note",
-  "reprocess-transcript": "Take notes again from the last meeting",
+  "reprocess-transcript": "Retry note taking from the last meeting",
+  "insert-scaffold": "Insert note scaffolding",
   "toggle-recording": "Toggle Shorthand meeting recording",
   "toggle-assisted-notes": "Toggle Shorthand assisted notes recording",
   "cancel-recording": "Cancel Shorthand recording",
