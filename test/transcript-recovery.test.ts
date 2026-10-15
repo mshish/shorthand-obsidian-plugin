@@ -271,14 +271,14 @@ describe("describeRecoveryCards", () => {
     expect(describeRecoveryCards([], info(true))).toEqual([]);
   });
 
-  test("names why, keeps the raw error under details, and offers Take notes again", () => {
+  test("names why, keeps the raw error under details, and offers Retry note taking", () => {
     const store = new RecoveryStore<object>();
     store.keep(file, failedRecord("Not signed in"));
     const [card] = describeRecoveryCards(store.entries(), info(true));
-    expect(card?.headline).toBe("Some of this meeting didn't make it into your notes.");
+    expect(card?.headline).toBe("Note taking didn't finish: Sync");
     expect(card?.reason).toBe("The note taker ran into a problem partway through.");
     expect(card?.details).toBe("Not signed in");
-    expect(card?.action).toEqual({ id: "reprocess", label: "Take notes again", enabled: true });
+    expect(card?.action).toEqual({ id: "reprocess", label: "Retry note taking", enabled: true });
     expect(card?.dismissLabel).toBe("Dismiss");
     expect(card?.hint).toBe("This copy is lost if Obsidian closes. Turn on Transcript notes to keep one on disk.");
     expect(card?.notePath).toBe("Meetings/Sync.md");
@@ -300,17 +300,19 @@ describe("describeRecoveryCards", () => {
     record.appendDelta("hello");
     record.noteFailure("boom");
     store.keep(file, record);
-    expect(describeRecoveryCards(store.entries(), info(true))[0]?.reason).toBe("Claude ran into a problem partway through.");
+    const [card] = describeRecoveryCards(store.entries(), info(true));
+    expect(card?.reason).toBe("Claude ran into a problem partway through.");
+    expect(card?.noteTaker).toBe("Claude");
   });
 
-  test("an assisted-notes capture talks about what you said, not a meeting", () => {
+  test("an assisted-notes capture also uses the clean headline format", () => {
     const store = new RecoveryStore<object>();
     const record = new CaptureRecord("assisted-notes");
     record.appendDelta("hello");
     record.noteFailure("boom");
     store.keep(file, record);
     expect(describeRecoveryCards(store.entries(), info(true))[0]?.headline)
-      .toBe("Some of what you said didn't make it into your notes.");
+      .toBe("Note taking didn't finish: Sync");
   });
 
   test("disables the action and says it is running while taking notes again", () => {
@@ -318,7 +320,7 @@ describe("describeRecoveryCards", () => {
     store.keep(file, failedRecord());
     store.beginReprocess(file);
     const [card] = describeRecoveryCards(store.entries(), info(true));
-    expect(card?.action).toEqual({ id: "reprocess", label: "Taking notes again…", enabled: false });
+    expect(card?.action).toEqual({ id: "reprocess", label: "Retrying note taking…", enabled: false });
   });
 
   test("disables Dismiss only while an attempt runs", () => {
@@ -340,7 +342,7 @@ describe("describeRecoveryCards", () => {
     const [card] = describeRecoveryCards(store.entries(), info(true));
     expect(card?.reason).toBe("That didn't work either.");
     expect(card?.details).toBe("still out");
-    expect(card?.action).toEqual({ id: "reprocess", label: "Take notes again", enabled: true });
+    expect(card?.action).toEqual({ id: "reprocess", label: "Retry note taking", enabled: true });
   });
 
   test("a deleted note offers a clipboard copy instead", () => {
@@ -363,7 +365,7 @@ describe("describeRecoveryCards", () => {
 });
 
 describe("RECOVERY_NOTICES", () => {
-  test("speaks of taking notes again, never of reprocessing", () => {
+  test("speaks of retrying note taking, never of reprocessing, and never uses held transcript", () => {
     const texts = [
       RECOVERY_NOTICES.missing("meeting"),
       RECOVERY_NOTICES.missing("assisted-notes"),
@@ -374,8 +376,11 @@ describe("RECOVERY_NOTICES", () => {
       RECOVERY_NOTICES.captureRunning,
       RECOVERY_NOTICES.alreadyRunning,
     ];
-    for (const text of texts) expect(text.toLowerCase()).not.toContain("reprocess");
-    expect(RECOVERY_NOTICES.missing("meeting")).toContain("take notes again");
+    for (const text of texts) {
+      expect(text.toLowerCase()).not.toContain("reprocess");
+      expect(text.toLowerCase()).not.toContain("held");
+    }
+    expect(RECOVERY_NOTICES.missing("meeting")).toContain("retry note taking");
     expect(RECOVERY_NOTICES.missing("meeting")).toContain("this meeting");
     expect(RECOVERY_NOTICES.missing("assisted-notes")).toContain("what you said");
     expect(RECOVERY_NOTICES.missing("assisted-notes")).not.toContain("meeting");

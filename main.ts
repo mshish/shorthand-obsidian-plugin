@@ -625,7 +625,7 @@ export default class ShorthandPlugin extends Plugin {
         return true;
       },
     });
-    // Offered only while a failed capture's transcript is held, so the palette never lists a
+    // Offered only while a failed capture's transcript is available for retry, so the palette never lists a
     // command that has nothing to act on. It acts on the active note's slot when there is one.
     this.addCommand({
       id: "reprocess-transcript",
@@ -634,6 +634,36 @@ export default class ShorthandPlugin extends Plugin {
         if (this.#recovery.size === 0) return false;
         if (!checking) {
           void this.reprocessPicked().catch((error: unknown) => this.fail(errorMessage(error)));
+        }
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "insert-scaffold",
+      name: COMMAND_NAMES["insert-scaffold"],
+      checkCallback: (checking: boolean) => {
+        if (!this.hasActiveMarkdownFile()) return false;
+        if (!checking) {
+          const file = this.activeMarkdownFile();
+          if (file === undefined) return true;
+          const vaultRoot = this.vaultRoot();
+          if (vaultRoot === undefined) return true;
+          const sink = this.noteSink(file, vaultRoot);
+          void (async () => {
+            const preflight = await preflightMarkers(sink);
+            if (preflight.status === "ready") {
+              new Notice("This note already has Shorthand scaffolding.");
+              return;
+            }
+            if (preflight.status === "error") {
+              this.fail(preflight.message);
+              return;
+            }
+            const ok = await this.ensureScaffold(sink, "meeting");
+            if (ok) {
+              new Notice("Shorthand note scaffolding inserted.");
+            }
+          })().catch((error: unknown) => this.fail(errorMessage(error)));
         }
         return true;
       },
@@ -1553,7 +1583,7 @@ export default class ShorthandPlugin extends Plugin {
   }
 
   /**
-   * The palette command: the active note's held transcript if it has one, otherwise the
+   * The palette command: the active note's recoverable transcript if it has one, otherwise the
    * oldest. A deleted note falls through to the clipboard copy inside `reprocessTranscript`.
    */
   private async reprocessPicked(): Promise<void> {
@@ -1627,7 +1657,7 @@ export default class ShorthandPlugin extends Plugin {
   /** Discards the in-memory transcript. There is no other copy unless Transcript notes was on. */
   dismissRecovery(file: TFile): void {
     // The card disables Dismiss during an attempt; this is the same rule for any other caller.
-    // A dismissed slot would make a failed attempt report "still held", which would be false.
+    // A dismissed slot would make a failed attempt report "still available", which would be false.
     if (this.#recovery.isBusy(file)) return;
     this.#recovery.release(file);
     this.#render();
@@ -1652,11 +1682,12 @@ export default class ShorthandPlugin extends Plugin {
   /** The panel's recovery cards, each with the file its buttons act on. */
   recoveryCards(): readonly Readonly<{ card: RecoveryCardModel; file: TFile }>[] {
     const entries = this.#recovery.entries();
+    const currentNoteTaker = BACKEND_DISPLAY_NAMES[this.settings.backend];
     const cards = describeRecoveryCards(entries, (file) => ({
       basename: file.basename,
       path: file.path,
       exists: this.noteExists(file),
-    }));
+    }), currentNoteTaker);
     return cards.flatMap((card, index) => {
       const entry = entries[index];
       return entry === undefined ? [] : [{ card, file: entry.file }];
@@ -2194,10 +2225,20 @@ export default class ShorthandPlugin extends Plugin {
    * update underneath that buffer, and the buffer wins on its next save.
    */
   private openEditor(file: TFile): Readonly<{ editor: Editor; save(): Promise<void> }> | undefined {
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (activeView instanceof MarkdownView && (activeView.file === file || activeView.file?.path === file.path)) {
+      if (activeView.editor) {
+        return { editor: activeView.editor, save: () => activeView.save() };
+      }
+    }
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       const view = leaf.view;
-      if (!(view instanceof MarkdownView) || view.file !== file) continue;
-      return { editor: view.editor, save: () => view.save() };
+      if (!(view instanceof MarkdownView)) continue;
+      if (view.file === file || view.file?.path === file.path) {
+        if (view.editor) {
+          return { editor: view.editor, save: () => view.save() };
+        }
+      }
     }
     return undefined;
   }
@@ -3587,8 +3628,19 @@ class ShorthandPanelView extends ItemView {
       });
       el.createEl("p", { cls: "shorthand-panel-callout-headline", text: card.headline });
       el.createEl("p", { cls: "shorthand-panel-callout-text", text: card.reason, attr: { role: "alert" } });
-      el.createEl("p", { cls: "shorthand-panel-callout-text", text: `Note: ${card.noteName}` });
       this.#buildDetails(el, card.details);
+      if (card.action.id === "reprocess") {
+        const modelLine = el.createEl("p", { cls: "shorthand-panel-callout-model" });
+        modelLine.createSpan({ text: "Note taker: " });
+        modelLine.createEl("strong", { text: card.noteTaker ?? "Current note taker" });
+        const changeBtn = modelLine.createEl("button", {
+          cls: "shorthand-panel-text-button shorthand-panel-change-model",
+          text: "Change",
+          attr: { type: "button" },
+        });
+        changeBtn.disabled = !card.action.enabled;
+        changeBtn.onclick = (event) => { this.#openNoteTakerMenu(event, changeBtn); };
+      }
       const buttons = el.createDiv({ cls: "shorthand-panel-callout-buttons" });
       const action = buttons.createEl("button", {
         cls: "mod-cta",
@@ -3609,7 +3661,6 @@ class ShorthandPanelView extends ItemView {
       });
       dismiss.disabled = !card.dismissEnabled;
       dismiss.onclick = () => { this.plugin.dismissRecovery(file); };
-      el.createEl("p", { cls: "shorthand-panel-callout-hint", text: card.hint });
     }
   }
 

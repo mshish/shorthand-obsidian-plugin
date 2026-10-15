@@ -245,7 +245,7 @@ export function describeNoteTaker(input: NoteTakerInput): NoteTakerView {
  * The Notice shown when a capture starts after the check said signed out. Only a definite
  * signed-out answer warns: a failed or still-running check says nothing about the account, and
  * a false alarm at every start would teach users to ignore it. Capture proceeds either way,
- * and the transcript is held, so "Take notes again" on the panel's card can still produce the
+ * and the transcript is preserved, so "Retry note taking" on the panel's card can still produce the
  * notes once the user has signed in.
  */
 export function captureStartNotice(
