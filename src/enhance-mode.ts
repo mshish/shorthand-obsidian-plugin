@@ -59,7 +59,7 @@ export function resolveEnhanceMode(request: EnhanceRequest): EnhanceMode {
         kind: "unavailable",
         message: request.captureEnhancerReady
           ? "Shorthand is taking notes on this note. Run \"Enhance now\" to fold in the transcript so far."
-          : "Shorthand is taking notes on this note but could not start enhancement. Stop taking notes, then run this command again.",
+          : "Shorthand is taking notes on this note but could not start enhancement. Finish taking notes, then run this command again.",
       };
     }
     if (request.transcriptLink !== undefined) {
@@ -77,7 +77,7 @@ export function resolveEnhanceMode(request: EnhanceRequest): EnhanceMode {
     // The user's route out is to stop the capture, which is what the message says.
     return {
       kind: "unavailable",
-      message: "Shorthand is taking notes on this note but could not start enhancement. Stop taking notes, then run this command again.",
+      message: "Shorthand is taking notes on this note but could not start enhancement. Finish taking notes, then run this command again.",
     };
   }
   if (request.transcriptLink !== undefined) {

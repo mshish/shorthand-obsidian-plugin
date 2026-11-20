@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { describePanel, SHORTHAND_PANEL_VIEW } from "../src/panel-model.js";
+import { describeCancelConfirmation, describePanel, SHORTHAND_PANEL_VIEW } from "../src/panel-model.js";
 import { INITIAL_PLUGIN_STATE, reducePluginState } from "../src/state.js";
 import type { PluginUiState } from "../src/state.js";
 
@@ -40,7 +40,7 @@ describe("describePanel", () => {
 
     const live = describePanel({ ...base, state: capturing, hasCapture: true });
     expect(live.buttons.filter(({ visible }) => visible).map(({ id }) => id))
-      .toEqual(["stop"]);
+      .toEqual(["stop", "cancel"]);
   });
 
   test("does not let a stale runtime reference put Stop on an idle panel", () => {
@@ -67,8 +67,9 @@ describe("describePanel", () => {
     expect(model.notePath).toBe("Meetings/Weekly sync.md");
     expect(model.activityLabel).toBe("Listening and writing");
     expect(model.tone).toBe("meeting");
-    expect(model.buttons.find(({ id }) => id === "stop")?.label).toBe("Stop meeting");
-    expect(enabled(model)).toEqual(["stop"]);
+    expect(model.buttons.find(({ id }) => id === "stop")?.label).toBe("Finish meeting");
+    expect(model.buttons.find(({ id }) => id === "cancel")?.label).toBe("Cancel");
+    expect(enabled(model)).toEqual(["stop", "cancel"]);
   });
 
   test("names assisted notes distinctly from a meeting", () => {
@@ -83,7 +84,7 @@ describe("describePanel", () => {
     expect(model.elapsed).toBe("0:07");
     expect(model.statusIcon).toBe("lightbulb");
     expect(model.tone).toBe("assisted-notes");
-    expect(model.buttons.find(({ id }) => id === "stop")?.label).toBe("Stop assisted notes");
+    expect(model.buttons.find(({ id }) => id === "stop")?.label).toBe("Finish assisted notes");
   });
 
   test("keeps Stop available during Assisted Notes' acknowledgement wait, before captureActive flips", () => {
@@ -93,7 +94,24 @@ describe("describePanel", () => {
     // greyed it out for exactly the capture the panel most needs to let a user cancel.
     const starting = reducePluginState(INITIAL_PLUGIN_STATE, { type: "capture-starting" });
     const model = describePanel({ ...base, state: starting, hasCapture: true });
-    expect(enabled(model)).toEqual(["stop"]);
+    expect(enabled(model)).toEqual(["stop", "cancel"]);
+  });
+
+  test("hides Cancel once Finish is pressed, since the recording is already being finalized", () => {
+    const stopping = reducePluginState(capturing, { type: "capture-stopping" });
+    const model = describePanel({ ...base, state: stopping, hasCapture: true });
+    expect(model.buttons.filter(({ visible }) => visible).map(({ id }) => id)).toEqual(["stop"]);
+  });
+
+  test("never gives the countdown's button and the capture's Cancel the same label", () => {
+    // They do opposite things: one keeps the capture running, the other ends it.
+    const model = describePanel({
+      ...base,
+      state: capturing,
+      hasCapture: true,
+      meetingEnd: { reason: "", remainingSeconds: 10 },
+    });
+    expect(model.meetingEnd?.cancelLabel).not.toBe(model.buttons.find(({ id }) => id === "cancel")?.label);
   });
 
   test("uses a simple note-taking cue instead of an internal character gate", () => {
@@ -196,7 +214,7 @@ describe("describePanel", () => {
       headline: "Meeting looks like it has ended",
       countdown: "Stopping in 22s",
       reason: "Everyone said goodbye.",
-      cancelLabel: "Cancel",
+      cancelLabel: "Keep taking notes",
     });
   });
 
@@ -215,5 +233,17 @@ describe("describePanel", () => {
 
   test("names the view type Obsidian registers", () => {
     expect(SHORTHAND_PANEL_VIEW).toBe("shorthand-controls");
+  });
+});
+
+describe("describeCancelConfirmation", () => {
+  test("says what is lost and what is kept, in the capture's own mode", () => {
+    expect(describeCancelConfirmation("meeting")).toEqual({
+      title: "Cancel note taking?",
+      body: "Shorthand stops recording and discards this meeting without finishing your notes. Anything already in the note stays.",
+      confirmLabel: "Cancel note taking",
+      keepLabel: "Keep taking notes",
+    });
+    expect(describeCancelConfirmation("assisted-notes").body).toContain("discards this session");
   });
 });

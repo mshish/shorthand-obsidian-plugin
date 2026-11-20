@@ -6,15 +6,18 @@ import type { MeetingEndCountdown } from "./meeting-end.js";
 /** The view type Obsidian registers this panel under. Stable: it is persisted in workspace layout. */
 export const SHORTHAND_PANEL_VIEW = "shorthand-controls";
 
-export type PanelButtonId = "start-meeting" | "start-assisted-notes" | "stop";
-export type PanelIcon = "users" | "lightbulb" | "square" | "circle-check" | "loader-circle" | "triangle-alert";
+export type PanelButtonId = "start-meeting" | "start-assisted-notes" | "stop" | "cancel";
+export type PanelIcon = "users" | "lightbulb" | "square" | "x" | "circle-check" | "loader-circle" | "triangle-alert";
 export type PanelTone = "idle" | "meeting" | "assisted-notes" | "working" | "warning" | "error";
+
+/** The ids that act on a running capture rather than start one; both sit in the status card. */
+export const CAPTURE_CONTROL_IDS: ReadonlySet<PanelButtonId> = new Set<PanelButtonId>(["stop", "cancel"]);
 
 export type PanelButton = Readonly<{
   id: PanelButtonId;
   label: string;
   hint: string | undefined;
-  icon: Extract<PanelIcon, "users" | "lightbulb" | "square">;
+  icon: Extract<PanelIcon, "users" | "lightbulb" | "square" | "x">;
   enabled: boolean;
   visible: boolean;
 }>;
@@ -76,6 +79,29 @@ export type PanelInput = Readonly<{
   meetingEnd: MeetingEndCountdown | undefined;
 }>;
 
+export type CancelConfirmation = Readonly<{
+  title: string;
+  body: string;
+  confirmLabel: string;
+  keepLabel: string;
+}>;
+
+/**
+ * The question asked before Cancel ends a capture. It asks because Cancel cannot be undone:
+ * Shorthand discards the recording, so the final transcript and the closing notes pass are
+ * gone for good. The keep button repeats the countdown card's wording on purpose, since both
+ * mean "carry on as before".
+ */
+export function describeCancelConfirmation(mode: CaptureMode | undefined): CancelConfirmation {
+  const what = mode === "assisted-notes" ? "this session" : "this meeting";
+  return {
+    title: "Cancel note taking?",
+    body: `Shorthand stops recording and discards ${what} without finishing your notes. Anything already in the note stays.`,
+    confirmLabel: "Cancel note taking",
+    keepLabel: "Keep taking notes",
+  };
+}
+
 /** What the side panel shows for a given state. */
 export function describePanel(input: PanelInput): PanelModel {
   const model = describePanelStatus(input);
@@ -89,7 +115,9 @@ export function describePanel(input: PanelInput): PanelModel {
       headline: "Meeting looks like it has ended",
       countdown: `Stopping in ${meetingEnd.remainingSeconds}s`,
       reason: meetingEnd.reason.length === 0 ? undefined : meetingEnd.reason,
-      cancelLabel: "Cancel",
+      // Not "Cancel": the status card has its own Cancel, which ends note taking. Two buttons
+      // with one label and opposite effects would make a misclick lose the meeting.
+      cancelLabel: "Keep taking notes",
     },
   };
 }
@@ -132,13 +160,25 @@ function describePanelStatus(input: PanelInput): PanelModel {
     },
     {
       id: "stop",
+      // "Finish", not "Stop": with Cancel beside it, "Stop" no longer says which of the two
+      // writes the notes. Finish is the one that does.
       label: state.stopping ? "Wrapping up…" : captureMode === "assisted-notes"
-        ? "Stop assisted notes"
-        : "Stop meeting",
+        ? "Finish assisted notes"
+        : "Finish meeting",
       hint: undefined,
       icon: "square",
       enabled: canStop,
       visible: showStop,
+    },
+    {
+      id: "cancel",
+      label: "Cancel",
+      hint: undefined,
+      icon: "x",
+      enabled: canStop,
+      // Hidden once Finish is pressed: the recording is already being finalized by then, and
+      // a Cancel that cannot take that back would be a button that lies.
+      visible: showStop && !state.stopping,
     },
   ];
 
