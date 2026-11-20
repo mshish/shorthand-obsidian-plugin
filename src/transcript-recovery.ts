@@ -365,7 +365,7 @@ export const RECOVERY_NOTICES = {
   /** A start on a note whose card is mid-attempt. */
   busyOnStart: "Shorthand is retrying note taking on this note. Wait for it to finish before taking new notes on it.",
   /** Taking notes again on a note a capture is writing to. */
-  captureRunning: "Shorthand is taking notes on this note. Stop taking notes before retrying note taking.",
+  captureRunning: "Shorthand is taking notes on this note. Finish taking notes before retrying note taking.",
   alreadyRunning: "Shorthand is already retrying note taking from this transcript.",
   copied: (noteName: string): string => `The note ${noteName} no longer exists. Its transcript was copied to the clipboard.`,
   copyFailed: (error: string): string => `Shorthand: could not copy the transcript. ${error}`,

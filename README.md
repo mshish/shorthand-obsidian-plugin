@@ -25,7 +25,7 @@ By default, Shorthand deletes recordings, transcripts, and AI agent sessions whe
 2. Install and run the [Shorthand desktop app](https://shorthand.ing).
 3. In Shorthand's plugin settings, choose the note taker: Claude, ChatGPT (Codex), Cursor, another app (ACP), or your own API key.
 4. Open the note you want to update, then open **Shorthand panel** from the command palette or microphone ribbon icon.
-5. Choose **Meeting** for a conversation or **Assisted notes** for solo thinking. Stop from the panel or status bar when you are done.
+5. Choose **Meeting** for a conversation or **Assisted notes** for solo thinking. Press **Finish** in the panel, or click the status bar, when you are done. **Cancel** ends note taking without finishing your notes.
 
 Requires Shorthand 0.5.0 or newer for the OpenAI, Anthropic, Ollama, OpenAI-compatible, and ACP network backends.
 

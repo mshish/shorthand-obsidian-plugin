@@ -331,8 +331,44 @@ button.shorthand-panel-button.is-stop {
   padding: var(--size-4-2) var(--size-4-4);
 }
 
-button.shorthand-panel-button.is-stop .shorthand-panel-button-copy {
+button.shorthand-panel-button.is-stop .shorthand-panel-button-copy,
+button.shorthand-panel-button.is-cancel .shorthand-panel-button-copy {
   display: inline-flex;
+}
+
+.shorthand-panel-capture-controls {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--size-4-2);
+}
+
+/* Quiet on purpose: Finish is the primary action, so Cancel carries no fill or border until
+   hovered. Smaller padding also keeps it beside Finish in a narrow sidebar. */
+button.shorthand-panel-button.is-cancel {
+  --shorthand-button-accent: var(--text-muted);
+
+  align-items: center;
+  background-color: transparent;
+  border-color: transparent;
+  color: var(--text-muted);
+  flex-direction: row;
+  gap: var(--size-4-1);
+  justify-content: flex-start;
+  margin-top: var(--size-4-2);
+  min-height: var(--input-height);
+  padding: var(--size-4-2);
+}
+
+button.shorthand-panel-button.is-cancel:hover:not(:disabled) {
+  background-color: var(--background-modifier-hover);
+  border-color: transparent;
+  color: var(--text-normal);
+  transform: none;
+}
+
+button.shorthand-panel-button.is-cancel .shorthand-panel-button-label {
+  font-weight: var(--font-normal);
 }
 
 @keyframes shorthand-note-pulse {

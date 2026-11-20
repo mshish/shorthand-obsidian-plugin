@@ -15,7 +15,8 @@ Obsidian adds the “Shorthand:” prefix in the command palette.
 
 - **Start meeting notes on this note**
 - **Start assisted notes on this note**
-- **Stop taking notes**
+- **Finish taking notes**
+- **Cancel note taking** (listed only while Shorthand is taking notes)
 - **Enhance now**
 - **Clean up this note**
 - **Take notes again from the last meeting** (listed only while a transcript is held for recovery)
@@ -26,6 +27,10 @@ Obsidian adds the “Shorthand:” prefix in the command palette.
 
 **Clean up this note** improves a note you wrote or dictated without using a transcript. It does not run on a note that already has a linked transcript.
 
+## Finishing or cancelling
+
+**Finish** waits for Shorthand's final transcript, then runs one last pass that completes your notes. **Cancel** asks first, then tells Shorthand to discard the recording and stops right away: no final transcript, no last pass, and no transcript recovery card. Anything already written in the note, or in the transcript note, stays. Cancel stops Shorthand's recording even for a capture started with Shorthand's hotkey. Once you press **Finish**, Cancel is no longer offered.
+
 ## Recovering a transcript
 
 If enhancement fails during a capture, for example because the note taker's sign-in expired, Shorthand keeps that capture's transcript in memory. When you stop, the panel shows a card saying some of the meeting didn't make it into your notes, with the raw error under **Details** and a **Take notes again** button. Fix your note taker or choose another one from the line below the mode cards, then press the button; the **Take notes again from the last meeting** command does the same. A successful attempt clears the card, and a failed one keeps the transcript and shows the new error.
@@ -34,9 +39,9 @@ One transcript is held per note. Starting a new capture on the same note, dismis
 
 ## Meeting end detection
 
-**Detect meeting end and stop recording** is on by default and applies to Meeting mode only; Assisted notes never stops itself. After each enhancement pass the agent reports whether the transcript shows clear signs the conversation is over, such as farewells or people leaving. When it does, the panel and a notice show "Meeting looks like it has ended" with the agent's reason and a 30-second countdown. At zero, Shorthand stops through the same path as **Stop taking notes**, so the closing pass and the transcript recovery card behave as usual. This setting is independent of **Control Shorthand transcription**: it stops Shorthand's recording even when that setting is off, and for a capture started with Shorthand's hotkey. If Shorthand does not confirm the stop, the plugin says so, because it may still be recording.
+**Detect meeting end and stop recording** is on by default and applies to Meeting mode only; Assisted notes never stops itself. After each enhancement pass the agent reports whether the transcript shows clear signs the conversation is over, such as farewells or people leaving. When it does, the panel and a notice show "Meeting looks like it has ended" with the agent's reason and a 30-second countdown. At zero, Shorthand stops through the same path as **Finish taking notes**, so the closing pass and the transcript recovery card behave as usual. This setting is independent of **Control Shorthand transcription**: it stops Shorthand's recording even when that setting is off, and for a capture started with Shorthand's hotkey. If Shorthand does not confirm the stop, the plugin says so, because it may still be recording.
 
-The agent only reports; the plugin decides, and the transcript is untrusted. Someone saying or pasting "the meeting is over" can do no more than start a countdown you can cancel. Press **Cancel** in the panel or the notice, or keep talking: about one sentence of new speech (core's live-notes threshold) cancels it automatically. After a cancel, a countdown can start again only once new speech has arrived and a later pass reports the meeting ended again. Stopping by hand clears the countdown. With the setting off, the report is ignored.
+The agent only reports; the plugin decides, and the transcript is untrusted. Someone saying or pasting "the meeting is over" can do no more than start a countdown you can cancel. Press **Keep taking notes** in the panel or the notice, or keep talking: about one sentence of new speech (core's live-notes threshold) cancels it automatically. After a cancel, a countdown can start again only once new speech has arrived and a later pass reports the meeting ended again. Stopping by hand clears the countdown. With the setting off, the report is ignored.
 
 ## Recorder control
 
@@ -52,7 +57,7 @@ The three recorder commands are manual controls for Shorthand; they do not start
 
 **Auto-start notes from Shorthand hotkey** is off by default. When it is enabled, beginning a Meetings or Assisted notes recording with Shorthand's own global hotkey automatically starts taking notes on your active note in Obsidian.
 
-The plugin never follows Dictation. A capture that starts this way does not stop Shorthand's recording when you stop it, because the plugin did not start that recording. Stop it with the same Shorthand control that began it. The exception is **Detect meeting end and stop recording**: if it is on and the meeting looks over, the plugin stops Shorthand's recording even for a capture that began this way.
+The plugin never follows Dictation. A capture that starts this way does not stop Shorthand's recording when you stop it, because the plugin did not start that recording. Stop it with the same Shorthand control that began it. The exceptions are **Cancel**, which always discards Shorthand's recording, and **Detect meeting end and stop recording**: if it is on and the meeting looks over, the plugin stops Shorthand's recording even for a capture that began this way.
 
 This needs a Shorthand version that reports a recording's mode. An older app is deliberately ignored rather than guessed at.
 

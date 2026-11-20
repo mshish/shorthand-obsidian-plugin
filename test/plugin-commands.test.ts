@@ -46,6 +46,7 @@ describe("command names", () => {
       "start-meeting-notes-this-note",
       "start-assisted-notes-this-note",
       "stop-notes",
+      "cancel-notes",
       "enhance-now",
       "clean-up-this-note",
       "reprocess-transcript",

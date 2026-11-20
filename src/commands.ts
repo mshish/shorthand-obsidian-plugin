@@ -12,6 +12,7 @@ export type CommandId =
   | "start-meeting-notes-this-note"
   | "start-assisted-notes-this-note"
   | "stop-notes"
+  | "cancel-notes"
   | "enhance-now"
   | "clean-up-this-note"
   | "reprocess-transcript"
@@ -47,7 +48,10 @@ export type CommandId =
 export const COMMAND_NAMES: Readonly<Record<CommandId, string>> = Object.freeze({
   "start-meeting-notes-this-note": "Start meeting notes on this note",
   "start-assisted-notes-this-note": "Start assisted notes on this note",
-  "stop-notes": "Stop taking notes",
+  // The id keeps "stop" because ids are frozen; the name says "Finish" to match the panel,
+  // where Cancel now sits beside it and "Stop" no longer says which one writes the notes.
+  "stop-notes": "Finish taking notes",
+  "cancel-notes": "Cancel note taking",
   "enhance-now": "Enhance now",
   "clean-up-this-note": "Clean up this note",
   "reprocess-transcript": "Retry note taking from the last meeting",

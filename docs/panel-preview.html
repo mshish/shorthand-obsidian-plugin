@@ -201,6 +201,11 @@
     .fake-menu .is-label { color: var(--text-muted); font-size: 11px; text-transform: none; }
     .fake-menu .is-disabled { opacity: 0.5; }
     .fake-menu hr { border: 0; border-top: 1px solid var(--background-modifier-border); margin: 4px 0; }
+    /* Approximates Obsidian's own modal for the cancel confirmation; the real one is native. */
+    .preview-modal { background: var(--background-primary); border: var(--border-width) solid var(--background-modifier-border); border-radius: var(--radius-l); color: var(--text-normal); padding: var(--size-4-4); }
+    .preview-modal-title { font-size: var(--font-ui-large); font-weight: var(--font-semibold); }
+    .preview-modal-buttons { display: flex; flex-wrap: wrap; gap: var(--size-4-2); justify-content: flex-end; }
+    .preview-modal button.mod-warning { background: #e93147; color: #fff; }
   </style>
 </head>
 <body>
@@ -271,12 +276,20 @@
             <span class="shorthand-panel-pulse"><span></span><span></span><span></span></span>
             <span>Listening and writing</span>
           </div>
-          <button class="shorthand-panel-button is-stop">
-            <span class="shorthand-panel-button-icon fake-icon">■</span>
-            <span class="shorthand-panel-button-copy">
-              <span class="shorthand-panel-button-label">Stop meeting</span>
-            </span>
-          </button>
+          <div class="shorthand-panel-capture-controls">
+            <button class="shorthand-panel-button is-stop">
+              <span class="shorthand-panel-button-icon fake-icon">■</span>
+              <span class="shorthand-panel-button-copy">
+                <span class="shorthand-panel-button-label">Finish meeting</span>
+              </span>
+            </button>
+            <button class="shorthand-panel-button is-cancel">
+              <span class="shorthand-panel-button-icon fake-icon">✕</span>
+              <span class="shorthand-panel-button-copy">
+                <span class="shorthand-panel-button-label">Cancel</span>
+              </span>
+            </button>
+          </div>
         </div>
       </div>
     </section>
@@ -301,12 +314,100 @@
             <span class="shorthand-panel-pulse"><span></span><span></span><span></span></span>
             <span>Listening and writing</span>
           </div>
-          <button class="shorthand-panel-button is-stop">
-            <span class="shorthand-panel-button-icon fake-icon">■</span>
-            <span class="shorthand-panel-button-copy">
-              <span class="shorthand-panel-button-label">Stop assisted notes</span>
-            </span>
-          </button>
+          <div class="shorthand-panel-capture-controls">
+            <button class="shorthand-panel-button is-stop">
+              <span class="shorthand-panel-button-icon fake-icon">■</span>
+              <span class="shorthand-panel-button-copy">
+                <span class="shorthand-panel-button-label">Finish assisted notes</span>
+              </span>
+            </button>
+            <button class="shorthand-panel-button is-cancel">
+              <span class="shorthand-panel-button-icon fake-icon">✕</span>
+              <span class="shorthand-panel-button-copy">
+                <span class="shorthand-panel-button-label">Cancel</span>
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="preview">
+      <p class="caption">Meeting end countdown</p>
+      <div class="shorthand-panel">
+        <div class="shorthand-panel-status is-meeting">
+          <div class="shorthand-panel-status-top">
+            <div class="shorthand-panel-mode">
+              <span class="shorthand-panel-mode-icon fake-icon">♟</span>
+              <span class="shorthand-panel-mode-label">Meeting</span>
+            </div>
+            <time class="shorthand-panel-elapsed">41:02</time>
+          </div>
+          <h3 class="shorthand-panel-headline">Taking notes</h3>
+          <a class="shorthand-panel-note internal-link" href="#">
+            <span class="shorthand-panel-note-icon fake-icon">▤</span>
+            <span class="shorthand-panel-note-name">Weekly sync</span>
+          </a>
+          <div class="shorthand-panel-capture-controls">
+            <button class="shorthand-panel-button is-stop">
+              <span class="shorthand-panel-button-icon fake-icon">■</span>
+              <span class="shorthand-panel-button-copy">
+                <span class="shorthand-panel-button-label">Finish meeting</span>
+              </span>
+            </button>
+            <button class="shorthand-panel-button is-cancel">
+              <span class="shorthand-panel-button-icon fake-icon">✕</span>
+              <span class="shorthand-panel-button-copy">
+                <span class="shorthand-panel-button-label">Cancel</span>
+              </span>
+            </button>
+          </div>
+        </div>
+        <div class="shorthand-panel-meeting-end" role="group" aria-label="Meeting end detected">
+          <h4 class="shorthand-panel-meeting-end-headline">Meeting looks like it has ended</h4>
+          <p class="shorthand-panel-meeting-end-text">Stopping in 22s</p>
+          <p class="shorthand-panel-meeting-end-text">Reason: Everyone said goodbye.</p>
+          <button class="mod-cta" type="button">Keep taking notes</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="preview">
+      <p class="caption">Wrapping up after Finish (no Cancel)</p>
+      <div class="shorthand-panel">
+        <div class="shorthand-panel-status is-working">
+          <div class="shorthand-panel-status-top">
+            <div class="shorthand-panel-mode">
+              <span class="shorthand-panel-mode-icon fake-icon">◌</span>
+              <span class="shorthand-panel-mode-label">Meeting</span>
+            </div>
+            <time class="shorthand-panel-elapsed">41:10</time>
+          </div>
+          <h3 class="shorthand-panel-headline">Wrapping up</h3>
+          <a class="shorthand-panel-note internal-link" href="#">
+            <span class="shorthand-panel-note-icon fake-icon">▤</span>
+            <span class="shorthand-panel-note-name">Weekly sync</span>
+          </a>
+          <div class="shorthand-panel-capture-controls">
+            <button class="shorthand-panel-button is-stop" disabled>
+              <span class="shorthand-panel-button-icon fake-icon">■</span>
+              <span class="shorthand-panel-button-copy">
+                <span class="shorthand-panel-button-label">Wrapping up…</span>
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="preview">
+      <p class="caption">Cancel confirmation (Obsidian modal, approximated)</p>
+      <div class="preview-modal">
+        <div class="preview-modal-title">Cancel note taking?</div>
+        <p>Shorthand stops recording and discards this meeting without finishing your notes. Anything already in the note stays.</p>
+        <div class="preview-modal-buttons">
+          <button class="mod-warning" type="button">Cancel note taking</button>
+          <button type="button">Keep taking notes</button>
         </div>
       </div>
     </section>
@@ -511,12 +612,20 @@
                 <span class="shorthand-panel-note-icon fake-icon">▤</span>
                 <span class="shorthand-panel-note-name">Weekly sync</span>
               </a>
-              <button class="shorthand-panel-button is-stop">
-                <span class="shorthand-panel-button-icon fake-icon">■</span>
-                <span class="shorthand-panel-button-copy">
-                  <span class="shorthand-panel-button-label">Stop meeting</span>
-                </span>
-              </button>
+              <div class="shorthand-panel-capture-controls">
+                <button class="shorthand-panel-button is-stop">
+                  <span class="shorthand-panel-button-icon fake-icon">■</span>
+                  <span class="shorthand-panel-button-copy">
+                    <span class="shorthand-panel-button-label">Finish meeting</span>
+                  </span>
+                </button>
+                <button class="shorthand-panel-button is-cancel">
+                  <span class="shorthand-panel-button-icon fake-icon">✕</span>
+                  <span class="shorthand-panel-button-copy">
+                    <span class="shorthand-panel-button-label">Cancel</span>
+                  </span>
+                </button>
+              </div>
             </div>
             <div class="shorthand-panel-note-taker">
               <button class="shorthand-panel-note-taker-line" type="button" aria-haspopup="menu" aria-label="Note taker: ChatGPT (Codex), GPT-5.4. Using you@example.com" title="Using you@example.com">

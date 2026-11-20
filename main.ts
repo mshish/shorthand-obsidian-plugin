@@ -145,7 +145,15 @@ import {
   isLoggableRecord,
 } from "./src/capture-log.js";
 import { describeStatus } from "./src/status-text.js";
-import { describePanel, SHORTHAND_PANEL_VIEW, type PanelButtonId, type PanelModel } from "./src/panel-model.js";
+import {
+  CAPTURE_CONTROL_IDS,
+  describeCancelConfirmation,
+  describePanel,
+  SHORTHAND_PANEL_VIEW,
+  type CancelConfirmation,
+  type PanelButtonId,
+  type PanelModel,
+} from "./src/panel-model.js";
 import {
   BACKEND_DISPLAY_NAMES,
   INITIAL_PROBE_STATE,
@@ -615,6 +623,16 @@ export default class ShorthandPlugin extends Plugin {
       id: "stop-notes",
       name: COMMAND_NAMES["stop-notes"],
       callback: () => { void this.stopCapture().catch((error: unknown) => this.fail(errorMessage(error))); },
+    });
+    // checkCallback so the palette lists it only while there is a capture to cancel.
+    this.addCommand({
+      id: "cancel-notes",
+      name: COMMAND_NAMES["cancel-notes"],
+      checkCallback: (checking: boolean) => {
+        if (this.#capture === undefined || this.#capture.stopping) return false;
+        if (!checking) this.confirmCancelCapture();
+        return true;
+      },
     });
     this.addCommand({
       id: "enhance-now",
@@ -1353,6 +1371,50 @@ export default class ShorthandPlugin extends Plugin {
     await this.finishRuntime(runtime, "stopped");
   }
 
+  /** The panel's Cancel and the palette command: ask first, because the recording is discarded. */
+  confirmCancelCapture(): void {
+    const runtime = this.#capture;
+    if (runtime === undefined || runtime.stopping) return;
+    new ConfirmModal(this.app, describeCancelConfirmation(runtime.mode), () => {
+      void this.cancelCapture().catch((error: unknown) => this.fail(errorMessage(error)));
+    }).open();
+  }
+
+  /**
+   * Ends a capture without its notes: Shorthand discards the recording, the follower is torn
+   * down without waiting for a final transcript, and no closing pass runs. Whatever live passes
+   * and the transcript note already wrote stays, because removing it would delete text the
+   * user may have read or edited during the meeting.
+   */
+  async cancelCapture(): Promise<void> {
+    const runtime = this.#capture;
+    // The modal can outlive the capture it was opened for: a Finish press, a meeting-end stop
+    // or Shorthand quitting can all end it while the question is on screen.
+    if (runtime === undefined || runtime.stopping) return;
+    runtime.stopping = true;
+    runtime.meetingEnd.dispose();
+    runtime.recorder?.requestStop();
+    runtime.enhancer?.stopLiveTicks();
+    this.dispatch({ type: "capture-stopping" });
+    // A start sequence still in flight recalls its own start when it sees the stop flag. Wait
+    // for that before sending anything, so the cancel cannot land ahead of a late start.
+    await runtime.recorder?.whenStartSettled();
+    // `--cancel`, not the mode's stop: the stop finalizes, and the final transcript is exactly
+    // what the user just declined. Sent for a capture with no recorder too, for the reason a
+    // meeting-end stop is: ending only the Obsidian side would leave the microphone live.
+    // Not sent when Shorthand is known to be down, since that spawn would launch Shorthand.
+    if (!runtime.shorthandDown) {
+      const result = await runtime.control.send("cancel");
+      this.debugCapture(describeControl("manual", result));
+      if (result.status === "error") {
+        this.fail(`Shorthand did not confirm cancelling the recording, so it may still be recording: ${result.message}`);
+      }
+    }
+    runtime.client.forceStop();
+    await runtime.settled;
+    await this.finishRuntime(runtime, "cancelled");
+  }
+
   /**
    * The countdown's expiry stops through `stopCapture({ meetingEnd: true })`. Unlike a manual
    * stop, that always asks Shorthand to stop recording, including for a capture with no
@@ -2022,7 +2084,7 @@ export default class ShorthandPlugin extends Plugin {
     return false;
   }
 
-  private async finishRuntime(runtime: CaptureRuntime, reason: "stopped" | "died"): Promise<void> {
+  private async finishRuntime(runtime: CaptureRuntime, reason: "stopped" | "died" | "cancelled"): Promise<void> {
     if (this.#capture !== runtime) return;
     runtime.meetingEnd.dispose();
     // Backstop, once nothing is left to finalize: the mode's own stop signal is a no-op
@@ -2059,13 +2121,16 @@ export default class ShorthandPlugin extends Plugin {
       } finally {
         await runtime.enhancer?.dispose();
       }
-      new Notice("Shorthand stopped taking notes.");
+      new Notice(reason === "cancelled" ? "Shorthand cancelled note taking." : "Shorthand stopped taking notes.");
     } catch (error) {
       runtime.record.noteFailure(`Wrapping up failed: ${errorMessage(error)}`);
       this.fail(`Wrapping up failed: ${errorMessage(error)}`);
     } finally {
-      // Before `capture-stopped`, so the repaint it triggers already shows the card.
-      if (this.#recovery.keep(runtime.noteFile, runtime.record) !== undefined) {
+      // Before `capture-stopped`, so the repaint it triggers already shows the card. Never for
+      // a cancel: the card offers to finish notes the user just chose not to have.
+      if (reason === "cancelled") {
+        this.#recovery.release(runtime.noteFile);
+      } else if (this.#recovery.keep(runtime.noteFile, runtime.record) !== undefined) {
         new Notice(RECOVERY_NOTICES.missing(runtime.record.mode), 10_000);
       }
       if (this.#capture === runtime) this.#capture = undefined;
@@ -2384,8 +2449,10 @@ export default class ShorthandPlugin extends Plugin {
       let text: HTMLElement | undefined;
       const fragment = createFragment((frag) => {
         text = frag.createSpan({ text: meetingEndNoticeText(countdown.remainingSeconds) });
-        const cancel = frag.createEl("button", { text: "Cancel", attr: { type: "button" } });
-        cancel.onclick = () => { this.cancelMeetingEnd(); };
+        // Same label as the panel's countdown card, and for the same reason: "Cancel" there
+        // ends note taking.
+        const keep = frag.createEl("button", { text: "Keep taking notes", attr: { type: "button" } });
+        keep.onclick = () => { this.cancelMeetingEnd(); };
       });
       if (text !== undefined) {
         const notice = new Notice(fragment, 0);
@@ -2440,6 +2507,10 @@ export default class ShorthandPlugin extends Plugin {
   runPanelAction(id: PanelButtonId): void {
     if (id === "stop") {
       void this.stopCapture().catch((error: unknown) => this.fail(errorMessage(error)));
+      return;
+    }
+    if (id === "cancel") {
+      this.confirmCancelCapture();
       return;
     }
     void this.startCaptureOnActiveNote(id === "start-assisted-notes" ? "assisted-notes" : "meeting");
@@ -3533,8 +3604,11 @@ class ShorthandPanelView extends ItemView {
       label: HTMLElement;
       hint: HTMLElement;
     }>>();
+    // Finish and Cancel share one row in the status card, Finish first, so the action that
+    // keeps the notes is the one the eye and the Tab key reach first.
+    const controls = this.#statusEl.createDiv({ cls: "shorthand-panel-capture-controls" });
     for (const button of model.buttons) {
-      const parent = button.id === "stop" ? this.#statusEl : buttons;
+      const parent = CAPTURE_CONTROL_IDS.has(button.id) ? controls : buttons;
       const element = parent.createEl("button", {
         cls: `shorthand-panel-button is-${button.id}`,
         attr: { type: "button" },
@@ -3770,7 +3844,7 @@ class ShorthandPanelView extends ItemView {
     }
     this.#patchRecoverySection(this.plugin.recoveryCards());
     this.#patchNoteTaker(this.plugin.noteTaker());
-    this.#actionsEl.hidden = !model.buttons.some(({ id, visible }) => id !== "stop" && visible);
+    this.#actionsEl.hidden = !model.buttons.some(({ id, visible }) => !CAPTURE_CONTROL_IDS.has(id) && visible);
 
     for (const button of model.buttons) {
       const elements = this.#buttonEls.get(button.id);
@@ -3781,6 +3855,35 @@ class ShorthandPanelView extends ItemView {
       elements.button.disabled = !button.enabled;
       elements.button.hidden = !button.visible;
     }
+  }
+}
+
+/**
+ * A yes/no question for an action that cannot be undone. Obsidian's `mod-warning` marks the
+ * destructive button; the keep button is the default focus, so Enter does not destroy.
+ */
+class ConfirmModal extends Modal {
+  constructor(
+    app: App,
+    private readonly copy: CancelConfirmation,
+    private readonly onConfirm: () => void,
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    this.setTitle(this.copy.title);
+    this.contentEl.createEl("p", { text: this.copy.body });
+    const buttons = this.contentEl.createDiv({ cls: "modal-button-container" });
+    const confirm = buttons.createEl("button", { cls: "mod-warning", text: this.copy.confirmLabel });
+    confirm.onclick = () => { this.close(); this.onConfirm(); };
+    const keep = buttons.createEl("button", { text: this.copy.keepLabel });
+    keep.onclick = () => { this.close(); };
+    keep.focus();
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
   }
 }
 
